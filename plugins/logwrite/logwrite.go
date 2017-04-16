@@ -23,11 +23,8 @@ func (p *LogWritePlugin) Start(sharedDb *storm.DB) {
 	db = sharedDb
 }
 
-func (p *LogWritePlugin) Run(message telebot.Message) {
+func (p *LogWritePlugin) Process(message telebot.Message) {
 	log.Println("Message saved")
 	chat := db.From(strconv.FormatInt(message.Chat.ID, 10))
 	chat.Save(&message)
-}
-
-func (p *LogWritePlugin) Stop() {
 }

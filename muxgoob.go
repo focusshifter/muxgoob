@@ -42,9 +42,9 @@ func main() {
 	for message := range messages {
 		for _, d := range registry.Plugins {
 			if obj, ok := d.(interface {
-				Run(telebot.Message)
+				Process(telebot.Message)
 			}); ok {
-				go obj.Run(message)
+				go obj.Process(message)
 			}
 		}
 	}

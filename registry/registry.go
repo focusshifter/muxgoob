@@ -15,8 +15,7 @@ var Bot *telebot.Bot
 // MuxPlugin is a basic plugin interface
 type MuxPlugin interface {
 	Start(sharedDb *storm.DB)
-	Stop()
-	Run(message telebot.Message)
+	Process(message telebot.Message)
 }
 
 // RegisterPlugin

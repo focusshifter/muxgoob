@@ -31,7 +31,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp := regexp.MustCompile(`^.*(gooby|губи|губ(я)+н).*\?$`)
-	highlightedExp := regexp.MustCompile(`^.*(gooby|губи|губ(я)+н).*$`)
+	// highlightedExp := regexp.MustCompile(`^.*(gooby|губи|губ(я)+н).*$`)
 
 	switch {
 		case techExp.MatchString(message.Text):
@@ -55,7 +55,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 			
 			bot.SendMessage(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
-		case highlightedExp.MatchString(message.Text):	
-			bot.SendMessage(message.Chat, "herp derp", nil)
+		// case highlightedExp.MatchString(message.Text):	
+		// 	bot.SendMessage(message.Chat, "herp derp", nil)
 	}
 }

@@ -33,7 +33,7 @@ func (p *DupeLinkPlugin) Start(sharedDb *storm.DB) {
 	db = sharedDb
 }
 
-func (p *DupeLinkPlugin) Run(message telebot.Message) {
+func (p *DupeLinkPlugin) Process(message telebot.Message) {
 	messageURLs := getURLs(message)
 	var validURLs []string
 	
@@ -61,9 +61,6 @@ func (p *DupeLinkPlugin) Run(message telebot.Message) {
 			reactToURL(currentURL, message)
 		}
 	}
-}
-
-func (p *DupeLinkPlugin) Stop() {
 }
 
 func getURLs(message telebot.Message) []string {

@@ -26,7 +26,7 @@ func (p *ReplyPlugin) Start(sharedDb *storm.DB) {
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
-func (p *ReplyPlugin) Run(message telebot.Message) {
+func (p *ReplyPlugin) Process(message telebot.Message) {
 	bot := registry.Bot
 
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
@@ -58,7 +58,4 @@ func (p *ReplyPlugin) Run(message telebot.Message) {
 		case highlightedExp.MatchString(message.Text):	
 			bot.SendMessage(message.Chat, "herp derp", nil)
 	}
-}
-
-func (p *ReplyPlugin) Stop() {
 }

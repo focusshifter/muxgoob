@@ -23,7 +23,7 @@ func init() {
 
 func (p *ReplyPlugin) Start(sharedDb *storm.DB) {
 	db = sharedDb
-    rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
 func (p *ReplyPlugin) Run(message telebot.Message) {

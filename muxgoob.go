@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/focusshifter/muxgoob/plugins/reply"
 	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
+	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
 )
 
 var token string

@@ -88,7 +88,7 @@ func reactToURL(currentURL string, message telebot.Message) {
 		log.Println("Found dupe, reporting: " + currentURL)
 
 		bot := registry.Bot
-		formattedTime := time.Unix(int64(existingLink.Unixtime), 0).Format(time.RFC3339)
+		formattedTime := time.Unix(int64(existingLink.Unixtime), 0).Format(time.RFC1123)
 		formattedUser := existingLink.Sender.FirstName + " " + existingLink.Sender.LastName
 		bot.SendMessage(message.Chat, "That was already posted on " + formattedTime + " by " + formattedUser,
 						&telebot.SendOptions{ReplyTo: message})

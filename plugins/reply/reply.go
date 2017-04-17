@@ -30,8 +30,8 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 	bot := registry.Bot
 
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
-	questionExp := regexp.MustCompile(`^.*(gooby|губи|губ(я)+н).*\?$`)
-	// highlightedExp := regexp.MustCompile(`^.*(gooby|губи|губ(я)+н).*$`)
+	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
+	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
 
 	switch {
 		case techExp.MatchString(message.Text):

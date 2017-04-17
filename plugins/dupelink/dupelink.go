@@ -68,7 +68,7 @@ func getURLs(message telebot.Message) []string {
 
 	for _, entity := range message.Entities {
 		if entity.Type == "url" {
-			urls = append(urls, message.Text[entity.Offset:(entity.Offset + entity.Length)])
+			urls = append(urls, string([]rune(message.Text)[entity.Offset:(entity.Offset + entity.Length)]))
 		}
 	}
 

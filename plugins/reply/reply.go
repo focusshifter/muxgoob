@@ -36,7 +36,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 	switch {
 		case techExp.MatchString(message.Text):
 			bot.SendMessage(message.Chat,
-						"ТТХ: https://drive.google.com/open?id=139ZWbP-CAV_u5nzQ6skbHRjb7eofzfdh8eA4_q7McFM",
+						"ТТХ: " + registry.Config.ReplyTechLink,
 						&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
 		case questionExp.MatchString(message.Text):

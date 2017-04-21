@@ -22,10 +22,12 @@ func main() {
 
 	token = os.Getenv("MUXGOOB_KEY")
 
+	registry.LoadConfig("config.yml")
+
 	db, err := storm.Open("db/muxgoob.db")
 	defer db.Close()
 
-	bot, err := telebot.NewBot(token)
+	bot, err := telebot.NewBot(registry.Config.TelegramKey)
 	if err != nil {
 		log.Fatal(err)
 	}

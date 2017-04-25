@@ -29,7 +29,6 @@ func (p *ReplyPlugin) Start(sharedDb *storm.DB) {
 func (p *ReplyPlugin) Process(message telebot.Message) {
 	bot := registry.Bot
 	rngInt := rng.Int()
-	var replyText string
 
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
@@ -43,6 +42,8 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 						&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
 		case questionExp.MatchString(message.Text):
+			var replyText string
+
 			switch {
 				case rngInt % 100 == 0:
 					replyText = "Заткнись, пидор"
@@ -55,16 +56,9 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 			bot.SendMessage(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 		case dotkaExp.MatchString(message.Text):
-			switch {
-				case rngInt % 100 == 0:
-					replyText = "Щяб в дотку с Сашкой!"
-				case rngInt % 2 == 0:
-					replyText = "Щяб в дотку. Как в старые добрые времена."
-				default:
-					replyText = "Щяб в дотку!"
+			if rngInt % 2 == 0 {
+				bot.SendMessage(message.Chat, "Щяб в дотку!")
 			}
-
-			bot.SendMessage(message.Chat, replyText)
 
 		// case highlightedExp.MatchString(message.Text):	
 		// 	bot.SendMessage(message.Chat, "herp derp", nil)

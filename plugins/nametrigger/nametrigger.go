@@ -32,7 +32,9 @@ func (p *NametriggerPlugin) Process(message telebot.Message) {
 	for _, trigger := range registry.Config.NametriggerConfig.Triggers {
 		for _, username := range trigger.Usernames {
 			if username == message.Sender.Username && rngInt%trigger.Chance == 0 {
-				bot.SendMessage(message.Chat, trigger.Reply, &telebot.SendOptions{})
+				phrases := trigger.Replies
+				n := rand.Int() % len(phrases)
+				bot.SendMessage(message.Chat, phrases[n], &telebot.SendOptions{})
 			}
 		}
 	}

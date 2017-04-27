@@ -33,7 +33,7 @@ func (p *NamePlugin) Process(message telebot.Message) {
 	usernameExp := regexp.MustCompile(registry.Config.UkranianUsernames)
 
 	switch {
-		case usernameExp.MatchString(message.Sender.Username):
+		case usernameExp.MatchString(message.Sender):
 			if rngInt % 50 == 0 {
 				bot.SendMessage(message.Chat, registry.Config.ReplyUkranians, &telebot.SendOptions{})
 			}	

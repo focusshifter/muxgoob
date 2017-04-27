@@ -1,15 +1,15 @@
 package registry
 
 import (
+	"io/ioutil"
+	"log"
 	"reflect"
 	"strings"
-	"log"
-	"io/ioutil"
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/tucnak/telebot"
 	"github.com/asdine/storm"
+	"github.com/tucnak/telebot"
 )
 
 // Plugins contains a list of loaded plugins
@@ -25,24 +25,24 @@ type MuxPlugin interface {
 
 // Configuration stores a struct loaded from config.yml
 type Configuration struct {
-    TelegramKey string `yaml:"telegram_key"`
-    ReplyTechLink string `yaml:"reply_tech_link"`
-	ReplyUkranians string `yaml:"reply_ukranians"`
-	UkranianUsernames string `yaml:"ukranian_usernames"`
+	TelegramKey        string `yaml:"telegram_key"`
+	ReplyTechLink      string `yaml:"reply_tech_link"`
+	ReplyUkrainians    string `yaml:"reply_ukrainians"`
+	UkrainianUsernames string `yaml:"ukrainian_usernames"`
 }
 
 // LoadConfig reads configuration into registry.Config
 func LoadConfig(configPath string) {
-    source, err := ioutil.ReadFile(configPath)
+	source, err := ioutil.ReadFile(configPath)
 
-    if err != nil {
-        log.Fatal(err)
-    }
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    err = yaml.Unmarshal(source, &Config)
-    if err != nil {
-        log.Fatal(err)
-    }
+	err = yaml.Unmarshal(source, &Config)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 // RegisterPlugin

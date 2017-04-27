@@ -58,7 +58,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 
 		case dotkaExp.MatchString(message.Text):
 			if rngInt % 2 == 0 {
-				bot.SendMessage(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
+				bot.SendMessage(message.Chat, "Щяб1 в дотку!", &telebot.SendOptions{})
 			}
 
 		case hohlyExp.MatchString(message.Text):

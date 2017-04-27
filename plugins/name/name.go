@@ -30,11 +30,12 @@ func (p *NamePlugin) Process(message telebot.Message) {
 	bot := registry.Bot
 	rngInt := rng.Int()
 
-	hohlyExp := regexp.MustCompile(`yuriyglebov|dbobylev.*$`)
+	usernameExp := regexp.MustCompile(registry.Config.UkranianUsernames)
 
 	switch {
-		case hohlyExp.MatchString(message.Sender.Username):
-		bot.SendMessage(message.Chat, "ЖИЛИ У БАБУСИ ДВА ВЕСЕЛЫХ ГУСЯ, ОДИН ЖОВТЫЙ ДРУГОЙ СИНИЙ, СЛАВА УКРАИНИ", &telebot.SendOptions{})
+		case rngInt % 50 == 0:
+		hohlyExp.MatchString(message.Sender.Username):
+		bot.SendMessage(message.Chat, registry.Config.ReplyUkranians, &telebot.SendOptions{})
 			}	
 
 	}

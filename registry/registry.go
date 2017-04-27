@@ -27,6 +27,8 @@ type MuxPlugin interface {
 type Configuration struct {
     TelegramKey string `yaml:"telegram_key"`
     ReplyTechLink string `yaml:"reply_tech_link"`
+	ReplyUkranians string `yaml:"reply_ukranians"`
+	UkranianUsernames string `yaml:"ukranian_usernames"`
 }
 
 // LoadConfig reads configuration into registry.Config

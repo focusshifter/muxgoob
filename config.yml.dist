@@ -4,4 +4,4 @@ nametrigger:
   triggers:
     - usernames: []
       chance:
-      reply: 
+      replies: 

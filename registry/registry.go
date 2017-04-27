@@ -25,8 +25,8 @@ type MuxPlugin interface {
 
 type Trigger struct {
 	Usernames []string
-	Chance int
-	Reply string
+	Chance    int
+	Replies   []string
 }
 
 type NametriggerPluginConfig struct {
@@ -35,9 +35,9 @@ type NametriggerPluginConfig struct {
 
 // Configuration stores a struct loaded from config.yml
 type Configuration struct {
-	TelegramKey        string `yaml:"telegram_key"`
-	ReplyTechLink      string `yaml:"reply_tech_link"`
-	NametriggerConfig  NametriggerPluginConfig `yaml:"nametrigger"`
+	TelegramKey       string                  `yaml:"telegram_key"`
+	ReplyTechLink     string                  `yaml:"reply_tech_link"`
+	NametriggerConfig NametriggerPluginConfig `yaml:"nametrigger"`
 }
 
 // LoadConfig reads configuration into registry.Config

@@ -13,7 +13,7 @@ import (
 	_ "github.com/focusshifter/muxgoob/plugins/reply"
 	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
 	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
-	_ "github.com/focusshifter/muxgoob/plugins/name"
+	_ "github.com/focusshifter/muxgoob/plugins/nametrigger"
 )
 
 var token string

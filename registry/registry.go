@@ -23,12 +23,21 @@ type MuxPlugin interface {
 	Process(message telebot.Message)
 }
 
+type Trigger struct {
+	Usernames []string
+	Chance int
+	Reply string
+}
+
+type NametriggerPluginConfig struct {
+	Triggers []Trigger `yaml:"triggers"`
+}
+
 // Configuration stores a struct loaded from config.yml
 type Configuration struct {
 	TelegramKey        string `yaml:"telegram_key"`
 	ReplyTechLink      string `yaml:"reply_tech_link"`
-	ReplyUkrainians    string `yaml:"reply_ukrainians"`
-	UkrainianUsernames string `yaml:"ukrainian_usernames"`
+	NametriggerConfig  NametriggerPluginConfig `yaml:"nametrigger"`
 }
 
 // LoadConfig reads configuration into registry.Config

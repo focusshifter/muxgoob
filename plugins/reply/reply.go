@@ -1,12 +1,12 @@
 package reply
 
 import (
-	"regexp"
 	"math/rand"
+	"regexp"
 	"time"
 
-	"github.com/tucnak/telebot"
 	"github.com/asdine/storm"
+	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/registry"
 )
@@ -36,31 +36,31 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
 
 	switch {
-		case techExp.MatchString(message.Text):
-			bot.SendMessage(message.Chat,
-						"ТТХ: " + registry.Config.ReplyTechLink,
-						&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
+	case techExp.MatchString(message.Text):
+		bot.SendMessage(message.Chat,
+			"ТТХ: "+registry.Config.ReplyTechLink,
+			&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
-		case questionExp.MatchString(message.Text):
-			var replyText string
+	case questionExp.MatchString(message.Text):
+		var replyText string
 
-			switch {
-				case rngInt % 100 == 0:
-					replyText = "Заткнись, пидор"
-				case rngInt % 2 == 0:
-					replyText = "Да"
-				default:
-					replyText = "Нет"
-			}
-			
-			bot.SendMessage(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+		switch {
+		case rngInt%100 == 0:
+			replyText = "Заткнись, пидор"
+		case rngInt%2 == 0:
+			replyText = "Да"
+		default:
+			replyText = "Нет"
+		}
 
-		case dotkaExp.MatchString(message.Text):
-			if rngInt % 2 == 0 {
-				bot.SendMessage(message.Chat, "Щяб1 в дотку!", &telebot.SendOptions{})
-			}
+		bot.SendMessage(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
-		// case highlightedExp.MatchString(message.Text):	
+	case dotkaExp.MatchString(message.Text):
+		if rngInt%2 == 0 {
+			bot.SendMessage(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
+		}
+
+		// case highlightedExp.MatchString(message.Text):
 		// 	bot.SendMessage(message.Chat, "herp derp", nil)
 	}
 }

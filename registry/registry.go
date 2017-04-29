@@ -5,11 +5,14 @@ import (
 	"log"
 	"reflect"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v2"
 
 	"github.com/asdine/storm"
 	"github.com/tucnak/telebot"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 // Plugins contains a list of loaded plugins
@@ -38,6 +41,9 @@ type Configuration struct {
 	TelegramKey        string `yaml:"telegram_key"`
 	ReplyTechLink      string `yaml:"reply_tech_link"`
 	NametriggerConfig  NametriggerPluginConfig `yaml:"nametrigger"`
+	Birthdays map[string]string `yaml:"birthdays"`
+	TimeZone string `yaml:"time_zone"`
+	TimeLoc *time.Location
 }
 
 // LoadConfig reads configuration into registry.Config
@@ -52,6 +58,11 @@ func LoadConfig(configPath string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	loc, _ := time.LoadLocation(Config.TimeZone)
+	Config.TimeLoc = loc
+
+	spew.Dump(Config)
 }
 
 // RegisterPlugin

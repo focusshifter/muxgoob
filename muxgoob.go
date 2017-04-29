@@ -14,6 +14,7 @@ import (
 	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
 	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
 	_ "github.com/focusshifter/muxgoob/plugins/nametrigger"
+	_ "github.com/focusshifter/muxgoob/plugins/birthdays"
 )
 
 var token string

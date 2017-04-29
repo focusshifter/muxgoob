@@ -5,3 +5,6 @@ nametrigger:
     - usernames: []
       chance:
       reply: 
+time_zone: Europe/Moscow
+birthdays:
+  - username1: 2006-01-02

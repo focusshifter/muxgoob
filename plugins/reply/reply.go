@@ -56,7 +56,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 			bot.SendMessage(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 		case dotkaExp.MatchString(message.Text):
-			if rngInt % 2 == 0 {
+			if rngInt % 50 == 0 {
 				bot.SendMessage(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
 			}
 

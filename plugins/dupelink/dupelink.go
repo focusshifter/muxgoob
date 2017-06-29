@@ -56,6 +56,13 @@ func (p *DupeLinkPlugin) Process(message telebot.Message) {
 	
 		currentURL := parsedURL.Hostname() + parsedURL.RequestURI()
 
+		for _, ignoredHostname := range registry.Config.DupeIgnoredDomains {
+			if parsedURL.Hostname() == ignoredHostname {
+				log.Println("Dupe: Skipping " + currentURL + " because " + ignoredHostname + " is blacklisted")
+				return
+			}	
+		}
+		
 		if newURL(currentURL, validURLs) {
 			validURLs = append(validURLs, currentURL)
 			reactToURL(currentURL, message)

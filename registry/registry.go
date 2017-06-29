@@ -44,6 +44,7 @@ type Configuration struct {
 	Birthdays map[string]string `yaml:"birthdays"`
 	TimeZone string `yaml:"time_zone"`
 	TimeLoc *time.Location
+	DupeIgnoredDomains []string `yaml:"dupe_ignored_domains"`
 }
 
 // LoadConfig reads configuration into registry.Config

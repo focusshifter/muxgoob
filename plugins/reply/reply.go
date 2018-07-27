@@ -33,6 +33,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
 	dotkaExp := regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
+	svetExp := regexp.MustCompile(`(?i)^свет$`)
 	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
 
 	switch {
@@ -58,6 +59,11 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 		case dotkaExp.MatchString(message.Text):
 			if rngInt % 50 == 0 {
 				bot.SendMessage(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
+			}
+		
+		case svetExp.MatchString(message.Text):
+			if rngInt % 50 == 0 {
+				bot.SendMessage(message.Chat, "далеких планет", &telebot.SendOptions{})
 			}
 
 		// case highlightedExp.MatchString(message.Text):	

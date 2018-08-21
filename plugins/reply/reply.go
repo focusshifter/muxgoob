@@ -33,6 +33,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
 	dotkaExp := regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
+	majorExp := regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
 
 	switch {
@@ -59,6 +60,14 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 			if rngInt % 50 == 0 {
 				bot.SendMessage(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
 			}
+
+		case majorExp.MatchString(message.Text):
+			if rngInt % 50 == 0 {
+				bot.SendMessage(message.Chat, "Так точно!", &telebot.SendOptions{ReplyTo: message})
+			} else {
+				bot.SendMessage(message.Chat, "Я за него.", &telebot.SendOptions{ReplyTo: message})
+			}
+			
 
 		// case highlightedExp.MatchString(message.Text):	
 		// 	bot.SendMessage(message.Chat, "herp derp", nil)

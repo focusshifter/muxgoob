@@ -26,7 +26,7 @@ func (p *ReplyPlugin) Start(sharedDb *storm.DB) {
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
-func (p *ReplyPlugin) Process(message telebot.Message) {
+func (p *ReplyPlugin) Process(message *telebot.Message) {
 	bot := registry.Bot
 	rngInt := rng.Int()
 
@@ -38,7 +38,7 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 
 	switch {
 		case techExp.MatchString(message.Text):
-			bot.SendMessage(message.Chat,
+			bot.Send(message.Chat,
 						"ТТХ: " + registry.Config.ReplyTechLink,
 						&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
@@ -54,22 +54,22 @@ func (p *ReplyPlugin) Process(message telebot.Message) {
 					replyText = "Нет"
 			}
 			
-			bot.SendMessage(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 		case dotkaExp.MatchString(message.Text):
 			if rngInt % 50 == 0 {
-				bot.SendMessage(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
+				bot.Send(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
 			}
 
 		case majorExp.MatchString(message.Text):
 			if rngInt % 50 == 0 {
-				bot.SendMessage(message.Chat, "Так точно!", &telebot.SendOptions{ReplyTo: message})
+				bot.Send(message.Chat, "Так точно!", &telebot.SendOptions{ReplyTo: message})
 			} else {
-				bot.SendMessage(message.Chat, "Я за него.", &telebot.SendOptions{ReplyTo: message})
+				bot.Send(message.Chat, "Я за него.", &telebot.SendOptions{ReplyTo: message})
 			}
 			
 
 		// case highlightedExp.MatchString(message.Text):	
-		// 	bot.SendMessage(message.Chat, "herp derp", nil)
+		// 	bot.Send(message.Chat, "herp derp", nil)
 	}
 }

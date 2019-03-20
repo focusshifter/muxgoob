@@ -46,12 +46,12 @@ func (p *BirthdaysPlugin) Start(sharedDb *storm.DB) {
 	}
 }
 
-func (p *BirthdaysPlugin) Process(message telebot.Message) {
+func (p *BirthdaysPlugin) Process(message *telebot.Message) {
 	todaysBirthday(message)
 	nextBirthday(message)
 }
 
-func nextBirthday(message telebot.Message) {
+func nextBirthday(message *telebot.Message) {
 	bot := registry.Bot
 	loc := registry.Config.TimeLoc
 
@@ -80,11 +80,11 @@ func nextBirthday(message telebot.Message) {
 				}
 			}
 
-			bot.SendMessage(message.Chat, "Prepare the 🎂 for @" + curUsername + " on " + curBirthday, &telebot.SendOptions{})
+			bot.Send(message.Chat, "Prepare the 🎂 for @" + curUsername + " on " + curBirthday, &telebot.SendOptions{})
 	}
 }
 
-func todaysBirthday(message telebot.Message) {
+func todaysBirthday(message *telebot.Message) {
 	bot := registry.Bot
 	loc := registry.Config.TimeLoc
 
@@ -93,12 +93,12 @@ func todaysBirthday(message telebot.Message) {
 	for username, birthday := range birthdays {
 		if birthday.YearDay() == cur.YearDay() && notMentioned(username, birthday.Year(), message) {
 			age := strconv.Itoa(age.AgeAt(birthday, cur));
-			bot.SendMessage(message.Chat, "Hooray! 🎉 @" + username + " is turning " + age + "! 🎂", &telebot.SendOptions{})
+			bot.Send(message.Chat, "Hooray! 🎉 @" + username + " is turning " + age + "! 🎂", &telebot.SendOptions{})
 		}
 	}
 }
 
-func notMentioned(username string, year int, message telebot.Message) bool {
+func notMentioned(username string, year int, message *telebot.Message) bool {
 	chat := db.From(strconv.FormatInt(message.Chat.ID, 10))
 
 	count, _ := chat.Select(q.And(q.Eq("Username", username), q.Eq("Year", year))).Count(&BirthdayNotify{})

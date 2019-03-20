@@ -33,7 +33,7 @@ func (p *DupeLinkPlugin) Start(sharedDb *storm.DB) {
 	db = sharedDb
 }
 
-func (p *DupeLinkPlugin) Process(message telebot.Message) {
+func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 	messageURLs := getURLs(message)
 	var validURLs []string
 	
@@ -70,7 +70,7 @@ func (p *DupeLinkPlugin) Process(message telebot.Message) {
 	}
 }
 
-func getURLs(message telebot.Message) []string {
+func getURLs(message *telebot.Message) []string {
 	var urls []string
 
 	for _, entity := range message.Entities {
@@ -82,7 +82,7 @@ func getURLs(message telebot.Message) []string {
 	return urls
 }
 
-func reactToURL(currentURL string, message telebot.Message) {
+func reactToURL(currentURL string, message *telebot.Message) {
 	chat := db.From(strconv.FormatInt(message.Chat.ID, 10))
 	
 	var existingLink DupeLink
@@ -94,15 +94,15 @@ func reactToURL(currentURL string, message telebot.Message) {
 		bot := registry.Bot
 		formattedTime := time.Unix(int64(existingLink.Unixtime), 0).Format(time.RFC1123)
 		formattedUser := existingLink.Sender.FirstName + " " + existingLink.Sender.LastName
-		bot.SendMessage(message.Chat, "That was already posted on " + formattedTime + " by " + formattedUser,
+		bot.Send(message.Chat, "That was already posted on " + formattedTime + " by " + formattedUser,
 						&telebot.SendOptions{ReplyTo: message})
 	} else {
 		log.Println("Link not found, saving: " + currentURL)
 
 		newLink := DupeLink{URL: currentURL,
 							MessageID: message.ID,
-							Sender: message.Sender,
-							Unixtime: message.Unixtime}
+							Sender: *message.Sender,
+							Unixtime: int(message.Unixtime)}
 		chat.Save(&newLink)
 	}
 }

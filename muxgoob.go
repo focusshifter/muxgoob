@@ -29,7 +29,11 @@ func main() {
 	db, err := storm.Open("db/muxgoob.db")
 	defer db.Close()
 
-	bot, err := telebot.NewBot(registry.Config.TelegramKey)
+	bot, err := telebot.NewBot(telebot.Settings{
+		Token:  registry.Config.TelegramKey,
+		Poller: &telebot.LongPoller{Timeout: 10 * time.Second},
+	})
+
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -40,16 +44,15 @@ func main() {
 		go d.Start(db)
 	}
 
-	messages := make(chan telebot.Message)
-	bot.Listen(messages, 1*time.Second)
-
-	for message := range messages {
+	bot.Handle(telebot.OnText, func(message *telebot.Message) {
 		for _, d := range registry.Plugins {
 			if obj, ok := d.(interface {
-				Process(telebot.Message)
+				Process(*telebot.Message)
 			}); ok {
 				go obj.Process(message)
 			}
 		}
-	}
+	})
+
+	bot.Start()
 }

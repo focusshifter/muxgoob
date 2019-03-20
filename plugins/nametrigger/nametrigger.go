@@ -25,14 +25,14 @@ func (p *NametriggerPlugin) Start(sharedDb *storm.DB) {
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
-func (p *NametriggerPlugin) Process(message telebot.Message) {
+func (p *NametriggerPlugin) Process(message *telebot.Message) {
 	bot := registry.Bot
 	rngInt := rng.Int()
 
 	for _, trigger := range registry.Config.NametriggerConfig.Triggers {
 		for _, username := range trigger.Usernames {
 			if username == message.Sender.Username && rngInt%trigger.Chance == 0 {
-				bot.SendMessage(message.Chat, trigger.Reply, &telebot.SendOptions{})
+				bot.Send(message.Chat, trigger.Reply, &telebot.SendOptions{})
 			}
 		}
 	}

@@ -11,3 +11,6 @@ birthdays:
 dupe_ignored_domains:
   - twitch.tv
   - www.twitch.tv
+twitch_api_key:
+twitch_streams:
+  - twitch_username

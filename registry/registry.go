@@ -28,8 +28,8 @@ type MuxPlugin interface {
 
 type Trigger struct {
 	Usernames []string
-	Chance int
-	Reply string
+	Chance    int
+	Reply     string
 }
 
 type NametriggerPluginConfig struct {
@@ -38,13 +38,15 @@ type NametriggerPluginConfig struct {
 
 // Configuration stores a struct loaded from config.yml
 type Configuration struct {
-	TelegramKey        string `yaml:"telegram_key"`
-	ReplyTechLink      string `yaml:"reply_tech_link"`
+	TelegramKey        string                  `yaml:"telegram_key"`
+	ReplyTechLink      string                  `yaml:"reply_tech_link"`
 	NametriggerConfig  NametriggerPluginConfig `yaml:"nametrigger"`
-	Birthdays map[string]string `yaml:"birthdays"`
-	TimeZone string `yaml:"time_zone"`
-	TimeLoc *time.Location
+	Birthdays          map[string]string       `yaml:"birthdays"`
+	TimeZone           string                  `yaml:"time_zone"`
+	TimeLoc            *time.Location
 	DupeIgnoredDomains []string `yaml:"dupe_ignored_domains"`
+	TwitchAPIKey       string   `yaml:"twitch_api_key"`
+	TwitchStreams      []string `yaml:"twitch_streams"`
 }
 
 // LoadConfig reads configuration into registry.Config
@@ -69,6 +71,8 @@ func LoadConfig(configPath string) {
 // RegisterPlugin
 func RegisterPlugin(p MuxPlugin) {
 	key := strings.TrimPrefix(reflect.TypeOf(p).String(), "*")
+
+	log.Printf("Registered plugin: %v", key)
 
 	Plugins[key] = p
 }

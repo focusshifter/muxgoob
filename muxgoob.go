@@ -1,20 +1,21 @@
 package main
 
 import (
-	"time"
 	"log"
 	"os"
-	
-	"github.com/tucnak/telebot"
+	"time"
+
 	"github.com/asdine/storm"
+	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/registry"
 
-	_ "github.com/focusshifter/muxgoob/plugins/reply"
-	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
-	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
-	_ "github.com/focusshifter/muxgoob/plugins/nametrigger"
 	_ "github.com/focusshifter/muxgoob/plugins/birthdays"
+	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
+	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
+	_ "github.com/focusshifter/muxgoob/plugins/nametrigger"
+	_ "github.com/focusshifter/muxgoob/plugins/reply"
+	_ "github.com/focusshifter/muxgoob/plugins/twitchstreams"
 )
 
 var token string

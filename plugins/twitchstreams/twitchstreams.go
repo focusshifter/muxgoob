@@ -80,9 +80,12 @@ func checkStreams(t time.Time) {
 
 		log.Printf("Twitch: Announcing %s", stream.UserLogin)
 
+		game := getGame(stream.GameID)
+
 		messageText := fmt.Sprintf(
-			"*%s is live* @ https://www.twitch.tv/%s\n%s",
+			"*%s is playing %s*\nhttps://www.twitch.tv/%s\n%s",
 			stream.UserLogin,
+			game.Name,
 			stream.UserLogin,
 			stream.Title)
 
@@ -95,6 +98,27 @@ func checkStreams(t time.Time) {
 			})
 		}
 	}
+}
+
+func getGame(gameID string) twitch.GameData {
+	games := db.From("games")
+
+	game := twitch.GameData{
+		ID:   "unknown",
+		Name: "Unknown game",
+	}
+	err := games.One("ID", gameID, &game)
+
+	if err != nil {
+		retrievedGames, err := twitchClient.GetGamesByID(gameID)
+
+		if err == nil {
+			game = retrievedGames[0]
+
+			games.Save(&game)
+		}
+	}
+	return game
 }
 
 func doEvery(d time.Duration, f func(time.Time)) {

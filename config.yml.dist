@@ -7,7 +7,7 @@ nametrigger:
       reply: 
 time_zone: Europe/Moscow
 birthdays:
-  - username1: 2006-01-02
+  username1: 2006-01-02
 dupe_ignored_domains:
   - twitch.tv
   - www.twitch.tv

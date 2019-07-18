@@ -1,16 +1,16 @@
 package birthdays
 
 import (
-	"math/rand"
-	"time"
-	"strconv"
 	"log"
+	"math/rand"
 	"regexp"
+	"strconv"
+	"time"
 
 	"github.com/asdine/storm"
 	"github.com/asdine/storm/q"
-	"github.com/tucnak/telebot"
 	"github.com/bearbin/go-age"
+	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/registry"
 )
@@ -19,9 +19,9 @@ type BirthdaysPlugin struct {
 }
 
 type BirthdayNotify struct {
-	ID int `storm:"id,increment"`
+	ID       int    `storm:"id,increment"`
 	Username string `storm:"index"`
-	Year int
+	Year     int
 }
 
 var db *storm.DB
@@ -58,29 +58,33 @@ func nextBirthday(message *telebot.Message) {
 	birthdayExp := regexp.MustCompile(`(?i)^\!(др|birthda(y|ys))$`)
 
 	switch {
-		case birthdayExp.MatchString(message.Text):
-			cur := time.Now().In(loc)
-			curDay := cur.YearDay()
+	case birthdayExp.MatchString(message.Text):
+		cur := time.Now().In(loc)
+		curDay := cur.YearDay()
 
-			diff := 365
-			curDiff := 365
-			curBirthday := ""
-			curUsername := ""
+		diff := 365
+		curDiff := 365
+		curBirthday := ""
+		curUsername := ""
 
-			for username, birthday := range birthdays {
-				diff = birthday.YearDay() - curDay
-				if diff > 0 {
-					if diff == curDiff {
-						curUsername += ", @" + username
-					} else if diff < curDiff {
-						curDiff = diff
-						curUsername = username	
-						curBirthday = birthday.Format("01.02")
-					}
+		for username, birthday := range birthdays {
+			diff = birthday.YearDay() - curDay
+			if diff > 0 {
+				if diff == curDiff {
+					curUsername += ", @" + username
+				} else if diff < curDiff {
+					curDiff = diff
+					curUsername = username
+					curBirthday = birthday.Format("02.01")
 				}
 			}
+		}
 
-			bot.Send(message.Chat, "Prepare the 🎂 for @" + curUsername + " on " + curBirthday, &telebot.SendOptions{})
+		if curUsername != "" {
+			bot.Send(message.Chat, "Prepare the 🎂 for @"+curUsername+" on "+curBirthday, &telebot.SendOptions{})
+		} else {
+			bot.Send(message.Chat, "No upcoming birthdays", &telebot.SendOptions{})
+		}
 	}
 }
 
@@ -91,9 +95,9 @@ func todaysBirthday(message *telebot.Message) {
 	cur := time.Now().In(loc)
 
 	for username, birthday := range birthdays {
-		if birthday.YearDay() == cur.YearDay() && notMentioned(username, birthday.Year(), message) {
-			age := strconv.Itoa(age.AgeAt(birthday, cur));
-			bot.Send(message.Chat, "Hooray! 🎉 @" + username + " is turning " + age + "! 🎂", &telebot.SendOptions{})
+		if birthday.YearDay() == cur.YearDay() && notMentioned(username, cur.Year(), message) {
+			age := strconv.Itoa(age.AgeAt(birthday, cur))
+			bot.Send(message.Chat, "Hooray! 🎉 @"+username+" is turning "+age+"! 🎂", &telebot.SendOptions{})
 		}
 	}
 }

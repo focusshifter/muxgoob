@@ -62,8 +62,8 @@ func nextBirthday(message *telebot.Message) {
 		cur := time.Now().In(loc)
 		curDay := cur.YearDay()
 
-		diff := 365
-		curDiff := 365
+		diff := time.Date(cur.Year(), time.December, 31, 0, 0, 0, 0, time.Local).YearDay()
+		curDiff := diff
 		curBirthday := ""
 		curUsername := ""
 

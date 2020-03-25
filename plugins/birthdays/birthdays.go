@@ -68,10 +68,11 @@ func nextBirthday(message *telebot.Message) {
 		curUsername := ""
 
 		for username, birthday := range birthdays {
-			diff = birthday.YearDay() - curDay
+			birthdayDay := time.Date(cur.Year(), birthday.Month(), birthday.Day(), 0, 0, 0, 0, time.Local).YearDay()
+			diff = birthdayDay - curDay
 			if diff > 0 {
 				if diff == curDiff {
-					curUsername += ", @" + username
+
 				} else if diff < curDiff {
 					curDiff = diff
 					curUsername = username
@@ -95,7 +96,7 @@ func todaysBirthday(message *telebot.Message) {
 	cur := time.Now().In(loc)
 
 	for username, birthday := range birthdays {
-		if birthday.YearDay() == cur.YearDay() && notMentioned(username, cur.Year(), message) {
+		if cur.Month() == birthday.Month() && cur.Day() == birthday.Day() && notMentioned(username, cur.Year(), message) {
 			age := strconv.Itoa(age.AgeAt(birthday, cur))
 			bot.Send(message.Chat, "Hooray! 🎉 @"+username+" is turning "+age+"! 🎂", &telebot.SendOptions{})
 		}

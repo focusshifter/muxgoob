@@ -72,7 +72,7 @@ func nextBirthday(message *telebot.Message) {
 			diff = birthdayDay - curDay
 			if diff > 0 {
 				if diff == curDiff {
-
+					curUsername += ", @" + username
 				} else if diff < curDiff {
 					curDiff = diff
 					curUsername = username

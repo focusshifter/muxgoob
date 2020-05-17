@@ -8,9 +8,8 @@ import (
 	"time"
 
 	"github.com/asdine/storm"
+	"github.com/nicklaw5/helix"
 	"github.com/tucnak/telebot"
-
-	twitch "github.com/focusshifter/go-new-twitch"
 
 	"github.com/focusshifter/muxgoob/registry"
 )
@@ -19,7 +18,8 @@ type TwitchstreamsPlugin struct {
 }
 
 var rng *rand.Rand
-var twitchClient *twitch.Client
+var twitchClient *helix.Client
+var twitchTokenRefreshTime time.Time
 var db *storm.DB
 
 func init() {
@@ -28,10 +28,11 @@ func init() {
 
 func (p *TwitchstreamsPlugin) Start(sharedDb *storm.DB) {
 	db = sharedDb
-	twitchClient = twitch.NewClient(registry.Config.TwitchAPIKey)
+	twitchClient, _ = helix.NewClient(&helix.Options{ClientID: registry.Config.TwitchAPIKey, ClientSecret: registry.Config.TwitchAPISecret})
+
+	twitchTokenRefreshTime = time.Now()
 
 	doEvery(10*time.Second, checkStreams)
-	checkStreams(time.Now())
 }
 
 func (p *TwitchstreamsPlugin) Process(message *telebot.Message) {
@@ -45,31 +46,56 @@ func (p *TwitchstreamsPlugin) Process(message *telebot.Message) {
 	}
 }
 
+func checkAppAccessToken() {
+	if twitchTokenRefreshTime.Unix() > time.Now().Unix() {
+		return
+	}
+
+	log.Printf("Twitch: Setting app access token")
+
+	token, err := twitchClient.GetAppAccessToken()
+
+	if err != nil {
+		log.Printf("Twitch: Error getting user token: %v", err)
+	}
+
+	twitchTokenRefreshTime = time.Now().Local().Add(time.Second * time.Duration(token.Data.ExpiresIn))
+
+	twitchClient.SetAppAccessToken(token.Data.AccessToken)
+}
+
 func checkStreams(t time.Time) {
+	checkAppAccessToken()
+
 	log.Printf("Twitch: Checking streams")
 
 	bot := registry.Bot
 
-	streams, err := twitchClient.GetStreams(twitch.GetStreamsInput{
-		UserLogin: registry.Config.TwitchStreams,
+	streamResponse, err := twitchClient.GetStreams(&helix.StreamsParams{
+		UserLogins: registry.Config.TwitchStreams,
 	})
 
 	if err != nil {
 		log.Printf("Twitch: Error getting twitch streams: %v", err)
 	}
 
-	prevStreams := db.From("streams")
+	if streamResponse.StatusCode != 200 {
+		log.Printf("Error %v", streamResponse.ErrorMessage)
+	}
+
+	prevStreams := db.From("helix_streams")
+	streams := streamResponse.Data.Streams
 
 	for _, stream := range streams {
-		if stream.UserLogin == "" || stream.Type != "live" {
+		if stream.UserName == "" || stream.Type != "live" {
 			continue
 		}
 
-		var lastStream twitch.StreamData
-		err := prevStreams.One("UserLogin", stream.UserLogin, &lastStream)
+		var lastStream helix.Stream
+		err := prevStreams.One("UserName", stream.UserName, &lastStream)
 
 		if err == nil {
-			log.Printf("Twitch: Comparing %v = %v  %v = %v", stream.UserLogin, lastStream.UserLogin, stream.StartedAt, lastStream.StartedAt)
+			log.Printf("Twitch: Comparing %v = %v  %v = %v", stream.UserName, lastStream.UserName, stream.StartedAt, lastStream.StartedAt)
 			if stream.StartedAt == lastStream.StartedAt {
 				continue
 			}
@@ -78,15 +104,15 @@ func checkStreams(t time.Time) {
 
 		prevStreams.Save(&stream)
 
-		log.Printf("Twitch: Announcing %s", stream.UserLogin)
+		log.Printf("Twitch: Announcing %s", stream.UserName)
 
 		game := getGame(stream.GameID)
 
 		messageText := fmt.Sprintf(
 			"*%s is playing %s*\nhttps://www.twitch.tv/%s\n%s",
-			stream.UserLogin,
+			stream.UserName,
 			game.Name,
-			stream.UserLogin,
+			stream.UserName,
 			stream.Title)
 
 		var existingChats []telebot.Chat
@@ -100,22 +126,26 @@ func checkStreams(t time.Time) {
 	}
 }
 
-func getGame(gameID string) twitch.GameData {
-	games := db.From("games")
+func getGame(gameID string) helix.Game {
+	games := db.From("helix_games")
 
-	game := twitch.GameData{
-		ID:   "unknown",
-		Name: "Unknown game",
-	}
+	game := helix.Game{ID: "unknown", Name: "Unknown game"}
+
 	err := games.One("ID", gameID, &game)
 
 	if err != nil {
-		retrievedGames, err := twitchClient.GetGamesByID(gameID)
+		gamesResponse, err := twitchClient.GetGames(&helix.GamesParams{
+			IDs: []string{gameID},
+		})
 
 		if err == nil {
+			retrievedGames := gamesResponse.Data.Games
+
 			game = retrievedGames[0]
 
 			games.Save(&game)
+		} else {
+			log.Printf("Twitch: Error getting twitch games: %v", err)
 		}
 	}
 	return game

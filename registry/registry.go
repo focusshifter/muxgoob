@@ -46,6 +46,7 @@ type Configuration struct {
 	TimeLoc            *time.Location
 	DupeIgnoredDomains []string `yaml:"dupe_ignored_domains"`
 	TwitchAPIKey       string   `yaml:"twitch_api_key"`
+	TwitchAPISecret    string   `yaml:"twitch_api_secret"`
 	TwitchStreams      []string `yaml:"twitch_streams"`
 }
 

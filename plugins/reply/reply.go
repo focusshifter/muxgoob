@@ -73,7 +73,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 		case doExp.MatchString(message.Text):
 			execMsg := message.Text
-			s := strings.SplitN(execMsg, "docker", 1)
+			s := strings.SplitN(execMsg, "!do ", 1)
 			cmd := exec.Command("docker", s...)
 			stdout, err := cmd.Output()
 			if err != nil {

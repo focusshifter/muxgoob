@@ -1,8 +1,10 @@
 package reply
 
 import (
+	"os/exec"
 	"regexp"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/tucnak/telebot"
@@ -34,6 +36,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
 	dotkaExp := regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
 	majorExp := regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
+	doExp := regexp.MustCompile(`(?i)^\!do.*$`)
 	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
 
 	switch {
@@ -53,7 +56,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 				default:
 					replyText = "Нет"
 			}
-			
+
 			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 		case dotkaExp.MatchString(message.Text):
@@ -67,9 +70,19 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			} else {
 				bot.Send(message.Chat, "Я за него.", &telebot.SendOptions{ReplyTo: message})
 			}
-			
 
-		// case highlightedExp.MatchString(message.Text):	
+		case doExp.MatchString(message.Text):
+			execMsg := message.Text
+			s := strings.SplitN(execMsg, "docker", 1)
+			cmd := exec.Command("docker", s...)
+			stdout, err := cmd.Output()
+			if err != nil {
+				bot.Send(message.Chat, "You idiot", &telebot.SendOptions{ReplyTo: message})
+				return
+			}
+			bot.Send(message.Chat, stdout, &telebot.SendOptions{ReplyTo: message})
+
+		// case highlightedExp.MatchString(message.Text):
 		// 	bot.Send(message.Chat, "herp derp", nil)
 	}
 }

@@ -14,3 +14,5 @@ dupe_ignored_domains:
 twitch_api_key:
 twitch_streams:
   - twitch_username
+openai:
+  api_key:

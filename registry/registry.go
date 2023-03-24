@@ -48,6 +48,7 @@ type Configuration struct {
 	TwitchAPIKey       string   `yaml:"twitch_api_key"`
 	TwitchAPISecret    string   `yaml:"twitch_api_secret"`
 	TwitchStreams      []string `yaml:"twitch_streams"`
+	OpenaiApiKey       string   `yaml:"openai_api_key"`
 }
 
 // LoadConfig reads configuration into registry.Config

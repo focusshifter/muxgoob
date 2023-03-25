@@ -1,5 +1,5 @@
-telegram_key: 
-reply_tech_link: 
+telegram_key: no_key
+reply_tech_link: url
 nametrigger:
   triggers:
     - usernames: []
@@ -11,8 +11,7 @@ birthdays:
 dupe_ignored_domains:
   - twitch.tv
   - www.twitch.tv
-twitch_api_key:
+twitch_api_key: no_key
 twitch_streams:
   - twitch_username
-openai:
-  api_key:
+openai_api_key: no_key

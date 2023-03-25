@@ -46,9 +46,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
 	case questionExp.MatchString(message.Text):
-		var replyText string
-
-		replyText = askChatGpt(message.Text)
+		replyText := askChatGpt(message.Text)
 
 		if replyText == "" {
 			switch {
@@ -77,6 +75,15 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 		// case highlightedExp.MatchString(message.Text):
 		// 	bot.Send(message.Chat, "herp derp", nil)
+
+	default:
+		if rngInt%100 == 0 && len(message.Text) > 150 {
+			replyText := askChatGpt(message.Text)
+
+			if replyText != "" {
+				bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+			}
+		}
 	}
 }
 
@@ -105,11 +112,15 @@ func askChatGpt(question string) string {
 						"Твоя задача веселить окружающих своими ответами, а так же грубить в ответ. " +
 						"Твой пол мужской. Веди себя как 18-летний подросток. " +
 						"Ты эксперт и умеешь давать субъективные оценки видеоиграм. " +
+						"Ты всегда отвечаешь на русском языке независимо от языка вопроса. " +
+						"Ты никогда сам не просишь задавать тебе вопросы. " +
+						"Ты никогда не даешь оценку наличию или отсутствию мата в вопросе или твоем ответе " +
+						"и не упоминаешь о нём. " +
 						"",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: question + ". Отвечай кратко, матерись, не старайся помочь.",
+					Content: question + ". Отвечай кратко, матерись, не пытайся помочь, если не понял вопрос - пошути в ответ.",
 				},
 			},
 		},

@@ -2,7 +2,7 @@ package reply
 
 import (
 	"context"
-	"fmt"
+	"log"
 	"math/rand"
 	"regexp"
 	"time"
@@ -35,6 +35,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
+	commandExp := regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),.*$`)
 	dotkaExp := regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
 	majorExp := regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
@@ -60,6 +61,13 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		}
 
 		bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+
+	case commandExp.MatchString(message.Text):
+		replyText := askChatGpt(message.Text)
+
+		if replyText != "" {
+			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+		}
 
 	case dotkaExp.MatchString(message.Text):
 		if rngInt%50 == 0 {
@@ -89,6 +97,23 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 func askChatGpt(question string) string {
 	client := openai.NewClient(registry.Config.OpenaiApiKey)
+
+	systemMessage := "Ты чат бот по имени Губи. " +
+		"Ты геймер, любишь видеоигры и вообще всё, что связано с компьютерами. " +
+		"Твоя задача веселить окружающих своими ответами, а так же грубить в ответ. " +
+		"Твой пол мужской. " +
+		"Ты никогда не предлагаешь задавать тебе вопросы. " +
+		"Ты никогда не даешь оценку наличию или отсутствию мата в вопросе или твоем ответе " +
+		"и не упоминаешь о нём. " +
+		""
+
+	userMessage := question +
+		". Всегда пытайся помочь. Отвечай кратко, матерись и издевайся над собеседником. "
+
+	log.Printf("ChatGPT request")
+	log.Printf("ChatGPT request: system %v", systemMessage)
+	log.Printf("ChatGPT request: user %v", userMessage)
+
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -98,36 +123,21 @@ func askChatGpt(question string) string {
 			FrequencyPenalty: 1.0,
 			PresencePenalty:  1.0,
 
-			// .temperature(1.0)
-			// .topP(1.0)
-			// .frequencyPenalty(1.0)
-			// .presencePenalty(1.0)
-
 			Messages: []openai.ChatCompletionMessage{
 				{
-					Role: openai.ChatMessageRoleSystem,
-					Content: "Ты чат бот по имени Губи. " +
-						"Ты геймер, любишь видеоигры и вообще всё, что связано с компьютерами. " +
-						"Больше всего ты любишь играть в доту. " +
-						"Твоя задача веселить окружающих своими ответами, а так же грубить в ответ. " +
-						"Твой пол мужской. Веди себя как 18-летний подросток. " +
-						"Ты эксперт и умеешь давать субъективные оценки видеоиграм. " +
-						"Ты всегда отвечаешь на русском языке независимо от языка вопроса. " +
-						"Ты никогда сам не просишь задавать тебе вопросы. " +
-						"Ты никогда не даешь оценку наличию или отсутствию мата в вопросе или твоем ответе " +
-						"и не упоминаешь о нём. " +
-						"",
+					Role:    openai.ChatMessageRoleSystem,
+					Content: systemMessage,
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: question + ". Отвечай кратко, матерись, не пытайся помочь, если не понял вопрос - пошути в ответ.",
+					Content: userMessage,
 				},
 			},
 		},
 	)
 
 	if err != nil {
-		fmt.Printf("ChatCompletion error: %v\n", err)
+		log.Printf("ChatCompletion error: %v", err)
 		return ""
 	}
 

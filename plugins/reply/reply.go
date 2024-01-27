@@ -2,9 +2,12 @@ package reply
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/rand"
 	"regexp"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/asdine/storm"
@@ -47,7 +50,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
 	case questionExp.MatchString(message.Text):
-		replyText := askChatGpt(message.Text)
+		replyText := askChatGpt(message)
 
 		if replyText == "" {
 			switch {
@@ -63,7 +66,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 	case commandExp.MatchString(message.Text):
-		replyText := askChatGpt(message.Text)
+		replyText := askChatGpt(message)
 
 		if replyText != "" {
 			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
@@ -86,7 +89,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 	default:
 		if rngInt%100 == 0 && len(message.Text) > 150 {
-			replyText := askChatGpt(message.Text)
+			replyText := askChatGpt(message)
 
 			if replyText != "" {
 				bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
@@ -95,29 +98,71 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	}
 }
 
-func askChatGpt(question string) string {
+func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
+	chat := db.From(strconv.FormatInt(chatID, 10))
+
+	var messages []telebot.Message
+
+	err := chat.AllByIndex("ID", &messages, storm.Limit(messageCount), storm.Reverse())
+
+	if err != nil {
+		log.Printf("Error retrieving chat history: %v", err)
+		return nil
+	}
+
+	sort.Slice(messages, func(i, j int) bool {
+		return messages[i].ID < messages[j].ID
+	})
+
+	log.Printf("Retrieved %v messages", len(messages))
+
+	return messages
+}
+
+func generateChatGptHistory(messages []telebot.Message) string {
+	var history string
+	var username string
+
+	for _, message := range messages {
+		if message.Sender.Username != "" {
+			username = message.Sender.Username
+		} else {
+			username = message.Sender.FirstName + " " + message.Sender.LastName
+		}
+		history += fmt.Sprintf("%s: %s\n", username, message.Text)
+	}
+
+	return history
+}
+
+func askChatGpt(message *telebot.Message) string {
+	question := message.Text
+
 	client := openai.NewClient(registry.Config.OpenaiApiKey)
 
-	systemMessage := "Ты чат бот по имени Губи. " +
-		"Ты геймер, любишь видеоигры и вообще всё, что связано с компьютерами. " +
-		"Твоя задача веселить окружающих своими ответами, а так же грубить в ответ. " +
-		"Твой пол мужской. " +
-		"Ты никогда не предлагаешь задавать тебе вопросы. " +
-		"Ты никогда не даешь оценку наличию или отсутствию мата в вопросе или твоем ответе " +
-		"и не упоминаешь о нём. " +
-		""
+	systemMessage := registry.Config.ChatGptSystemPrompt
 
-	userMessage := question +
-		". Всегда пытайся помочь. Отвечай кратко, матерись и издевайся над собеседником. "
+	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 
-	log.Printf("ChatGPT request")
+	model := openai.GPT4
+
+	log.Printf("ChatGPT request: model %v", model)
+	log.Printf("ChatGPT request: chat_id %v", message.Chat.ID)
 	log.Printf("ChatGPT request: system %v", systemMessage)
 	log.Printf("ChatGPT request: user %v", userMessage)
+
+	if registry.Config.ChatGptUseHistory {
+		history := generateChatGptHistory(retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth))
+
+		log.Printf("ChatGPT request: history %v", history)
+
+		systemMessage += "\n\nВ чате произошел следующий диалог: \n" + history
+	}
 
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
-			Model:            openai.GPT3Dot5Turbo,
+			Model:            model,
 			Temperature:      1.0,
 			TopP:             1.0,
 			FrequencyPenalty: 1.0,

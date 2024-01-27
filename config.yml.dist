@@ -15,3 +15,7 @@ twitch_api_key: no_key
 twitch_streams:
   - twitch_username
 openai_api_key: no_key
+chat_gpt_use_history: true
+chat_gpt_history_depth: 20
+chat_gpt_system_prompt: 
+chat_gpt_user_prompt: 

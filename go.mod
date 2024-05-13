@@ -7,7 +7,7 @@ require (
 	github.com/bearbin/go-age v0.0.0-20210220235509-f0fa00c278ce
 	github.com/davecgh/go-spew v1.1.1
 	github.com/nicklaw5/helix v0.6.0
-	github.com/sashabaranov/go-openai v1.5.7
+	github.com/sashabaranov/go-openai v1.23.1
 	github.com/tucnak/telebot v2.0.0+incompatible
 	gopkg.in/yaml.v2 v2.4.0
 )

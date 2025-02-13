@@ -1,16 +1,17 @@
 package twitchstreams
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"regexp"
 	"time"
 
-	"github.com/asdine/storm"
 	"github.com/nicklaw5/helix"
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
@@ -20,14 +21,12 @@ type TwitchstreamsPlugin struct {
 var rng *rand.Rand
 var twitchClient *helix.Client
 var twitchTokenRefreshTime time.Time
-var db *storm.DB
 
 func init() {
 	registry.RegisterPlugin(&TwitchstreamsPlugin{})
 }
 
-func (p *TwitchstreamsPlugin) Start(sharedDb *storm.DB) {
-	db = sharedDb
+func (p *TwitchstreamsPlugin) Start(interface{}) {
 	twitchClient, _ = helix.NewClient(&helix.Options{ClientID: registry.Config.TwitchAPIKey, ClientSecret: registry.Config.TwitchAPISecret})
 
 	twitchTokenRefreshTime = time.Now()
@@ -77,13 +76,14 @@ func checkStreams(t time.Time) {
 
 	if err != nil {
 		log.Printf("Twitch: Error getting twitch streams: %v", err)
+		return
 	}
 
 	if streamResponse.StatusCode != 200 {
 		log.Printf("Error %v", streamResponse.ErrorMessage)
+		return
 	}
 
-	prevStreams := db.From("helix_streams")
 	streams := streamResponse.Data.Streams
 
 	for _, stream := range streams {
@@ -91,18 +91,35 @@ func checkStreams(t time.Time) {
 			continue
 		}
 
-		var lastStream helix.Stream
-		err := prevStreams.One("UserName", stream.UserName, &lastStream)
+		// Check if we've already seen this stream
+		var lastStartedAt string
+		err := database.DB.QueryRow(
+			"SELECT started_at FROM helix_streams WHERE user_name = ?",
+			stream.UserName).Scan(&lastStartedAt)
 
 		if err == nil {
-			log.Printf("Twitch: Comparing %v = %v  %v = %v", stream.UserName, lastStream.UserName, stream.StartedAt, lastStream.StartedAt)
-			if stream.StartedAt == lastStream.StartedAt {
+			log.Printf("Twitch: Comparing %v = %v  %v = %v", stream.UserName, stream.UserName, stream.StartedAt.Format(time.RFC3339), lastStartedAt)
+			if stream.StartedAt.Format(time.RFC3339) == lastStartedAt {
 				continue
 			}
-			prevStreams.DeleteStruct(&lastStream)
+			// Delete old stream
+			_, err = database.DB.Exec(
+				"DELETE FROM helix_streams WHERE user_name = ?",
+				stream.UserName)
+			if err != nil {
+				log.Printf("Error deleting old stream: %v", err)
+			}
 		}
 
-		prevStreams.Save(&stream)
+		// Save new stream
+		streamData, _ := json.Marshal(stream)
+		_, err = database.DB.Exec(
+			"INSERT INTO helix_streams (user_name, started_at, data) VALUES (?, ?, ?)",
+			stream.UserName, stream.StartedAt, string(streamData))
+		if err != nil {
+			log.Printf("Error saving stream: %v", err)
+			continue
+		}
 
 		log.Printf("Twitch: Announcing %s", stream.UserName)
 
@@ -115,10 +132,28 @@ func checkStreams(t time.Time) {
 			stream.UserName,
 			stream.Title)
 
-		var existingChats []telebot.Chat
-		_ = db.From("chats").All(&existingChats)
+		// Get all chats
+		rows, err := database.DB.Query("SELECT id, data FROM chats")
+		if err != nil {
+			log.Printf("Error getting chats: %v", err)
+			continue
+		}
+		defer rows.Close()
 
-		for _, chat := range existingChats {
+		for rows.Next() {
+			var id int64
+			var chatData string
+			if err := rows.Scan(&id, &chatData); err != nil {
+				log.Printf("Error scanning chat: %v", err)
+				continue
+			}
+
+			var chat telebot.Chat
+			if err := json.Unmarshal([]byte(chatData), &chat); err != nil {
+				log.Printf("Error unmarshaling chat: %v", err)
+				continue
+			}
+
 			bot.Send(&chat, messageText, &telebot.SendOptions{
 				ParseMode: "markdown",
 			})
@@ -127,27 +162,42 @@ func checkStreams(t time.Time) {
 }
 
 func getGame(gameID string) helix.Game {
-	games := db.From("helix_games")
-
 	game := helix.Game{ID: "unknown", Name: "Unknown game"}
 
-	err := games.One("ID", gameID, &game)
+	// Try to get game from database
+	var gameData string
+	err := database.DB.QueryRow(
+		"SELECT data FROM helix_games WHERE id = ?",
+		gameID).Scan(&gameData)
 
-	if err != nil {
-		gamesResponse, err := twitchClient.GetGames(&helix.GamesParams{
-			IDs: []string{gameID},
-		})
-
-		if err == nil {
-			retrievedGames := gamesResponse.Data.Games
-
-			game = retrievedGames[0]
-
-			games.Save(&game)
-		} else {
-			log.Printf("Twitch: Error getting twitch games: %v", err)
+	if err == nil {
+		if err := json.Unmarshal([]byte(gameData), &game); err != nil {
+			log.Printf("Error unmarshaling game: %v", err)
+			return game
 		}
+		return game
 	}
+
+	// Game not found, fetch from Twitch
+	gamesResponse, err := twitchClient.GetGames(&helix.GamesParams{
+		IDs: []string{gameID},
+	})
+
+	if err == nil && len(gamesResponse.Data.Games) > 0 {
+		game = gamesResponse.Data.Games[0]
+
+		// Save game to database
+		gameData, _ := json.Marshal(game)
+		_, err = database.DB.Exec(
+			"INSERT INTO helix_games (id, data) VALUES (?, ?)",
+			game.ID, string(gameData))
+		if err != nil {
+			log.Printf("Error saving game: %v", err)
+		}
+	} else {
+		log.Printf("Twitch: Error getting twitch games: %v", err)
+	}
+
 	return game
 }
 

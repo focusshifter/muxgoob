@@ -4,7 +4,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/asdine/storm"
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/registry"
@@ -13,15 +12,13 @@ import (
 type NametriggerPlugin struct {
 }
 
-var db *storm.DB
 var rng *rand.Rand
 
 func init() {
 	registry.RegisterPlugin(&NametriggerPlugin{})
 }
 
-func (p *NametriggerPlugin) Start(sharedDb *storm.DB) {
-	db = sharedDb
+func (p *NametriggerPlugin) Start(interface{}) {
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 

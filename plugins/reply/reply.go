@@ -2,15 +2,16 @@ package reply
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
 	"regexp"
 	"sort"
-	"strconv"
 	"time"
 
-	"github.com/asdine/storm"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
@@ -20,15 +21,19 @@ import (
 type ReplyPlugin struct {
 }
 
-var db *storm.DB
+var sqliteDb *sql.DB
 var rng *rand.Rand
 
 func init() {
 	registry.RegisterPlugin(&ReplyPlugin{})
 }
 
-func (p *ReplyPlugin) Start(sharedDb *storm.DB) {
-	db = sharedDb
+func (p *ReplyPlugin) Start(_ interface{}) {
+	var err error
+	sqliteDb, err = sql.Open("sqlite3", "db/muxgoob.sqlite")
+	if err != nil {
+		log.Fatal("Failed to open SQLite DB:", err)
+	}
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
@@ -99,19 +104,36 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 }
 
 func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
-	chat := db.From(strconv.FormatInt(chatID, 10))
-
-	var messages []telebot.Message
-
-	err := chat.AllByIndex("ID", &messages, storm.Limit(messageCount), storm.Reverse())
-
+	rows, err := sqliteDb.Query(
+		`SELECT data FROM messages 
+		WHERE chat_id = ? 
+		ORDER BY unixtime DESC LIMIT ?`,
+		chatID, messageCount)
 	if err != nil {
 		log.Printf("Error retrieving chat history: %v", err)
 		return nil
 	}
+	defer rows.Close()
 
+	var messages []telebot.Message
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			log.Printf("Error scanning message: %v", err)
+			continue
+		}
+
+		var msg telebot.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			log.Printf("Error unmarshaling message: %v", err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	// Sort by ID for consistent order
 	sort.Slice(messages, func(i, j int) bool {
-		return messages[i].ID < messages[j].ID
+		return messages[i].Unixtime < messages[j].Unixtime
 	})
 
 	log.Printf("Retrieved %v messages", len(messages))
@@ -144,7 +166,7 @@ func askChatGpt(message *telebot.Message) string {
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 
-	model := openai.GPT4O
+	model := openai.GPT4
 
 	log.Printf("ChatGPT request: model %v", model)
 	log.Printf("ChatGPT request: chat_id %v", message.Chat.ID)

@@ -7,24 +7,16 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/asdine/storm"
-	"github.com/asdine/storm/q"
 	"github.com/bearbin/go-age"
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
 type BirthdaysPlugin struct {
 }
 
-type BirthdayNotify struct {
-	ID       int    `storm:"id,increment"`
-	Username string `storm:"index"`
-	Year     int
-}
-
-var db *storm.DB
 var rng *rand.Rand
 var birthdays map[string]time.Time
 
@@ -32,8 +24,7 @@ func init() {
 	registry.RegisterPlugin(&BirthdaysPlugin{})
 }
 
-func (p *BirthdaysPlugin) Start(sharedDb *storm.DB) {
-	db = sharedDb
+func (p *BirthdaysPlugin) Start(interface{}) {
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	birthdays = make(map[string]time.Time)
@@ -104,18 +95,29 @@ func todaysBirthday(message *telebot.Message) {
 }
 
 func notMentioned(username string, year int, message *telebot.Message) bool {
-	chat := db.From(strconv.FormatInt(message.Chat.ID, 10))
+	var exists bool
+	err := database.DB.QueryRow(
+		"SELECT 1 FROM birthday_notifications WHERE username = ? AND year = ?",
+		username, year).Scan(&exists)
 
-	count, _ := chat.Select(q.And(q.Eq("Username", username), q.Eq("Year", year))).Count(&BirthdayNotify{})
-
-	if count > 0 {
+	if err != nil {
+		log.Printf("Error checking birthday notifications: %v", err)
 		return false
 	}
 
-	log.Println("Brithday: notify " + username)
+	if exists {
+		return false
+	}
 
-	newNotify := BirthdayNotify{Username: username, Year: year}
-	chat.Save(&newNotify)
+	log.Println("Birthday: notify " + username)
+
+	_, err = database.DB.Exec(
+		"INSERT INTO birthday_notifications (username, year) VALUES (?, ?)",
+		username, year)
+	if err != nil {
+		log.Printf("Error saving birthday notification: %v", err)
+		return false
+	}
 
 	return true
 }

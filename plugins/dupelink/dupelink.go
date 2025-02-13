@@ -1,37 +1,25 @@
 package dupelink
 
 import (
-	"net/url"
-	"strconv"
-	"time"
+	"encoding/json"
 	"log"
+	"net/url"
+	"time"
 
 	"github.com/tucnak/telebot"
-	"github.com/asdine/storm"
 
+	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
 type DupeLinkPlugin struct {
 }
 
-type DupeLink struct {
-	ID int `storm:"id,increment"`
-	URL string `storm:"index"`
-	MessageID int
-	Sender telebot.User
-	Unixtime int
-}
-
-var db *storm.DB
-
 func init() {
 	registry.RegisterPlugin(&DupeLinkPlugin{})
 }
 
-func (p *DupeLinkPlugin) Start(sharedDb *storm.DB) {
-	db = sharedDb
-}
+func (p *DupeLinkPlugin) Start(interface{}) {}
 
 func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 	messageURLs := getURLs(message)
@@ -83,26 +71,45 @@ func getURLs(message *telebot.Message) []string {
 }
 
 func reactToURL(currentURL string, message *telebot.Message) {
-	chat := db.From(strconv.FormatInt(message.Chat.ID, 10))
-	
-	var existingLink DupeLink
-	err := chat.One("URL", currentURL, &existingLink);
+	bot := registry.Bot
+
+	// Try to find existing link
+	var firstName, lastName string
+	var unixtime int64
+
+	err := database.DB.QueryRow(
+		`SELECT u.first_name, u.last_name, d.unixtime 
+		FROM dupe_links d 
+		JOIN users u ON d.sender_id = u.id 
+		WHERE d.url = ? AND d.chat_id = ? 
+		LIMIT 1`,
+		currentURL, message.Chat.ID).Scan(&firstName, &lastName, &unixtime)
 
 	if err == nil {
 		log.Println("Found dupe, reporting: " + currentURL)
-
-		bot := registry.Bot
-		formattedTime := time.Unix(int64(existingLink.Unixtime), 0).Format(time.RFC1123)
-		formattedUser := existingLink.Sender.FirstName + " " + existingLink.Sender.LastName
-		bot.Send(message.Chat, "That was already posted on " + formattedTime + " by " + formattedUser,
-						&telebot.SendOptions{ReplyTo: message})
+		formattedTime := time.Unix(unixtime, 0).Format(time.RFC1123)
+		formattedUser := firstName + " " + lastName
+		bot.Send(message.Chat, "That was already posted on "+formattedTime+" by "+formattedUser,
+			&telebot.SendOptions{ReplyTo: message})
 	} else {
 		log.Println("Link not found, saving: " + currentURL)
 
-		newLink := DupeLink{URL: currentURL,
-							MessageID: message.ID,
-							Sender: *message.Sender,
-							Unixtime: int(message.Unixtime)}
-		chat.Save(&newLink)
+		// First, ensure user exists in the database
+		userData, _ := json.Marshal(message.Sender)
+		_, err = database.DB.Exec(
+			"INSERT OR IGNORE INTO users (id, username, first_name, last_name, data) VALUES (?, ?, ?, ?, ?)",
+			message.Sender.ID, message.Sender.Username, message.Sender.FirstName, message.Sender.LastName, string(userData))
+		if err != nil {
+			log.Printf("Error saving user: %v", err)
+			return
+		}
+
+		// Then save the dupe link
+		_, err = database.DB.Exec(
+			"INSERT INTO dupe_links (url, message_id, sender_id, chat_id, unixtime) VALUES (?, ?, ?, ?, ?)",
+			currentURL, message.ID, message.Sender.ID, message.Chat.ID, message.Unixtime)
+		if err != nil {
+			log.Printf("Error saving dupe link: %v", err)
+		}
 	}
 }

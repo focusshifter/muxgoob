@@ -1,15 +1,14 @@
 package registry
 
 import (
-	"io/ioutil"
 	"log"
+	"os"
 	"reflect"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v2"
 
-	"github.com/asdine/storm"
 	"github.com/tucnak/telebot"
 
 	"github.com/davecgh/go-spew/spew"
@@ -17,12 +16,12 @@ import (
 
 // Plugins contains a list of loaded plugins
 var Plugins = map[string]MuxPlugin{}
-var Bot *telebot.Bot
+var Bot *BotWrapper
 var Config Configuration
 
 // MuxPlugin is a basic plugin interface
 type MuxPlugin interface {
-	Start(sharedDb *storm.DB)
+	Start(interface{})
 	Process(message *telebot.Message)
 }
 
@@ -57,7 +56,7 @@ type Configuration struct {
 
 // LoadConfig reads configuration into registry.Config
 func LoadConfig(configPath string) {
-	source, err := ioutil.ReadFile(configPath)
+	source, err := os.ReadFile(configPath)
 
 	if err != nil {
 		log.Fatal(err)

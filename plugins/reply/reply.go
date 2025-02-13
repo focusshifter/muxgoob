@@ -166,7 +166,7 @@ func askChatGpt(message *telebot.Message) string {
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 
-	model := openai.GPT4
+	model := openai.GPT4o
 
 	log.Printf("ChatGPT request: model %v", model)
 	log.Printf("ChatGPT request: chat_id %v", message.Chat.ID)

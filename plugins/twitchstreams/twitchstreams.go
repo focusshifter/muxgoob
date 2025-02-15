@@ -70,8 +70,20 @@ func checkStreams(t time.Time) {
 
 	bot := registry.Bot
 
+	// Collect all unique usernames from all chat configs
+	userLogins := make([]string, 0)
+	userMap := make(map[string]bool)
+	for _, config := range registry.Config.TwitchStreams {
+		for _, username := range config.TwitchUsernames {
+			if !userMap[username] {
+				userMap[username] = true
+				userLogins = append(userLogins, username)
+			}
+		}
+	}
+
 	streamResponse, err := twitchClient.GetStreams(&helix.StreamsParams{
-		UserLogins: registry.Config.TwitchStreams,
+		UserLogins: userLogins,
 	})
 
 	if err != nil {
@@ -142,31 +154,17 @@ func checkStreams(t time.Time) {
 			stream.UserName,
 			stream.Title)
 
-		// Get all chats
-		rows, err := database.DB.Query("SELECT id, data FROM chats")
-		if err != nil {
-			log.Printf("Error getting chats: %v", err)
-			continue
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var id int64
-			var chatData string
-			if err := rows.Scan(&id, &chatData); err != nil {
-				log.Printf("Error scanning chat: %v", err)
-				continue
+		// Send to chats that are configured for this streamer
+		for _, config := range registry.Config.TwitchStreams {
+			for _, username := range config.TwitchUsernames {
+				if username == stream.UserName {
+					chat := &telebot.Chat{ID: config.ChatID}
+					bot.Send(chat, messageText, &telebot.SendOptions{
+						ParseMode: "markdown",
+					})
+					break
+				}
 			}
-
-			var chat telebot.Chat
-			if err := json.Unmarshal([]byte(chatData), &chat); err != nil {
-				log.Printf("Error unmarshaling chat: %v", err)
-				continue
-			}
-
-			bot.Send(&chat, messageText, &telebot.SendOptions{
-				ParseMode: "markdown",
-			})
 		}
 	}
 }

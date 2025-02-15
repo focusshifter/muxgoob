@@ -12,6 +12,7 @@ import (
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/registry"
 
+	_ "github.com/focusshifter/muxgoob/plugins/admin"
 	_ "github.com/focusshifter/muxgoob/plugins/birthdays"
 	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
 	_ "github.com/focusshifter/muxgoob/plugins/logwrite"

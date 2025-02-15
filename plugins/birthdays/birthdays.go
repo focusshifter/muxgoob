@@ -18,7 +18,12 @@ type BirthdaysPlugin struct {
 }
 
 var rng *rand.Rand
-var birthdays map[string]time.Time
+type birthdayConfig struct {
+	chatID    int64
+	birthdays map[string]time.Time
+}
+
+var birthdayConfigs []birthdayConfig
 
 func init() {
 	registry.RegisterPlugin(&BirthdaysPlugin{})
@@ -27,22 +32,48 @@ func init() {
 func (p *BirthdaysPlugin) Start(interface{}) {
 	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	birthdays = make(map[string]time.Time)
+	birthdayConfigs = make([]birthdayConfig, 0)
 
 	loc := registry.Config.TimeLoc
 
-	for username, birthday := range registry.Config.Birthdays {
-		t, _ := time.ParseInLocation("2006-01-02", birthday, loc)
-		birthdays[username] = t
+	for _, config := range registry.Config.Birthdays {
+		bdays := make(map[string]time.Time)
+		for username, birthday := range config.Users {
+			t, _ := time.ParseInLocation("2006-01-02", birthday, loc)
+			bdays[username] = t
+		}
+		birthdayConfigs = append(birthdayConfigs, birthdayConfig{
+			chatID:    config.ChatID,
+			birthdays: bdays,
+		})
 	}
 }
 
 func (p *BirthdaysPlugin) Process(message *telebot.Message) {
-	todaysBirthday(message)
-	nextBirthday(message)
+	checkTodaysBirthdays(message)
+	handleBirthdayCommand(message)
 }
 
-func nextBirthday(message *telebot.Message) {
+func checkTodaysBirthdays(message *telebot.Message) {
+	bot := registry.Bot
+	loc := registry.Config.TimeLoc
+
+	cur := time.Now().In(loc)
+
+	for _, config := range birthdayConfigs {
+		if config.chatID != message.Chat.ID {
+			continue
+		}
+		for username, birthday := range config.birthdays {
+			if cur.Month() == birthday.Month() && cur.Day() == birthday.Day() && notMentioned(username, cur.Year(), message) {
+				age := strconv.Itoa(age.AgeAt(birthday, cur))
+				bot.Send(message.Chat, "Hooray! 🎉 @"+username+" is turning "+age+"! 🎂", &telebot.SendOptions{})
+			}
+		}
+	}
+}
+
+func handleBirthdayCommand(message *telebot.Message) {
 	bot := registry.Bot
 	loc := registry.Config.TimeLoc
 
@@ -58,16 +89,21 @@ func nextBirthday(message *telebot.Message) {
 		curBirthday := ""
 		curUsername := ""
 
-		for username, birthday := range birthdays {
-			birthdayDay := time.Date(cur.Year(), birthday.Month(), birthday.Day(), 0, 0, 0, 0, time.Local).YearDay()
-			diff = birthdayDay - curDay
-			if diff > 0 {
-				if diff == curDiff {
-					curUsername += ", @" + username
-				} else if diff < curDiff {
-					curDiff = diff
-					curUsername = username
-					curBirthday = birthday.Format("02.01")
+		for _, config := range birthdayConfigs {
+			if config.chatID != message.Chat.ID {
+				continue
+			}
+			for username, birthday := range config.birthdays {
+				birthdayDay := time.Date(cur.Year(), birthday.Month(), birthday.Day(), 0, 0, 0, 0, time.Local).YearDay()
+				diff = birthdayDay - curDay
+				if diff > 0 {
+					if diff == curDiff {
+						curUsername += ", @" + username
+					} else if diff < curDiff {
+						curDiff = diff
+						curUsername = username
+						curBirthday = birthday.Format("02.01")
+					}
 				}
 			}
 		}
@@ -76,20 +112,6 @@ func nextBirthday(message *telebot.Message) {
 			bot.Send(message.Chat, "Prepare the 🎂 for @"+curUsername+" on "+curBirthday, &telebot.SendOptions{})
 		} else {
 			bot.Send(message.Chat, "No upcoming birthdays", &telebot.SendOptions{})
-		}
-	}
-}
-
-func todaysBirthday(message *telebot.Message) {
-	bot := registry.Bot
-	loc := registry.Config.TimeLoc
-
-	cur := time.Now().In(loc)
-
-	for username, birthday := range birthdays {
-		if cur.Month() == birthday.Month() && cur.Day() == birthday.Day() && notMentioned(username, cur.Year(), message) {
-			age := strconv.Itoa(age.AgeAt(birthday, cur))
-			bot.Send(message.Chat, "Hooray! 🎉 @"+username+" is turning "+age+"! 🎂", &telebot.SendOptions{})
 		}
 	}
 }

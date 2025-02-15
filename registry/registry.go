@@ -36,22 +36,33 @@ type NametriggerPluginConfig struct {
 }
 
 // Configuration stores a struct loaded from config.yml
+type BirthdayConfig struct {
+	ChatID int64             `yaml:"chat_id"`
+	Users  map[string]string `yaml:"users"`
+}
+
+type TwitchStreamConfig struct {
+	ChatID          int64    `yaml:"chat_id"`
+	TwitchUsernames []string `yaml:"twitch_usernames"`
+}
+
 type Configuration struct {
 	TelegramKey         string                  `yaml:"telegram_key"`
 	ReplyTechLink       string                  `yaml:"reply_tech_link"`
 	NametriggerConfig   NametriggerPluginConfig `yaml:"nametrigger"`
-	Birthdays           map[string]string       `yaml:"birthdays"`
+	Birthdays           []BirthdayConfig        `yaml:"birthdays"`
 	TimeZone            string                  `yaml:"time_zone"`
 	TimeLoc             *time.Location
-	DupeIgnoredDomains  []string `yaml:"dupe_ignored_domains"`
-	TwitchAPIKey        string   `yaml:"twitch_api_key"`
-	TwitchAPISecret     string   `yaml:"twitch_api_secret"`
-	TwitchStreams       []string `yaml:"twitch_streams"`
-	OpenaiApiKey        string   `yaml:"openai_api_key"`
-	ChatGptUseHistory   bool     `yaml:"chat_gpt_use_history"`
+	DupeIgnoredDomains  []string             `yaml:"dupe_ignored_domains"`
+	TwitchAPIKey        string               `yaml:"twitch_api_key"`
+	TwitchAPISecret     string               `yaml:"twitch_api_secret"`
+	TwitchStreams       []TwitchStreamConfig `yaml:"twitch_streams"`
+	OpenaiApiKey        string               `yaml:"openai_api_key"`
+	ChatGptUseHistory   bool                 `yaml:"chat_gpt_use_history"`
 	ChatGptSystemPrompt string   `yaml:"chat_gpt_system_prompt"`
 	ChatGptUserPrompt   string   `yaml:"chat_gpt_user_prompt"`
 	ChatGptHistoryDepth int      `yaml:"chat_gpt_history_depth"`
+	OwnerUsername       string   `yaml:"owner_username"`
 }
 
 // LoadConfig reads configuration into registry.Config

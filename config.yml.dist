@@ -7,15 +7,21 @@ nametrigger:
       reply: 
 time_zone: Europe/Moscow
 birthdays:
-  username1: 2006-01-02
+  - chat_id: 123456789
+    users:
+      username1: 2006-01-02
 dupe_ignored_domains:
   - twitch.tv
   - www.twitch.tv
 twitch_api_key: no_key
 twitch_streams:
-  - twitch_username
+  - chat_id: 123456789
+    twitch_usernames:
+      - username1 
+      - username2
 openai_api_key: no_key
 chat_gpt_use_history: true
 chat_gpt_history_depth: 20
 chat_gpt_system_prompt: 
 chat_gpt_user_prompt: 
+owner_username: your_username

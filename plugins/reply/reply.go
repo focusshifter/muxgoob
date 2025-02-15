@@ -41,6 +41,15 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	bot := registry.Bot
 	rngInt := rng.Int()
 
+	// Check if this is a reply to bot's message
+	if message.ReplyTo != nil && message.ReplyTo.Sender.Username == bot.Me.Username {
+		replyText := askChatGpt(message)
+		if replyText != "" {
+			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+		}
+		return
+	}
+
 	techExp := regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
 	commandExp := regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),.*$`)

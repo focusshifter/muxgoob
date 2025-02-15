@@ -170,7 +170,7 @@ func Initialize() {
 		CREATE TABLE IF NOT EXISTS helix_streams (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_name TEXT,
-			started_at TEXT,
+			started_at DATETIME,
 			data TEXT,  -- Full JSON for future compatibility
 			UNIQUE(user_name)
 		);

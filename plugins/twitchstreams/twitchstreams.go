@@ -92,30 +92,40 @@ func checkStreams(t time.Time) {
 		}
 
 		// Check if we've already seen this stream
-		var lastStartedAt string
+		var lastStartedAtStr string
 		err := database.DB.QueryRow(
 			"SELECT started_at FROM helix_streams WHERE user_name = ?",
-			stream.UserName).Scan(&lastStartedAt)
+			stream.UserName).Scan(&lastStartedAtStr)
 
+		var lastStartedAt time.Time
 		if err == nil {
-			log.Printf("Twitch: Comparing %v = %v  %v = %v", stream.UserName, stream.UserName, stream.StartedAt.Format(time.RFC3339), lastStartedAt)
-			if stream.StartedAt.Format(time.RFC3339) == lastStartedAt {
-				continue
-			}
-			// Delete old stream
-			_, err = database.DB.Exec(
-				"DELETE FROM helix_streams WHERE user_name = ?",
-				stream.UserName)
+			lastStartedAt, err = time.Parse(time.RFC3339, lastStartedAtStr)
 			if err != nil {
-				log.Printf("Error deleting old stream: %v", err)
+				log.Printf("Twitch: Error parsing time %v: %v", lastStartedAtStr, err)
 			}
 		}
 
-		// Save new stream
+		if err == nil {
+			newTime := stream.StartedAt.UTC()
+			existingTime := lastStartedAt.UTC()
+			log.Printf("Twitch: Debug timestamps - Username: %v", stream.UserName)
+			log.Printf("Twitch: New time: %v (%v)", newTime, newTime.Format(time.RFC3339))
+			log.Printf("Twitch: Existing time: %v (%v)", existingTime, existingTime.Format(time.RFC3339))
+			log.Printf("Twitch: Equal?: %v", newTime.Equal(existingTime))
+			if newTime.Equal(existingTime) {
+				log.Printf("Twitch: Skipping announcement - same start time")
+				continue
+			}
+		} else {
+			log.Printf("Twitch: No existing stream found for %v (err: %v)", stream.UserName, err)
+		}
+
+		// Save new stream using INSERT OR REPLACE to handle UNIQUE constraint
 		streamData, _ := json.Marshal(stream)
+		startedAt := stream.StartedAt.UTC().Format(time.RFC3339)
 		_, err = database.DB.Exec(
-			"INSERT INTO helix_streams (user_name, started_at, data) VALUES (?, ?, ?)",
-			stream.UserName, stream.StartedAt, string(streamData))
+			"INSERT OR REPLACE INTO helix_streams (user_name, started_at, data) VALUES (?, ?, ?)",
+			stream.UserName, startedAt, string(streamData))
 		if err != nil {
 			log.Printf("Error saving stream: %v", err)
 			continue

@@ -115,7 +115,7 @@ func main() {
 		);
 
 		-- Dupe links table
-		CREATE TABLE dupe_links (
+		CREATE TABLE IF NOT EXISTS  dupe_links (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			url TEXT,
 			message_id INTEGER,
@@ -125,7 +125,7 @@ func main() {
 			FOREIGN KEY (sender_id) REFERENCES users(id),
 			FOREIGN KEY (chat_id) REFERENCES chats(id)
 		);
-		CREATE INDEX idx_dupe_links_url ON dupe_links(url);
+		CREATE INDEX IF NOT EXISTS idx_dupe_links_url ON dupe_links(url);
 
 		-- Indexes for better query performance
 		CREATE INDEX IF NOT EXISTS idx_messages_unixtime ON messages(unixtime);

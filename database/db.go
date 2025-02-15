@@ -1,20 +1,72 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"log"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 var DB *sql.DB
 
+// TxFn is a function that will be called with an active transaction
+type TxFn func(*sql.Tx) error
+
+// WithTx executes the given function within a transaction
+func WithTx(ctx context.Context, fn TxFn) error {
+	tx, err := DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p) // re-throw panic after rollback
+		}
+	}()
+
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// RetryWithBackoff executes the given function with exponential backoff
+func RetryWithBackoff(fn func() error) error {
+	backoff := 50 * time.Millisecond
+	for i := 0; i < 5; i++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		
+		// Only retry on database locked errors
+		if err.Error() != "database is locked" {
+			return err
+		}
+		
+		time.Sleep(backoff)
+		backoff *= 2
+	}
+	return nil
+}
+
 func Initialize() {
 	var err error
-	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite")
+	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite?_journal=WAL&_busy_timeout=5000&_synchronous=NORMAL")
 	if err != nil {
 		log.Fatal("Failed to open SQLite DB:", err)
 	}
+	
+	// Set connection pool settings
+	DB.SetMaxOpenConns(1) // SQLite only supports one writer at a time
+	DB.SetMaxIdleConns(1)
+	DB.SetConnMaxLifetime(0) // connections are reused forever
 
 	// Create tables if they don't exist
 	_, err = DB.Exec(`

@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"time"
 
@@ -38,35 +39,40 @@ func WithTx(ctx context.Context, fn TxFn) error {
 
 // RetryWithBackoff executes the given function with exponential backoff
 func RetryWithBackoff(fn func() error) error {
-	backoff := 50 * time.Millisecond
-	for i := 0; i < 5; i++ {
+	backoff := 10 * time.Millisecond
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
 		err := fn()
 		if err == nil {
 			return nil
 		}
-		
-		// Only retry on database locked errors
-		if err.Error() != "database is locked" {
+
+		// Check for specific SQLite errors that indicate retrying would help
+		errStr := err.Error()
+		if errStr != "database is locked" && errStr != "database table is locked" && errStr != "busy" {
 			return err
 		}
-		
-		time.Sleep(backoff)
-		backoff *= 2
+
+		if i < maxRetries-1 { // Don't sleep on the last iteration
+			time.Sleep(backoff)
+			backoff *= 2
+		}
 	}
-	return nil
+	return fmt.Errorf("max retries exceeded")
 }
 
 func Initialize() {
 	var err error
-	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite?_journal=WAL&_busy_timeout=5000&_synchronous=NORMAL")
+	// Increased busy_timeout to 10 seconds and added other performance settings
+	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared&_txlock=immediate")
 	if err != nil {
 		log.Fatal("Failed to open SQLite DB:", err)
 	}
 	
 	// Set connection pool settings
-	DB.SetMaxOpenConns(1) // SQLite only supports one writer at a time
-	DB.SetMaxIdleConns(1)
-	DB.SetConnMaxLifetime(0) // connections are reused forever
+	DB.SetMaxOpenConns(2) // Allow 2 connections for better concurrency with WAL mode
+	DB.SetMaxIdleConns(2)
+	DB.SetConnMaxLifetime(time.Hour) // Recycle connections every hour
 
 	// Create tables if they don't exist
 	_, err = DB.Exec(`

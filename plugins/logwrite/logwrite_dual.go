@@ -29,25 +29,30 @@ func (p *LogWriteDualPlugin) Start(sharedDb interface{}) {
 }
 
 func (p *LogWriteDualPlugin) Process(message *telebot.Message) {
-	// Write to Storm DB if available
-	if p.stormDb != nil {
-		chat := p.stormDb.From(strconv.FormatInt(message.Chat.ID, 10))
-		if err := chat.Save(message); err != nil {
-			log.Println("Error saving message to Storm:", err)
-		}
-
-		chats := p.stormDb.From("chats")
-		var existingChat telebot.Chat
-		err := chats.One("ID", message.Chat.ID, &existingChat)
-		if err != nil {
-			if err := chats.Save(message.Chat); err != nil {
-				log.Println("Error saving chat to Storm:", err)
+	// Use a channel to handle Storm DB operations asynchronously
+	done := make(chan bool)
+	go func() {
+		if p.stormDb != nil {
+			// Write to Storm DB if available
+			chat := p.stormDb.From(strconv.FormatInt(message.Chat.ID, 10))
+			if err := chat.Save(message); err != nil {
+				log.Println("Error saving message to Storm:", err)
 			}
-			log.Println("Chat list updated in Storm, new chat ID:", message.Chat.ID)
-		}
-	}
 
-	// Write to SQLite with retries and transaction
+			chats := p.stormDb.From("chats")
+			var existingChat telebot.Chat
+			err := chats.One("ID", message.Chat.ID, &existingChat)
+			if err != nil {
+				if err := chats.Save(message.Chat); err != nil {
+					log.Println("Error saving chat to Storm:", err)
+				}
+				log.Println("Chat list updated in Storm, new chat ID:", message.Chat.ID)
+			}
+		}
+		done <- true
+	}()
+
+	// Write everything to SQLite in a single transaction
 	if err := database.RetryWithBackoff(func() error {
 		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
 			// Save user if not exists
@@ -86,30 +91,23 @@ func (p *LogWriteDualPlugin) Process(message *telebot.Message) {
 				return err
 			}
 
-			log.Printf("Saved message from %s %s: %s", message.Sender.FirstName, message.Sender.LastName, message.Text)
-
 			// Save message entities
-			for _, entity := range message.Entities {
-				_, err := tx.Exec(
-					`INSERT OR REPLACE INTO message_entities (
-						message_id, chat_id, type, offset, length, url, user_id, language, is_caption
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					message.ID, message.Chat.ID, entity.Type, entity.Offset, entity.Length,
-					entity.URL, getUserID(entity.User), "", false)
-				if err != nil {
-					return err
+			if len(message.Entities) > 0 {
+				for _, entity := range message.Entities {
+					_, err := tx.Exec(
+						`INSERT OR REPLACE INTO message_entities (
+							message_id, chat_id, type, offset, length, url, user_id, language, is_caption
+						) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						message.ID, message.Chat.ID, entity.Type, entity.Offset, entity.Length,
+						entity.URL, getUserID(entity.User), "", false)
+					if err != nil {
+						return err
+					}
 				}
 			}
-			return nil
-		})
-	}); err != nil {
-		log.Printf("Error saving message data: %v", err)
-	}
 
-	// Save media items
-	if message.Photo != nil {
-		if err := database.RetryWithBackoff(func() error {
-			return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			// Save photo if present
+			if message.Photo != nil {
 				photoData, _ := json.Marshal(message.Photo)
 				_, err := tx.Exec(
 					`INSERT OR REPLACE INTO media_items (
@@ -121,12 +119,17 @@ func (p *LogWriteDualPlugin) Process(message *telebot.Message) {
 				if err != nil {
 					return err
 				}
-				return nil
-			})
-		}); err != nil {
-			log.Printf("Error saving photo: %v", err)
-		}
+			}
+
+			log.Printf("Saved message from %s %s: %s", message.Sender.FirstName, message.Sender.LastName, message.Text)
+			return nil
+		})
+	}); err != nil {
+		log.Printf("Error saving message data: %v", err)
 	}
+
+	// Wait for Storm DB operations to complete
+	<-done
 }
 
 func getMessageID(msg *telebot.Message) interface{} {

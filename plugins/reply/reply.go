@@ -171,7 +171,16 @@ func askChatGpt(message *telebot.Message) string {
 
 	client := openai.NewClient(registry.Config.OpenaiApiKey)
 
+	// Start with global system prompt
 	systemMessage := registry.Config.ChatGptSystemPrompt
+
+	// Add chat-specific prompt if it exists
+	for _, chatConfig := range registry.Config.ChatGptConfigPerChat {
+		if chatConfig.ChatID == message.Chat.ID && chatConfig.SystemPrompt != "" {
+			systemMessage += "\n\n" + chatConfig.SystemPrompt
+			break
+		}
+	}
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 

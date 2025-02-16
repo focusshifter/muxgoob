@@ -46,6 +46,11 @@ type TwitchStreamConfig struct {
 	TwitchUsernames []string `yaml:"twitch_usernames"`
 }
 
+type ChatGptConfigPerChat struct {
+	ChatID       int64  `yaml:"chat_id"`
+	SystemPrompt string `yaml:"system_prompt"`
+}
+
 type Configuration struct {
 	TelegramKey         string                  `yaml:"telegram_key"`
 	ReplyTechLink       string                  `yaml:"reply_tech_link"`
@@ -57,10 +62,11 @@ type Configuration struct {
 	TwitchAPIKey        string               `yaml:"twitch_api_key"`
 	TwitchAPISecret     string               `yaml:"twitch_api_secret"`
 	TwitchStreams       []TwitchStreamConfig `yaml:"twitch_streams"`
-	OpenaiApiKey        string               `yaml:"openai_api_key"`
-	ChatGptUseHistory   bool                 `yaml:"chat_gpt_use_history"`
-	ChatGptSystemPrompt string   `yaml:"chat_gpt_system_prompt"`
-	ChatGptUserPrompt   string   `yaml:"chat_gpt_user_prompt"`
+	OpenaiApiKey          string                 `yaml:"openai_api_key"`
+	ChatGptUseHistory     bool                   `yaml:"chat_gpt_use_history"`
+	ChatGptSystemPrompt   string                 `yaml:"chat_gpt_system_prompt"`
+	ChatGptConfigPerChat  []ChatGptConfigPerChat `yaml:"chat_gpt_config_per_chat"`
+	ChatGptUserPrompt     string                 `yaml:"chat_gpt_user_prompt"`
 	ChatGptHistoryDepth int      `yaml:"chat_gpt_history_depth"`
 	OwnerUsername       string   `yaml:"owner_username"`
 }

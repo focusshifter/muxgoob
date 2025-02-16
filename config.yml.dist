@@ -22,6 +22,9 @@ twitch_streams:
 openai_api_key: no_key
 chat_gpt_use_history: true
 chat_gpt_history_depth: 20
-chat_gpt_system_prompt: 
+chat_gpt_system_prompt:
+chat_gpt_config_per_chat:
+  - chat_id: -1
+    system_prompt: "Custom chat prompt"
 chat_gpt_user_prompt: 
 owner_username: your_username

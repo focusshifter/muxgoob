@@ -194,10 +194,10 @@ func askChatGpt(message *telebot.Message) string {
 		context.Background(),
 		openai.ChatCompletionRequest{
 			Model:            model,
-			Temperature:      1.0,
+			Temperature:      0.7,
 			TopP:             1.0,
-			FrequencyPenalty: 1.0,
-			PresencePenalty:  1.0,
+			FrequencyPenalty: 0.2,
+			PresencePenalty:  0.2,
 
 			Messages: []openai.ChatCompletionMessage{
 				{

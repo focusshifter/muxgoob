@@ -24,7 +24,7 @@ func (p *DupeLinkPlugin) Start(interface{}) {}
 func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 	messageURLs := getURLs(message)
 	var validURLs []string
-	
+
 	newURL := func(currentURL string, validURLs []string) bool {
 		for _, existingURL := range validURLs {
 			if existingURL == currentURL {
@@ -41,16 +41,22 @@ func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 		if err != nil {
 			continue
 		}
-	
+
+		// Custom logic for some of the domains
+		// For example, open.spotify.com we remove all parameters
+		if parsedURL.Hostname() == "open.spotify.com" {
+			parsedURL.RawQuery = ""
+		}
+
 		currentURL := parsedURL.Hostname() + parsedURL.RequestURI()
 
 		for _, ignoredHostname := range registry.Config.DupeIgnoredDomains {
 			if parsedURL.Hostname() == ignoredHostname {
 				log.Println("Dupe: Skipping " + currentURL + " because " + ignoredHostname + " is blacklisted")
 				return
-			}	
+			}
 		}
-		
+
 		if newURL(currentURL, validURLs) {
 			validURLs = append(validURLs, currentURL)
 			reactToURL(currentURL, message)
@@ -63,7 +69,7 @@ func getURLs(message *telebot.Message) []string {
 
 	for _, entity := range message.Entities {
 		if entity.Type == "url" {
-			urls = append(urls, string([]rune(message.Text)[entity.Offset:(entity.Offset + entity.Length)]))
+			urls = append(urls, string([]rune(message.Text)[entity.Offset:(entity.Offset+entity.Length)]))
 		}
 	}
 

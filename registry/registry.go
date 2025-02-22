@@ -52,23 +52,26 @@ type ChatGptConfigPerChat struct {
 }
 
 type Configuration struct {
-	TelegramKey         string                  `yaml:"telegram_key"`
-	ReplyTechLink       string                  `yaml:"reply_tech_link"`
-	NametriggerConfig   NametriggerPluginConfig `yaml:"nametrigger"`
-	Birthdays           []BirthdayConfig        `yaml:"birthdays"`
-	TimeZone            string                  `yaml:"time_zone"`
-	TimeLoc             *time.Location
-	DupeIgnoredDomains  []string             `yaml:"dupe_ignored_domains"`
-	TwitchAPIKey        string               `yaml:"twitch_api_key"`
-	TwitchAPISecret     string               `yaml:"twitch_api_secret"`
-	TwitchStreams       []TwitchStreamConfig `yaml:"twitch_streams"`
-	OpenaiApiKey          string                 `yaml:"openai_api_key"`
-	ChatGptUseHistory     bool                   `yaml:"chat_gpt_use_history"`
-	ChatGptSystemPrompt   string                 `yaml:"chat_gpt_system_prompt"`
-	ChatGptConfigPerChat  []ChatGptConfigPerChat `yaml:"chat_gpt_config_per_chat"`
-	ChatGptUserPrompt     string                 `yaml:"chat_gpt_user_prompt"`
-	ChatGptHistoryDepth int      `yaml:"chat_gpt_history_depth"`
-	OwnerUsername       string   `yaml:"owner_username"`
+	TelegramKey          string                  `yaml:"telegram_key"`
+	ReplyTechLink        string                  `yaml:"reply_tech_link"`
+	NametriggerConfig    NametriggerPluginConfig `yaml:"nametrigger"`
+	Birthdays            []BirthdayConfig        `yaml:"birthdays"`
+	TimeZone             string                  `yaml:"time_zone"`
+	TimeLoc              *time.Location
+	DupeIgnoredDomains   []string               `yaml:"dupe_ignored_domains"`
+	TwitchAPIKey         string                 `yaml:"twitch_api_key"`
+	TwitchAPISecret      string                 `yaml:"twitch_api_secret"`
+	TwitchStreams        []TwitchStreamConfig   `yaml:"twitch_streams"`
+	OpenaiApiKey         string                 `yaml:"openai_api_key"`
+	ChatGptUseHistory    bool                   `yaml:"chat_gpt_use_history"`
+	ChatGptSystemPrompt  string                 `yaml:"chat_gpt_system_prompt"`
+	ChatGptConfigPerChat []ChatGptConfigPerChat `yaml:"chat_gpt_config_per_chat"`
+	ChatGptUserPrompt    string                 `yaml:"chat_gpt_user_prompt"`
+	ChatGptHistoryDepth  int                    `yaml:"chat_gpt_history_depth"`
+	OpenrouterApiKey     string                 `yaml:"openrouter_api_key"`
+	OwnerUsername        string                 `yaml:"owner_username"`
+	AiProvider           string                 `yaml:"ai_provider"`
+	AiModel              string                 `yaml:"ai_model"`
 }
 
 // LoadConfig reads configuration into registry.Config

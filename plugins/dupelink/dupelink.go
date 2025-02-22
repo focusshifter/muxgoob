@@ -43,7 +43,7 @@ func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 		}
 
 		// Custom logic for some of the domains
-		// For example, open.spotify.com we remove all parameters
+		// For example, for open.spotify.com we remove all parameters
 		if parsedURL.Hostname() == "open.spotify.com" {
 			parsedURL.RawQuery = ""
 		}

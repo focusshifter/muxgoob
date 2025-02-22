@@ -19,7 +19,10 @@ twitch_streams:
     twitch_usernames:
       - username1 
       - username2
+ai_provider: openrouter
+ai_model: deepseek/deepseek-chat
 openai_api_key: no_key
+openrouter_api_key: no_key
 chat_gpt_use_history: true
 chat_gpt_history_depth: 20
 chat_gpt_system_prompt:

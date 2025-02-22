@@ -169,7 +169,19 @@ func generateChatGptHistory(messages []telebot.Message) string {
 func askChatGpt(message *telebot.Message) string {
 	question := message.Text
 
-	client := openai.NewClient(registry.Config.OpenaiApiKey)
+	var config openai.ClientConfig
+	var model string
+
+	if registry.Config.AiProvider == "openrouter" {
+		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+		config.BaseURL = "https://openrouter.ai/api/v1"
+		model = registry.Config.AiModel
+	} else {
+		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
+		model = "gpt-4o-mini"
+	}
+
+	client := openai.NewClientWithConfig(config)
 
 	// Start with global system prompt
 	systemMessage := registry.Config.ChatGptSystemPrompt
@@ -183,8 +195,6 @@ func askChatGpt(message *telebot.Message) string {
 	}
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
-
-	model := openai.GPT4o
 
 	log.Printf("ChatGPT request: model %v", model)
 	log.Printf("ChatGPT request: chat_id %v", message.Chat.ID)

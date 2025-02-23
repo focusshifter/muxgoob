@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/nicklaw5/helix"
@@ -103,6 +104,9 @@ func checkStreams(t time.Time) {
 			continue
 		}
 
+		log.Printf("Checking streamer: %s", stream.UserName)
+		log.Printf("Configured TwitchStreams: %+v", registry.Config.TwitchStreams)
+
 		// Check if we've already seen this stream
 		var lastStartedAtStr string
 		err := database.DB.QueryRow(
@@ -157,7 +161,7 @@ func checkStreams(t time.Time) {
 		// Send to chats that are configured for this streamer
 		for _, config := range registry.Config.TwitchStreams {
 			for _, username := range config.TwitchUsernames {
-				if username == stream.UserName {
+				if strings.ToLower(username) == strings.ToLower(stream.UserName) {
 					chat := &telebot.Chat{ID: config.ChatID}
 					bot.Send(chat, messageText, &telebot.SendOptions{
 						ParseMode: "markdown",

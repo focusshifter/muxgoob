@@ -17,14 +17,16 @@ import (
 	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
 	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
 	_ "github.com/focusshifter/muxgoob/plugins/nametrigger"
+	_ "github.com/focusshifter/muxgoob/plugins/promptmgr"
 	_ "github.com/focusshifter/muxgoob/plugins/reply"
+	_ "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	_ "github.com/focusshifter/muxgoob/plugins/twitchstreams"
 )
 
 var token string
 
 func main() {
-	log.Println("Rise and shine, Mux")
+	log.Println("[muxgoob] Rise and shine, Mux")
 
 	token = os.Getenv("MUXGOOB_KEY")
 
@@ -37,7 +39,7 @@ func main() {
 	// Initialize StormDB for legacy support
 	stormDb, err := storm.Open("db/muxgoob.db")
 	if err != nil {
-		log.Fatal("Failed to open StormDB:", err)
+		log.Fatal("[muxgoob] Failed to open StormDB:", err)
 	}
 	defer stormDb.Close()
 
@@ -47,7 +49,7 @@ func main() {
 	})
 
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("[muxgoob] ", err)
 	}
 
 	registry.Bot = &registry.BotWrapper{Bot: bot}
@@ -63,7 +65,7 @@ func main() {
 			"INSERT OR IGNORE INTO users (id, username, first_name, last_name, data) VALUES (?, ?, ?, ?, ?)",
 			message.Sender.ID, message.Sender.Username, message.Sender.FirstName, message.Sender.LastName, string(userData))
 		if err != nil {
-			log.Printf("Error saving user: %v", err)
+			log.Printf("[muxgoob] Error saving user: %v", err)
 		}
 
 		// Save chat if not exists
@@ -73,7 +75,7 @@ func main() {
 			message.Chat.ID, message.Chat.Type, message.Chat.Title, message.Chat.Username,
 			message.Chat.FirstName, message.Chat.LastName, string(chatData))
 		if err != nil {
-			log.Printf("Error saving chat: %v", err)
+			log.Printf("[muxgoob] Error saving chat: %v", err)
 		}
 
 		// Save message
@@ -90,7 +92,7 @@ func main() {
 			message.AlbumID, message.Signature, message.Time().Unix(),
 			message.Text, message.Caption, string(msgData))
 		if err != nil {
-			log.Printf("Error saving message: %v", err)
+			log.Printf("[muxgoob] Error saving message: %v", err)
 		}
 
 		// Save message entities
@@ -102,7 +104,7 @@ func main() {
 				message.ID, message.Chat.ID, entity.Type, entity.Offset, entity.Length,
 				entity.URL, getUserID(entity.User), "", false)
 			if err != nil {
-				log.Printf("Error saving message entity: %v", err)
+				log.Printf("[muxgoob] Error saving message entity: %v", err)
 			}
 		}
 
@@ -117,7 +119,7 @@ func main() {
 				message.ID, message.Chat.ID, "photo", message.Photo.FileID, "",
 				message.Photo.Width, message.Photo.Height, message.Photo.FileSize, string(photoData))
 			if err != nil {
-				log.Printf("Error saving photo: %v", err)
+				log.Printf("[muxgoob] Error saving photo: %v", err)
 			}
 		}
 

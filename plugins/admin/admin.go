@@ -10,7 +10,7 @@ import (
 	"github.com/focusshifter/muxgoob/registry"
 )
 
-type AdminPlugin struct {}
+type AdminPlugin struct{}
 
 func init() {
 	registry.RegisterPlugin(&AdminPlugin{})
@@ -20,15 +20,15 @@ func (p *AdminPlugin) Start(config interface{}) {}
 
 func (p *AdminPlugin) Process(message *telebot.Message) {
 	// Only process private messages from the owner
-	if message.Chat.Type != telebot.ChatPrivate || 
+	if message.Chat.Type != telebot.ChatPrivate ||
 		message.Sender.Username != registry.Config.OwnerUsername {
 		return
 	}
 
-	// Check for /list command
-	if message.Text == "/list" {
+	// Check for !list command
+	if message.Text == "!list" {
 		bot := registry.Bot
-		
+
 		// Query all chats from the database
 		rows, err := database.DB.Query(`
 			SELECT id, type, title, username, first_name, last_name 
@@ -44,7 +44,7 @@ func (p *AdminPlugin) Process(message *telebot.Message) {
 		var chats []string
 		for rows.Next() {
 			var (
-				id                                    int64
+				id                                             int64
 				chatType, title, username, firstName, lastName string
 			)
 			if err := rows.Scan(&id, &chatType, &title, &username, &firstName, &lastName); err != nil {

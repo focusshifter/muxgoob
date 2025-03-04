@@ -36,7 +36,7 @@ func (p *LogWriteDualPlugin) Process(message *telebot.Message) {
 			// Write to Storm DB if available
 			chat := p.stormDb.From(strconv.FormatInt(message.Chat.ID, 10))
 			if err := chat.Save(message); err != nil {
-				log.Println("Error saving message to Storm:", err)
+				log.Printf("[logwrite] Error saving message to Storm: %v", err)
 			}
 
 			chats := p.stormDb.From("chats")
@@ -44,9 +44,9 @@ func (p *LogWriteDualPlugin) Process(message *telebot.Message) {
 			err := chats.One("ID", message.Chat.ID, &existingChat)
 			if err != nil {
 				if err := chats.Save(message.Chat); err != nil {
-					log.Println("Error saving chat to Storm:", err)
+					log.Printf("[logwrite] Error saving chat to Storm: %v", err)
 				}
-				log.Println("Chat list updated in Storm, new chat ID:", message.Chat.ID)
+				log.Printf("[logwrite] Chat list updated in Storm, new chat ID: %d", message.Chat.ID)
 			}
 		}
 		done <- true
@@ -121,11 +121,11 @@ func (p *LogWriteDualPlugin) Process(message *telebot.Message) {
 				}
 			}
 
-			log.Printf("Saved message from %s %s: %s", message.Sender.FirstName, message.Sender.LastName, message.Text)
+			log.Printf("[logwrite] Saved message from %s %s: %s", message.Sender.FirstName, message.Sender.LastName, message.Text)
 			return nil
 		})
 	}); err != nil {
-		log.Printf("Error saving message data: %v", err)
+		log.Printf("[logwrite] Error saving message data: %v", err)
 	}
 
 	// Wait for Storm DB operations to complete

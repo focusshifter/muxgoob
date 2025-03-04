@@ -123,7 +123,7 @@ func notMentioned(username string, year int, message *telebot.Message) bool {
 		username, year).Scan(&exists)
 
 	if err != nil {
-		log.Printf("Error checking birthday notifications: %v", err)
+		log.Printf("[birthdays] Error checking birthday notifications: %v", err)
 		return false
 	}
 
@@ -131,13 +131,13 @@ func notMentioned(username string, year int, message *telebot.Message) bool {
 		return false
 	}
 
-	log.Println("Birthday: notify " + username)
+	log.Printf("[birthdays] Notify %s", username)
 
 	_, err = database.DB.Exec(
 		"INSERT INTO birthday_notifications (username, year) VALUES (?, ?)",
 		username, year)
 	if err != nil {
-		log.Printf("Error saving birthday notification: %v", err)
+		log.Printf("[birthdays] Error saving birthday notification: %v", err)
 		return false
 	}
 

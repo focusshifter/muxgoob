@@ -51,6 +51,13 @@ type ChatGptConfigPerChat struct {
 	SystemPrompt string `yaml:"system_prompt"`
 }
 
+// SelfPromptConfig holds configuration for the self-updating prompt plugin
+type SelfPromptConfig struct {
+	Enabled         bool    `yaml:"enabled"`
+	MessageInterval int64   `yaml:"message_interval"`
+	DisabledChats   []int64 `yaml:"disabled_chats"`
+}
+
 type Configuration struct {
 	TelegramKey          string                  `yaml:"telegram_key"`
 	ReplyTechLink        string                  `yaml:"reply_tech_link"`
@@ -72,6 +79,7 @@ type Configuration struct {
 	OwnerUsername        string                 `yaml:"owner_username"`
 	AiProvider           string                 `yaml:"ai_provider"`
 	AiModel              string                 `yaml:"ai_model"`
+	SelfPromptConfig     SelfPromptConfig       `yaml:"selfprompt"`
 }
 
 // LoadConfig reads configuration into registry.Config

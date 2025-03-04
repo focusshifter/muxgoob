@@ -52,7 +52,7 @@ func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 
 		for _, ignoredHostname := range registry.Config.DupeIgnoredDomains {
 			if parsedURL.Hostname() == ignoredHostname {
-				log.Println("Dupe: Skipping " + currentURL + " because " + ignoredHostname + " is blacklisted")
+				log.Printf("[dupelink] Skipping %s because %s is blacklisted", currentURL, ignoredHostname)
 				return
 			}
 		}
@@ -92,13 +92,13 @@ func reactToURL(currentURL string, message *telebot.Message) {
 		currentURL, message.Chat.ID).Scan(&firstName, &lastName, &unixtime)
 
 	if err == nil {
-		log.Println("Found dupe, reporting: " + currentURL)
+		log.Printf("[dupelink] Found dupe, reporting: %s", currentURL)
 		formattedTime := time.Unix(unixtime, 0).Format(time.RFC1123)
 		formattedUser := firstName + " " + lastName
 		bot.Send(message.Chat, "That was already posted on "+formattedTime+" by "+formattedUser,
 			&telebot.SendOptions{ReplyTo: message})
 	} else {
-		log.Println("Link not found, saving: " + currentURL)
+		log.Printf("[dupelink] Link not found, saving: %s", currentURL)
 
 		// First, ensure user exists in the database
 		userData, _ := json.Marshal(message.Sender)
@@ -106,7 +106,7 @@ func reactToURL(currentURL string, message *telebot.Message) {
 			"INSERT OR IGNORE INTO users (id, username, first_name, last_name, data) VALUES (?, ?, ?, ?, ?)",
 			message.Sender.ID, message.Sender.Username, message.Sender.FirstName, message.Sender.LastName, string(userData))
 		if err != nil {
-			log.Printf("Error saving user: %v", err)
+			log.Printf("[dupelink] Error saving user: %v", err)
 			return
 		}
 
@@ -115,7 +115,7 @@ func reactToURL(currentURL string, message *telebot.Message) {
 			"INSERT INTO dupe_links (url, message_id, sender_id, chat_id, unixtime) VALUES (?, ?, ?, ?, ?)",
 			currentURL, message.ID, message.Sender.ID, message.Chat.ID, message.Unixtime)
 		if err != nil {
-			log.Printf("Error saving dupe link: %v", err)
+			log.Printf("[dupelink] Error saving dupe link: %v", err)
 		}
 	}
 }

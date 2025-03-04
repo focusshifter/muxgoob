@@ -15,6 +15,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
@@ -128,13 +129,13 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	for rows.Next() {
 		var data string
 		if err := rows.Scan(&data); err != nil {
-			log.Printf("Error scanning message: %v", err)
+			log.Printf("[reply] Error scanning message: %v", err)
 			continue
 		}
 
 		var msg telebot.Message
 		if err := json.Unmarshal([]byte(data), &msg); err != nil {
-			log.Printf("Error unmarshaling message: %v", err)
+			log.Printf("[reply] Error unmarshaling message: %v", err)
 			continue
 		}
 		messages = append(messages, msg)
@@ -145,7 +146,7 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 		return messages[i].Unixtime < messages[j].Unixtime
 	})
 
-	log.Printf("Retrieved %v messages", len(messages))
+	log.Printf("[reply] Retrieved %v messages", len(messages))
 
 	return messages
 }
@@ -183,15 +184,11 @@ func askChatGpt(message *telebot.Message) string {
 
 	client := openai.NewClientWithConfig(config)
 
-	// Start with global system prompt
-	systemMessage := registry.Config.ChatGptSystemPrompt
-
-	// Add chat-specific prompt if it exists
-	for _, chatConfig := range registry.Config.ChatGptConfigPerChat {
-		if chatConfig.ChatID == message.Chat.ID && chatConfig.SystemPrompt != "" {
-			systemMessage += "\n\n" + chatConfig.SystemPrompt
-			break
-		}
+	// Get prompt from promptmgr
+	systemMessage, err := promptmgr.GetCurrentPrompt(message.Chat.ID, true)
+	if err != nil {
+		log.Printf("[reply] Error getting prompt: %v", err)
+		return ""
 	}
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
@@ -204,9 +201,9 @@ func askChatGpt(message *telebot.Message) string {
 	if registry.Config.ChatGptUseHistory {
 		history := generateChatGptHistory(retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth))
 
-		log.Printf("ChatGPT request: history %v", history)
+		log.Printf("[reply] ChatGPT request: history %v", history)
 
-		systemMessage += "\n\nВ чате произошел следующий диалог: \n" + history
+		userMessage += "\n\nВ чате произошел следующий диалог: \n" + history
 	}
 
 	resp, err := client.CreateChatCompletion(

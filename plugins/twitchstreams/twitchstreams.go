@@ -51,12 +51,12 @@ func checkAppAccessToken() {
 		return
 	}
 
-	log.Printf("Twitch: Setting app access token")
+	log.Printf("[twitchstreams] Setting app access token")
 
 	token, err := twitchClient.GetAppAccessToken()
 
 	if err != nil {
-		log.Printf("Twitch: Error getting user token: %v", err)
+		log.Printf("[twitchstreams] Error getting user token: %v", err)
 	}
 
 	twitchTokenRefreshTime = time.Now().Local().Add(time.Second * time.Duration(token.Data.ExpiresIn))
@@ -67,7 +67,7 @@ func checkAppAccessToken() {
 func checkStreams(t time.Time) {
 	checkAppAccessToken()
 
-	log.Printf("Twitch: Checking streams")
+	log.Printf("[twitchstreams] Checking streams")
 
 	bot := registry.Bot
 
@@ -88,12 +88,12 @@ func checkStreams(t time.Time) {
 	})
 
 	if err != nil {
-		log.Printf("Twitch: Error getting twitch streams: %v", err)
+		log.Printf("[twitchstreams] Error getting twitch streams: %v", err)
 		return
 	}
 
 	if streamResponse.StatusCode != 200 {
-		log.Printf("Error %v", streamResponse.ErrorMessage)
+		log.Printf("[twitchstreams] Error: %v", streamResponse.ErrorMessage)
 		return
 	}
 
@@ -104,8 +104,8 @@ func checkStreams(t time.Time) {
 			continue
 		}
 
-		log.Printf("Checking streamer: %s", stream.UserName)
-		log.Printf("Configured TwitchStreams: %+v", registry.Config.TwitchStreams)
+		log.Printf("[twitchstreams] Checking streamer: %s", stream.UserName)
+		log.Printf("[twitchstreams] Configured streams: %+v", registry.Config.TwitchStreams)
 
 		// Check if we've already seen this stream
 		var lastStartedAtStr string
@@ -117,23 +117,23 @@ func checkStreams(t time.Time) {
 		if err == nil {
 			lastStartedAt, err = time.Parse(time.RFC3339, lastStartedAtStr)
 			if err != nil {
-				log.Printf("Twitch: Error parsing time %v: %v", lastStartedAtStr, err)
+				log.Printf("[twitchstreams] Error parsing time %v: %v", lastStartedAtStr, err)
 			}
 		}
 
 		if err == nil {
 			newTime := stream.StartedAt.UTC()
 			existingTime := lastStartedAt.UTC()
-			log.Printf("Twitch: Debug timestamps - Username: %v", stream.UserName)
-			log.Printf("Twitch: New time: %v (%v)", newTime, newTime.Format(time.RFC3339))
-			log.Printf("Twitch: Existing time: %v (%v)", existingTime, existingTime.Format(time.RFC3339))
-			log.Printf("Twitch: Equal?: %v", newTime.Equal(existingTime))
+			log.Printf("[twitchstreams] Debug timestamps - Username: %v", stream.UserName)
+			log.Printf("[twitchstreams] New time: %v (%v)", newTime, newTime.Format(time.RFC3339))
+			log.Printf("[twitchstreams] Existing time: %v (%v)", existingTime, existingTime.Format(time.RFC3339))
+			log.Printf("[twitchstreams] Equal?: %v", newTime.Equal(existingTime))
 			if newTime.Equal(existingTime) {
-				log.Printf("Twitch: Skipping announcement - same start time")
+				log.Printf("[twitchstreams] Skipping announcement - same start time")
 				continue
 			}
 		} else {
-			log.Printf("Twitch: No existing stream found for %v (err: %v)", stream.UserName, err)
+			log.Printf("[twitchstreams] No existing stream found for %v (err: %v)", stream.UserName, err)
 		}
 
 		// Save new stream using INSERT OR REPLACE to handle UNIQUE constraint
@@ -143,11 +143,11 @@ func checkStreams(t time.Time) {
 			"INSERT OR REPLACE INTO helix_streams (user_name, started_at, data) VALUES (?, ?, ?)",
 			stream.UserName, startedAt, string(streamData))
 		if err != nil {
-			log.Printf("Error saving stream: %v", err)
+			log.Printf("[twitchstreams] Error saving stream: %v", err)
 			continue
 		}
 
-		log.Printf("Twitch: Announcing %s", stream.UserName)
+		log.Printf("[twitchstreams] Announcing %s", stream.UserName)
 
 		game := getGame(stream.GameID)
 
@@ -184,7 +184,7 @@ func getGame(gameID string) helix.Game {
 
 	if err == nil {
 		if err := json.Unmarshal([]byte(gameData), &game); err != nil {
-			log.Printf("Error unmarshaling game: %v", err)
+			log.Printf("[twitchstreams] Error unmarshaling game: %v", err)
 			return game
 		}
 		return game
@@ -204,10 +204,10 @@ func getGame(gameID string) helix.Game {
 			"INSERT INTO helix_games (id, data) VALUES (?, ?)",
 			game.ID, string(gameData))
 		if err != nil {
-			log.Printf("Error saving game: %v", err)
+			log.Printf("[twitchstreams] Error saving game: %v", err)
 		}
 	} else {
-		log.Printf("Twitch: Error getting twitch games: %v", err)
+		log.Printf("[twitchstreams] Error getting twitch games: %v", err)
 	}
 
 	return game

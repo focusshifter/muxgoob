@@ -31,3 +31,10 @@ chat_gpt_config_per_chat:
     system_prompt: "Custom chat prompt"
 chat_gpt_user_prompt: 
 owner_username: your_username
+
+# Self-updating prompt plugin configuration
+selfprompt:
+  enabled: true  # Enable/disable the plugin globally
+  message_interval: 100  # Update prompt after this many messages
+  disabled_chats:  # List of chat IDs where the plugin should not run
+    - 123456789

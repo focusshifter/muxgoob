@@ -66,7 +66,7 @@ func Initialize() {
 	// Increased busy_timeout to 10 seconds and added other performance settings
 	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared&_txlock=immediate")
 	if err != nil {
-		log.Fatal("Failed to open SQLite DB:", err)
+		log.Fatal("[database] Failed to open SQLite DB:", err)
 	}
 	
 	// Set connection pool settings
@@ -197,7 +197,7 @@ func Initialize() {
 		CREATE INDEX IF NOT EXISTS idx_stream_notifications_stream_id ON stream_notifications(stream_id);
 	`)
 	if err != nil {
-		log.Fatal("Failed to create tables:", err)
+		log.Fatal("[database] Failed to create tables:", err)
 	}
 }
 

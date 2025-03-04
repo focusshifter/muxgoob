@@ -25,17 +25,17 @@ func main() {
 	// Open Storm DB
 	stormDb, err := storm.Open("db/muxgoob.db")
 	if err != nil {
-		log.Fatal("Failed to open Storm DB:", err)
+		log.Fatal("[migrate] Failed to open Storm DB:", err)
 	}
 	defer stormDb.Close()
 
 	// Create SQLite DB
 	if err := os.MkdirAll("db", 0755); err != nil {
-		log.Fatal("Failed to create db directory:", err)
+		log.Fatal("[migrate] Failed to create db directory:", err)
 	}
 	sqliteDb, err := sql.Open("sqlite3", "db/muxgoob.sqlite")
 	if err != nil {
-		log.Fatal("Failed to open SQLite DB:", err)
+		log.Fatal("[migrate] Failed to open SQLite DB:", err)
 	}
 	defer sqliteDb.Close()
 
@@ -134,13 +134,13 @@ func main() {
 		CREATE INDEX IF NOT EXISTS idx_media_items_file_id ON media_items(file_id);
 	`)
 	if err != nil {
-		log.Fatal("Failed to create tables:", err)
+		log.Fatal("[migrate] Failed to create tables:", err)
 	}
 
 	// Start transaction
 	tx, err := sqliteDb.Begin()
 	if err != nil {
-		log.Fatal("Failed to start transaction:", err)
+		log.Fatal("[migrate] Failed to start transaction:", err)
 	}
 	defer func() {
 		if err != nil {
@@ -154,7 +154,7 @@ func main() {
 		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		log.Fatal("Failed to prepare user statement:", err)
+		log.Fatal("[migrate] Failed to prepare user statement:", err)
 	}
 	defer insertUser.Close()
 
@@ -163,7 +163,7 @@ func main() {
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		log.Fatal("Failed to prepare chat statement:", err)
+		log.Fatal("[migrate] Failed to prepare chat statement:", err)
 	}
 	defer insertChat.Close()
 
@@ -174,7 +174,7 @@ func main() {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		log.Fatal("Failed to prepare message statement:", err)
+		log.Fatal("[migrate] Failed to prepare message statement:", err)
 	}
 	defer insertMessage.Close()
 
@@ -183,7 +183,7 @@ func main() {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		log.Fatal("Failed to prepare entity statement:", err)
+		log.Fatal("[migrate] Failed to prepare entity statement:", err)
 	}
 	defer insertEntity.Close()
 
@@ -193,23 +193,23 @@ func main() {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		log.Fatal("Failed to prepare media statement:", err)
+		log.Fatal("[migrate] Failed to prepare media statement:", err)
 	}
 	defer insertMedia.Close()
 
 	// Migrate chats and their messages
-	log.Println("Starting to fetch chats...")
+	log.Println("[migrate] Starting to fetch chats...")
 	var chats []telebot.Chat
 	err = stormDb.From("chats").All(&chats)
 	if err != nil {
 		if err == storm.ErrNotFound {
-			log.Println("No chats found in the database")
+			log.Println("[migrate] No chats found in the database")
 			return
 		} else {
-			log.Fatal("Failed to fetch chats:", err)
+			log.Fatal("[migrate] Failed to fetch chats:", err)
 		}
 	}
-	log.Printf("Found %d chats", len(chats))
+	log.Printf("[migrate] Found %d chats", len(chats))
 
 	// No need to start another transaction here
 
@@ -241,37 +241,37 @@ func main() {
 			chat.FirstName, chat.LastName, string(chatData),
 		)
 		if err != nil {
-			log.Printf("Failed to insert chat %d: %v", chat.ID, err)
+			log.Printf("[migrate] Failed to insert chat %d: %v", chat.ID, err)
 			continue
 		}
 	}
 
 	// Migrate messages from each chat
-	log.Println("Processing messages from each chat...")
+	log.Println("[migrate] Processing messages from each chat...")
 	for _, chat := range chats {
 		// Convert chat ID to string for bucket name
 		bucket := strconv.FormatInt(chat.ID, 10)
-		log.Printf("Processing messages from chat %s (%s)", chat.Title, bucket)
+		log.Printf("[migrate] Processing messages from chat %s (%s)", chat.Title, bucket)
 
 		var messages []telebot.Message
 		err = stormDb.From(bucket).All(&messages)
 		if err != nil {
 			if err != storm.ErrNotFound {
-				log.Printf("Failed to fetch messages from chat %s: %v", bucket, err)
+				log.Printf("[migrate] Failed to fetch messages from chat %s: %v", bucket, err)
 			}
 			continue
 		}
-		log.Printf("Found %d messages in chat %s", len(messages), bucket)
+		log.Printf("[migrate] Found %d messages in chat %s", len(messages), bucket)
 
 		for _, msg := range messages {
 			// Save message sender
 			if err := saveUser(msg.Sender); err != nil {
-				log.Println(err)
+				log.Printf("[migrate] %v", err)
 			}
 
 			// Save original sender if message is forwarded
 			if err := saveUser(msg.OriginalSender); err != nil {
-				log.Println(err)
+				log.Printf("[migrate] %v", err)
 			}
 
 			// Save the message
@@ -309,7 +309,7 @@ func main() {
 				msg.Text, msg.Caption, string(msgData),
 			)
 			if err != nil {
-				log.Printf("Failed to insert message %d from chat %s: %v", msg.ID, bucket, err)
+				log.Printf("[migrate] Failed to insert message %d from chat %s: %v", msg.ID, bucket, err)
 				continue
 			}
 
@@ -320,7 +320,7 @@ func main() {
 					entity.Length, entity.URL, nil, nil, false,
 				)
 				if err != nil {
-					log.Printf("Failed to insert entity for message %d: %v", msg.ID, err)
+					log.Printf("[migrate] Failed to insert entity for message %d: %v", msg.ID, err)
 				}
 			}
 
@@ -331,7 +331,7 @@ func main() {
 					entity.Length, entity.URL, nil, nil, true,
 				)
 				if err != nil {
-					log.Printf("Failed to insert caption entity for message %d: %v", msg.ID, err)
+					log.Printf("[migrate] Failed to insert caption entity for message %d: %v", msg.ID, err)
 				}
 			}
 
@@ -379,7 +379,7 @@ func main() {
 					fileSize, thumbFileID, string(data),
 				)
 				if err != nil {
-					log.Printf("Failed to insert media for message %d: %v", msg.ID, err)
+					log.Printf("[migrate] Failed to insert media for message %d: %v", msg.ID, err)
 				}
 			}
 
@@ -416,14 +416,14 @@ func main() {
 	}
 
 	// Migrate dupe_links
-	log.Println("Migrating dupe_links...")
+	log.Println("[migrate] Migrating dupe_links...")
 
 	insertDupeLink, err := tx.Prepare(`
 		INSERT INTO dupe_links (url, message_id, chat_id, sender_id, unixtime)
 		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
-		log.Fatal("Failed to prepare dupe_link statement:", err)
+		log.Fatal("[migrate] Failed to prepare dupe_link statement:", err)
 	}
 	defer insertDupeLink.Close()
 
@@ -434,52 +434,52 @@ func main() {
 		var dupeLinks []DupeLink
 		err = stormDb.From(chatBucket).All(&dupeLinks)
 		if err != nil && err != storm.ErrNotFound {
-			log.Printf("Failed to fetch dupe_links from chat %s: %v", chatBucket, err)
+			log.Printf("[migrate] Failed to fetch dupe_links from chat %s: %v", chatBucket, err)
 			continue
 		}
 		if err == nil && len(dupeLinks) > 0 {
-			log.Printf("Found %d dupe_links in chat %s", len(dupeLinks), chatBucket)
+			log.Printf("[migrate] Found %d dupe_links in chat %s", len(dupeLinks), chatBucket)
 			for _, link := range dupeLinks {
 				_, err = insertDupeLink.Exec(
 					link.URL, link.MessageID, chat.ID, link.Sender.ID, link.Unixtime,
 				)
 				if err != nil {
-					log.Printf("Failed to insert dupe_link %s: %v", link.URL, err)
+					log.Printf("[migrate] Failed to insert dupe_link %s: %v", link.URL, err)
 				} else {
 					totalDupeLinks++
 				}
 			}
 		}
 	}
-	log.Printf("Total dupe_links migrated: %d", totalDupeLinks)
+	log.Printf("[migrate] Total dupe_links migrated: %d", totalDupeLinks)
 
 	// Commit the transaction
 	if err = tx.Commit(); err != nil {
-		log.Fatal("Failed to commit transaction:", err)
+		log.Fatal("[migrate] Failed to commit transaction:", err)
 	}
 
 	// Verify the data was migrated
 	var messageCount, chatCount, userCount, dupeLinkCount int
 	err = sqliteDb.QueryRow("SELECT COUNT(*) FROM messages").Scan(&messageCount)
 	if err != nil {
-		log.Fatal("Failed to count messages:", err)
+		log.Fatal("[migrate] Failed to count messages:", err)
 	}
 
 	err = sqliteDb.QueryRow("SELECT COUNT(*) FROM chats").Scan(&chatCount)
 	if err != nil {
-		log.Fatal("Failed to count chats:", err)
+		log.Fatal("[migrate] Failed to count chats:", err)
 	}
 
 	err = sqliteDb.QueryRow("SELECT COUNT(*) FROM users").Scan(&userCount)
 	if err != nil {
-		log.Fatal("Failed to count users:", err)
+		log.Fatal("[migrate] Failed to count users:", err)
 	}
 
 	err = sqliteDb.QueryRow("SELECT COUNT(*) FROM dupe_links").Scan(&dupeLinkCount)
 	if err != nil {
-		log.Fatal("Failed to count dupe_links:", err)
+		log.Fatal("[migrate] Failed to count dupe_links:", err)
 	}
 
-	log.Printf("Migration completed successfully!")
-	log.Printf("Migrated %d messages, %d chats, %d users, and %d dupe_links", messageCount, chatCount, userCount, dupeLinkCount)
+	log.Printf("[migrate] Migration completed successfully!")
+	log.Printf("[migrate] Migrated %d messages, %d chats, %d users, and %d dupe_links", messageCount, chatCount, userCount, dupeLinkCount)
 }

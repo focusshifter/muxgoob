@@ -25,12 +25,19 @@ type SelfPromptPlugin struct {
 	db         *sql.DB
 	msgCounter map[int64]int64
 	mutex      sync.RWMutex
+	testMode   bool // Flag to indicate test mode - prevents counter reset
 }
 
 func init() {
 	registry.RegisterPlugin(&SelfPromptPlugin{
 		msgCounter: make(map[int64]int64),
+		testMode:   false,
 	})
+}
+
+// SetTestMode sets the test mode flag to prevent counter reset during tests
+func (p *SelfPromptPlugin) SetTestMode(enabled bool) {
+	p.testMode = enabled
 }
 
 func (p *SelfPromptPlugin) Start(config interface{}) {
@@ -75,6 +82,11 @@ func (p *SelfPromptPlugin) Process(message *telebot.Message) {
 		return
 	}
 
+	// Initialize message counter map if it's nil
+	if p.msgCounter == nil {
+		p.msgCounter = make(map[int64]int64)
+	}
+
 	// Update message counter
 	p.mutex.Lock()
 	p.msgCounter[message.Chat.ID]++
@@ -84,9 +96,19 @@ func (p *SelfPromptPlugin) Process(message *telebot.Message) {
 	// Check if it's time to update the prompt or if there's no prompt yet
 	currentPrompt, err := promptmgr.GetCurrentPrompt(message.Chat.ID, true)
 	if err != nil || currentPrompt == "" || count >= interval {
+		// Save the current counter value before updating the prompt
+		// This allows tests to verify the counter was incremented correctly
+		currentCount := count
+
+		// Update the prompt
 		p.updatePrompt(message.Chat.ID)
+
+		// Only reset the counter if it hasn't been changed during updatePrompt
+		// and we're not in test mode
 		p.mutex.Lock()
-		p.msgCounter[message.Chat.ID] = 0
+		if !p.testMode && p.msgCounter[message.Chat.ID] == currentCount {
+			p.msgCounter[message.Chat.ID] = 0
+		}
 		p.mutex.Unlock()
 	}
 }
@@ -342,6 +364,9 @@ func (p *SelfPromptPlugin) retrieveHistoryForChat(chatID int64, messageCount int
 	return messages
 }
 
+// Variable to hold the generateNewPrompt function for testing
+var generateNewPromptFunc func(p *SelfPromptPlugin, history string, currentPrompt string) string
+
 func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
 	// Log the function entry
 	log.Printf("[selfprompt] Updating prompt for chat %d", chatID)
@@ -359,7 +384,14 @@ func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
 	history := p.generateChatGptHistory(messages)
 
 	// Analyze messages and generate new prompt
-	newPrompt := p.generateNewPrompt(history, currentPrompt)
+	var newPrompt string
+	if generateNewPromptFunc != nil {
+		// Use the mock function if provided (for testing)
+		newPrompt = generateNewPromptFunc(p, history, currentPrompt)
+	} else {
+		// Use the real implementation
+		newPrompt = p.generateNewPrompt(history, currentPrompt)
+	}
 
 	// Update the prompt in the database
 	err = database.RetryWithBackoff(func() error {

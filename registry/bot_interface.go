@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"github.com/focusshifter/muxgoob/utils/testutils"
 	"github.com/tucnak/telebot"
 )
 
@@ -8,6 +9,7 @@ import (
 // This is primarily used for testing purposes
 type BotInterface interface {
 	Send(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
+	Reply(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
 }
 
 // Ensure BotWrapper implements BotInterface
@@ -17,6 +19,17 @@ var _ BotInterface = (*BotWrapper)(nil)
 func SetTestBot(testBot BotInterface) {
 	// Create a wrapper that delegates to the test bot
 	Bot = &BotWrapper{
-		SendFunc: testBot.Send,
+		SendFunc:  testBot.Send,
+		ReplyFunc: testBot.Reply,
+	}
+
+	// If the test bot is a MockBotWrapper, copy its Me field to the Bot
+	if mockBot, ok := testBot.(*testutils.MockBotWrapper); ok && mockBot.Me != nil {
+		// Create a telebot.Bot instance if it doesn't exist
+		if Bot.Bot == nil {
+			Bot.Bot = &telebot.Bot{}
+		}
+		// Set the Me field
+		Bot.Bot.Me = mockBot.Me
 	}
 }

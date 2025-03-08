@@ -167,10 +167,10 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 	}
 
 	// If we get here, it's an invalid command format
-	bot.Send(message.Chat, "Invalid command format. Use:\n" +
-		"!prompt current - Show current chat's prompt\n" +
-		"!prompt current <new_prompt> - Set current chat's prompt\n" +
-		"!prompt <chat_id> - Show another chat's prompt\n" +
+	bot.Send(message.Chat, "Invalid command format. Use:\n"+
+		"!prompt current - Show current chat's prompt\n"+
+		"!prompt current <new_prompt> - Set current chat's prompt\n"+
+		"!prompt <chat_id> - Show another chat's prompt\n"+
 		"!prompt <chat_id> <new_prompt> - Set another chat's prompt")
 }
 
@@ -204,7 +204,7 @@ func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.
 			return
 		}
 
-		bot.Send(message.Chat, fmt.Sprintf("%sCurrent global prompt (version %d):\n\n%s", 
+		bot.Send(message.Chat, fmt.Sprintf("%sCurrent global prompt (version %d):\n\n%s",
 			chatPrefix, version, prompt))
 		return
 	} else if err != nil {
@@ -212,7 +212,7 @@ func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.
 		return
 	}
 
-	bot.Send(message.Chat, fmt.Sprintf("%sCurrent chat prompt (version %d):\n\n%s", 
+	bot.Send(message.Chat, fmt.Sprintf("%sCurrent chat prompt (version %d):\n\n%s",
 		chatPrefix, version, prompt))
 }
 

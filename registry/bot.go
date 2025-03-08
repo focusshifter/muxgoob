@@ -13,7 +13,8 @@ import (
 // BotWrapper wraps telebot.Bot to add message saving functionality
 type BotWrapper struct {
 	*telebot.Bot
-	SendFunc func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
+	SendFunc  func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
+	ReplyFunc func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
 }
 
 // Send sends a message and saves it to the database
@@ -22,7 +23,7 @@ func (b *BotWrapper) Send(to telebot.Recipient, what interface{}, options ...int
 	if b.SendFunc != nil {
 		return b.SendFunc(to, what, options...)
 	}
-	
+
 	// Otherwise use the real bot
 	msg, err := b.Bot.Send(to, what, options...)
 	if err != nil {
@@ -94,6 +95,22 @@ func (b *BotWrapper) Send(to telebot.Recipient, what interface{}, options ...int
 }
 
 // Helper functions copied from main.go
+// Reply sends a reply to a message and saves it to the database
+func (b *BotWrapper) Reply(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error) {
+	// If we have a custom ReplyFunc (for testing), use it
+	if b.ReplyFunc != nil {
+		return b.ReplyFunc(message, what, options...)
+	}
+
+	// Otherwise use the real bot
+	if b.Bot != nil {
+		return b.Bot.Reply(message, what, options...)
+	}
+
+	// If no bot is available, return a dummy message
+	return &telebot.Message{}, nil
+}
+
 func getMessageID(msg *telebot.Message) interface{} {
 	if msg == nil {
 		return nil

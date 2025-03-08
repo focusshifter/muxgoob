@@ -19,6 +19,7 @@ type BirthdaysPlugin struct {
 }
 
 var rng *rand.Rand
+
 type birthdayConfig struct {
 	chatID    int64
 	birthdays map[string]time.Time

@@ -68,7 +68,7 @@ func Initialize() {
 	if err != nil {
 		log.Fatal("[database] Failed to open SQLite DB:", err)
 	}
-	
+
 	// Set connection pool settings
 	DB.SetMaxOpenConns(2) // Allow 2 connections for better concurrency with WAL mode
 	DB.SetMaxIdleConns(2)

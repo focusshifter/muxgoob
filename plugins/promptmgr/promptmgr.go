@@ -86,25 +86,13 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 
 	// Handle various command formats
 	if len(args) == 1 {
-		// Just !prompt - show current prompt for this chat
-		log.Printf("[promptmgr] Showing current prompt for chat: %d", message.Chat.ID)
+		// Just !prompt - redirect to !prompt current
+		log.Printf("[promptmgr] Redirecting to !prompt current for chat: %d", message.Chat.ID)
 		showCurrentPrompt(message.Chat.ID, bot, message)
 		return
 	}
 
-	// Handle !prompt show <chat_id> command - show prompt for any chat (owner only)
-	if args[1] == "show" && isOwnerPrivateChat && len(args) >= 3 {
-		log.Printf("[promptmgr] Processing show command for another chat")
-		chatID, err := strconv.ParseInt(args[2], 10, 64)
-		if err != nil {
-			bot.Send(message.Chat, fmt.Sprintf("Invalid chat ID: %s", args[2]))
-			return
-		}
-		log.Printf("[promptmgr] Showing prompt for chat: %d", chatID)
-		showCurrentPrompt(chatID, bot, message)
-		return
-	}
-
+	// Handle !prompt revert command
 	if args[1] == "revert" {
 		log.Printf("[promptmgr] Processing revert command")
 		if isOwnerPrivateChat && len(args) >= 3 {
@@ -138,26 +126,52 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 		return
 	}
 
-	// Owner wants to update another chat's prompt
-	if isOwnerPrivateChat && len(args) >= 3 {
-		chatID, err := strconv.ParseInt(args[1], 10, 64)
-		if err != nil {
-			// Not a chat ID, assume it's the start of the prompt
-			updatePrompt(message.Chat.ID, strings.TrimPrefix(message.Text, "!prompt "), bot, message)
-			return
+	// Handle !prompt current command
+	if args[1] == "current" {
+		if len(args) == 2 {
+			// Just !prompt current - show current prompt for this chat
+			log.Printf("[promptmgr] Showing current prompt for chat: %d", message.Chat.ID)
+			showCurrentPrompt(message.Chat.ID, bot, message)
+		} else {
+			// !prompt current <new_prompt> - update current chat's prompt
+			newPrompt := strings.TrimPrefix(message.Text, "!prompt current ")
+			log.Printf("[promptmgr] Updating prompt for current chat %d: %q", message.Chat.ID, newPrompt)
+			updatePrompt(message.Chat.ID, newPrompt, bot, message)
 		}
-
-		// Format: !prompt <chat_id> <new_prompt>
-		newPrompt := strings.TrimPrefix(message.Text, fmt.Sprintf("!prompt %s ", args[1]))
-		updatePrompt(chatID, newPrompt, bot, message)
 		return
 	}
 
-	// Regular prompt update for current chat
-	// Format: !prompt <new_prompt>
-	newPrompt := strings.TrimPrefix(message.Text, "!prompt ")
-	log.Printf("[promptmgr] Updating prompt for current chat %d: %q", message.Chat.ID, newPrompt)
-	updatePrompt(message.Chat.ID, newPrompt, bot, message)
+	// Handle !prompt <chat_id> command
+	if isOwnerPrivateChat && len(args) >= 2 {
+		chatID, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			// Not a chat ID, assume it's the start of the prompt for current chat
+			newPrompt := strings.TrimPrefix(message.Text, "!prompt ")
+			log.Printf("[promptmgr] Updating prompt for current chat %d: %q", message.Chat.ID, newPrompt)
+			updatePrompt(message.Chat.ID, newPrompt, bot, message)
+			return
+		}
+
+		// Valid chat ID
+		if len(args) == 2 {
+			// Just !prompt <chat_id> - show current prompt for that chat
+			log.Printf("[promptmgr] Showing prompt for chat: %d", chatID)
+			showCurrentPrompt(chatID, bot, message)
+		} else {
+			// !prompt <chat_id> <new_prompt> - update that chat's prompt
+			newPrompt := strings.TrimPrefix(message.Text, fmt.Sprintf("!prompt %s ", args[1]))
+			log.Printf("[promptmgr] Updating prompt for chat %d: %q", chatID, newPrompt)
+			updatePrompt(chatID, newPrompt, bot, message)
+		}
+		return
+	}
+
+	// If we get here, it's an invalid command format
+	bot.Send(message.Chat, "Invalid command format. Use:\n" +
+		"!prompt current - Show current chat's prompt\n" +
+		"!prompt current <new_prompt> - Set current chat's prompt\n" +
+		"!prompt <chat_id> - Show another chat's prompt\n" +
+		"!prompt <chat_id> <new_prompt> - Set another chat's prompt")
 }
 
 func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.Message) {
@@ -169,6 +183,12 @@ func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.
 		WHERE chat_id = ? 
 		ORDER BY version DESC LIMIT 1`, chatID).Scan(&prompt, &version)
 
+	// Create a prefix for the message to indicate which chat we're showing
+	chatPrefix := ""
+	if chatID != message.Chat.ID {
+		chatPrefix = fmt.Sprintf("Chat ID %d: ", chatID)
+	}
+
 	if err == sql.ErrNoRows {
 		// If no chat-specific prompt, check for global prompt
 		err = database.DB.QueryRow(`
@@ -177,21 +197,23 @@ func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.
 			ORDER BY version DESC LIMIT 1`, GLOBAL_CHAT_ID).Scan(&prompt, &version)
 
 		if err == sql.ErrNoRows {
-			bot.Send(message.Chat, "No prompt is set for this chat.")
+			bot.Send(message.Chat, fmt.Sprintf("%sNo prompt is set for this chat.", chatPrefix))
 			return
 		} else if err != nil {
-			bot.Send(message.Chat, "Error retrieving prompt: "+err.Error())
+			bot.Send(message.Chat, fmt.Sprintf("%sError retrieving prompt: %s", chatPrefix, err.Error()))
 			return
 		}
 
-		bot.Send(message.Chat, fmt.Sprintf("Current global prompt (version %d):\n\n%s", version, prompt))
+		bot.Send(message.Chat, fmt.Sprintf("%sCurrent global prompt (version %d):\n\n%s", 
+			chatPrefix, version, prompt))
 		return
 	} else if err != nil {
-		bot.Send(message.Chat, "Error retrieving prompt: "+err.Error())
+		bot.Send(message.Chat, fmt.Sprintf("%sError retrieving prompt: %s", chatPrefix, err.Error()))
 		return
 	}
 
-	bot.Send(message.Chat, fmt.Sprintf("Current chat prompt (version %d):\n\n%s", version, prompt))
+	bot.Send(message.Chat, fmt.Sprintf("%sCurrent chat prompt (version %d):\n\n%s", 
+		chatPrefix, version, prompt))
 }
 
 func listPromptVersions(chatID int64, bot *registry.BotWrapper, message *telebot.Message) {

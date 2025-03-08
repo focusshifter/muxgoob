@@ -36,6 +36,9 @@ func main() {
 	database.Initialize()
 	defer database.DB.Close()
 
+	// Initialize database settings in registry
+	registry.InitializeDbSettings()
+
 	// Initialize StormDB for legacy support
 	stormDb, err := storm.Open("db/muxgoob.db")
 	if err != nil {

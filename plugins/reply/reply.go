@@ -109,11 +109,6 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		if message.ReplyTo.Sender != nil {
 			log.Printf("[reply] ReplyTo.Sender is not nil, username: %s", message.ReplyTo.Sender.Username)
 			// Safety check for bot
-			if bot == nil {
-				log.Printf("[reply] Bot is nil")
-				return
-			}
-
 			if bot.Me == nil {
 				log.Printf("[reply] Bot.Me is nil")
 				return
@@ -281,10 +276,20 @@ var askChatGpt = func(message *telebot.Message) string {
 	var config openai.ClientConfig
 	var model string
 
-	if registry.Config.AiProvider == "openrouter" {
+	// Get chat ID for chat-specific settings
+	var chatID *int64
+	if message.Chat != nil {
+		chatID = &message.Chat.ID
+	}
+
+	// Get AI provider from database with fallback to config.yml
+	aiProvider := registry.GetAiProvider(chatID)
+
+	if aiProvider == "openrouter" {
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		model = registry.Config.AiModel
+		// Get AI model from database with fallback to config.yml
+		model = registry.GetAiModel(chatID)
 	} else {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"

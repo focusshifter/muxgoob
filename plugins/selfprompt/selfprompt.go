@@ -284,6 +284,38 @@ func (p *SelfPromptPlugin) getChatSettings(chatID int64) (enabled bool, interval
 }
 
 func (p *SelfPromptPlugin) setPluginSetting(chatID *int64, key string, value string) error {
+	// Handle global settings (NULL chat_id) specially
+	if chatID == nil {
+		// First check if a global setting already exists
+		var count int
+		err := p.db.QueryRow(`
+			SELECT COUNT(*) FROM plugin_settings
+			WHERE chat_id IS NULL AND plugin_name = 'selfprompt' AND key = ?`,
+			key).Scan(&count)
+		
+		if err != nil {
+			log.Printf("[selfprompt] Error checking for existing global setting %s: %v", key, err)
+			return err
+		}
+		
+		// If it exists, update it
+		if count > 0 {
+			_, err = p.db.Exec(`
+				UPDATE plugin_settings SET value = ?
+				WHERE chat_id IS NULL AND plugin_name = 'selfprompt' AND key = ?`,
+				value, key)
+		} else {
+			// Otherwise insert a new row
+			_, err = p.db.Exec(`
+				INSERT INTO plugin_settings (chat_id, plugin_name, key, value)
+				VALUES (NULL, 'selfprompt', ?, ?)`,
+				key, value)
+		}
+		
+		return err
+	}
+	
+	// For chat-specific settings, we can use the UNIQUE constraint
 	_, err := p.db.Exec(`
 		INSERT INTO plugin_settings (chat_id, plugin_name, key, value)
 		VALUES (?, 'selfprompt', ?, ?)
@@ -447,10 +479,15 @@ func (p *SelfPromptPlugin) generateNewPrompt(history string, currentPrompt strin
 	var config openai.ClientConfig
 	var model string
 
-	if registry.Config.AiProvider == "openrouter" {
+	// Get AI provider from database with fallback to config.yml
+	// Using nil for chatID to get the global setting
+	aiProvider := registry.GetAiProvider(nil)
+
+	if aiProvider == "openrouter" {
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		model = registry.Config.AiModel
+		// Get AI model from database with fallback to config.yml
+		model = registry.GetAiModel(nil)
 	} else {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"

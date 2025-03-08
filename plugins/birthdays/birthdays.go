@@ -1,6 +1,7 @@
 package birthdays
 
 import (
+	"database/sql"
 	"log"
 	"math/rand"
 	"regexp"
@@ -25,12 +26,15 @@ type birthdayConfig struct {
 
 var birthdayConfigs []birthdayConfig
 
+// Add a variable to allow mocking time.Now() in tests
+var timeNow = time.Now
+
 func init() {
 	registry.RegisterPlugin(&BirthdaysPlugin{})
 }
 
 func (p *BirthdaysPlugin) Start(interface{}) {
-	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng = rand.New(rand.NewSource(timeNow().UnixNano()))
 
 	birthdayConfigs = make([]birthdayConfig, 0)
 
@@ -58,7 +62,7 @@ func checkTodaysBirthdays(message *telebot.Message) {
 	bot := registry.Bot
 	loc := registry.Config.TimeLoc
 
-	cur := time.Now().In(loc)
+	cur := timeNow().In(loc)
 
 	for _, config := range birthdayConfigs {
 		if config.chatID != message.Chat.ID {
@@ -81,7 +85,7 @@ func handleBirthdayCommand(message *telebot.Message) {
 
 	switch {
 	case birthdayExp.MatchString(message.Text):
-		cur := time.Now().In(loc)
+		cur := timeNow().In(loc)
 		curDay := cur.YearDay()
 
 		diff := time.Date(cur.Year(), time.December, 31, 0, 0, 0, 0, time.Local).YearDay()
@@ -123,23 +127,25 @@ func notMentioned(username string, year int, message *telebot.Message) bool {
 		username, year).Scan(&exists)
 
 	if err != nil {
-		log.Printf("[birthdays] Error checking birthday notifications: %v", err)
-		return false
+		if err == sql.ErrNoRows {
+			// No record found, which means we haven't mentioned this user yet
+			log.Printf("[birthdays] Notify %s", username)
+
+			_, err = database.DB.Exec(
+				"INSERT INTO birthday_notifications (username, year) VALUES (?, ?)",
+				username, year)
+			if err != nil {
+				log.Printf("[birthdays] Error saving birthday notification: %v", err)
+				return false
+			}
+
+			return true
+		} else {
+			log.Printf("[birthdays] Error checking birthday notifications: %v", err)
+			return false
+		}
 	}
 
-	if exists {
-		return false
-	}
-
-	log.Printf("[birthdays] Notify %s", username)
-
-	_, err = database.DB.Exec(
-		"INSERT INTO birthday_notifications (username, year) VALUES (?, ?)",
-		username, year)
-	if err != nil {
-		log.Printf("[birthdays] Error saving birthday notification: %v", err)
-		return false
-	}
-
-	return true
+	// Record found, which means we've already mentioned this user
+	return false
 }

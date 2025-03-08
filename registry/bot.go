@@ -13,10 +13,17 @@ import (
 // BotWrapper wraps telebot.Bot to add message saving functionality
 type BotWrapper struct {
 	*telebot.Bot
+	SendFunc func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
 }
 
 // Send sends a message and saves it to the database
 func (b *BotWrapper) Send(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error) {
+	// If we have a custom SendFunc (for testing), use it
+	if b.SendFunc != nil {
+		return b.SendFunc(to, what, options...)
+	}
+	
+	// Otherwise use the real bot
 	msg, err := b.Bot.Send(to, what, options...)
 	if err != nil {
 		return msg, err

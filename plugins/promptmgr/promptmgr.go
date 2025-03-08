@@ -69,18 +69,39 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 		return
 	}
 
-	// Private chat with owner can manage any chat's prompt
-	isOwnerPrivateChat := message.Chat.Type == telebot.ChatPrivate &&
-		message.Sender.Username == registry.Config.OwnerUsername
+	// Check if the user is the owner
+	isOwner := message.Sender.Username == registry.Config.OwnerUsername
 
-	log.Printf("[promptmgr] Is owner private chat: %v (chat type: %v, sender: %q, owner: %q)",
-		isOwnerPrivateChat, message.Chat.Type, message.Sender.Username, registry.Config.OwnerUsername)
+	// Private chat with owner can manage any chat's prompt
+	isOwnerPrivateChat := message.Chat.Type == telebot.ChatPrivate && isOwner
+
+	log.Printf("[promptmgr] Is owner: %v, Is owner private chat: %v (chat type: %v, sender: %q, owner: %q)",
+		isOwner, isOwnerPrivateChat, message.Chat.Type, message.Sender.Username, registry.Config.OwnerUsername)
+
+	// All other commands are restricted to owners only
+	if !isOwner {
+		bot.Send(message.Chat, "Sorry, only the bot owner can control prompts.")
+		return
+	}
 
 	// Handle various command formats
 	if len(args) == 1 {
 		// Just !prompt - show current prompt for this chat
 		log.Printf("[promptmgr] Showing current prompt for chat: %d", message.Chat.ID)
 		showCurrentPrompt(message.Chat.ID, bot, message)
+		return
+	}
+
+	// Handle !prompt show <chat_id> command - show prompt for any chat (owner only)
+	if args[1] == "show" && isOwnerPrivateChat && len(args) >= 3 {
+		log.Printf("[promptmgr] Processing show command for another chat")
+		chatID, err := strconv.ParseInt(args[2], 10, 64)
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Invalid chat ID: %s", args[2]))
+			return
+		}
+		log.Printf("[promptmgr] Showing prompt for chat: %d", chatID)
+		showCurrentPrompt(chatID, bot, message)
 		return
 	}
 
@@ -200,7 +221,7 @@ func listPromptVersions(chatID int64, bot *registry.BotWrapper, message *telebot
 		}
 
 		createdTime := time.Unix(createdAt, 0).Format(time.RFC1123)
-		versions = append(versions, fmt.Sprintf("Version %d%s - %s\n%s",
+		versions = append(versions, fmt.Sprintf("Version %d - %s\n%s",
 			version, createdTime, promptPreview))
 	}
 

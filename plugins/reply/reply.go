@@ -117,6 +117,8 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			log.Printf("[reply] Bot.Me is not nil, username: %s", bot.Me.Username)
 			if message.ReplyTo.Sender.Username == bot.Me.Username {
 				// Use the injected chat client
+				log.Printf("[reply] Username matches, sending typing notification")
+				bot.Notify(message.Chat, telebot.Typing)
 				log.Printf("[reply] Username matches, calling chat client")
 				replyText := p.chatClient.Ask(message)
 				log.Printf("[reply] Chat client returned: %s", replyText)
@@ -151,6 +153,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
 	case questionExp.MatchString(message.Text):
+		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
 		if replyText == "" {
@@ -167,6 +170,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 	case commandExp.MatchString(message.Text):
+		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
 		if replyText != "" {
@@ -192,6 +196,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 	default:
 		if p.random.Intn(100) == 0 && len(message.Text) > 150 {
+			bot.Notify(message.Chat, telebot.Typing)
 			replyText := p.chatClient.Ask(message)
 
 			if replyText != "" {

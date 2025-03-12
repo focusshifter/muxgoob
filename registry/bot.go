@@ -13,8 +13,9 @@ import (
 // BotWrapper wraps telebot.Bot to add message saving functionality
 type BotWrapper struct {
 	*telebot.Bot
-	SendFunc  func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
-	ReplyFunc func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
+	SendFunc   func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
+	ReplyFunc  func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
+	NotifyFunc func(to telebot.Recipient, action telebot.ChatAction) error
 }
 
 // Send sends a message and saves it to the database
@@ -130,4 +131,20 @@ func getChatID(chat *telebot.Chat) interface{} {
 		return nil
 	}
 	return chat.ID
+}
+
+// Notify sends a chat action notification
+func (b *BotWrapper) Notify(to telebot.Recipient, action telebot.ChatAction) error {
+	// If we have a custom NotifyFunc (for testing), use it
+	if b.NotifyFunc != nil {
+		return b.NotifyFunc(to, action)
+	}
+
+	// Otherwise use the real bot
+	if b.Bot != nil {
+		return b.Bot.Notify(to, action)
+	}
+
+	// If no bot is available, return nil
+	return nil
 }

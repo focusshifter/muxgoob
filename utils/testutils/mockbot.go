@@ -12,6 +12,10 @@ type MockBotWrapper struct {
 	SendOpts   []interface{}
 	ReplyFunc  func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
 	SendFunc   func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
+	// Track notification calls
+	NotifyCalled bool
+	NotifyTo     telebot.Recipient
+	NotifyAction telebot.ChatAction
 	// Me represents the bot's own user information
 	Me *telebot.User
 }
@@ -37,4 +41,12 @@ func (m *MockBotWrapper) Reply(message *telebot.Message, what interface{}, optio
 	}
 	// Default implementation if no ReplyFunc is provided
 	return &telebot.Message{}, nil
+}
+
+// Notify implements the Notify method for the mock bot
+func (m *MockBotWrapper) Notify(to telebot.Recipient, action telebot.ChatAction) error {
+	m.NotifyCalled = true
+	m.NotifyTo = to
+	m.NotifyAction = action
+	return nil
 }

@@ -287,11 +287,29 @@ func TestReplyPlugin_Process(t *testing.T) {
 			// Reset mock bot state
 			mockBot.SendCalled = false
 			mockBot.SendWhat = nil
+			mockBot.NotifyCalled = false
+			mockBot.NotifyTo = nil
+			mockBot.NotifyAction = ""
 
 			// Process the message
 			plugin.Process(tc.message)
 
-			// Verify expectations
+			// Check typing notification - should be sent for ChatGPT responses only
+			shouldType := tc.message.ReplyTo != nil && tc.message.ReplyTo.Sender != nil && tc.message.ReplyTo.Sender.Username == "test_bot" || // Reply to bot
+				tc.name == "Command with 'gooby,'" || // Direct command
+				tc.name == "Question with 'gooby' - Yes response" || tc.name == "Question with 'gooby' - No response" // Questions
+
+			// Verify typing notification
+			if shouldType && !mockBot.NotifyCalled {
+				t.Error("Expected typing notification, but none was sent")
+			} else if !shouldType && mockBot.NotifyCalled {
+				t.Error("Did not expect typing notification, but one was sent")
+			}
+			if shouldType && mockBot.NotifyAction != telebot.Typing {
+				t.Errorf("Expected typing action, got %v", mockBot.NotifyAction)
+			}
+
+			// Verify message sending
 			if tc.expectedCalls {
 				if !mockBot.SendCalled {
 					t.Error("Expected Send to be called, but it wasn't")

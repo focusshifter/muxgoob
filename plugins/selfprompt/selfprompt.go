@@ -292,12 +292,12 @@ func (p *SelfPromptPlugin) setPluginSetting(chatID *int64, key string, value str
 			SELECT COUNT(*) FROM plugin_settings
 			WHERE chat_id IS NULL AND plugin_name = 'selfprompt' AND key = ?`,
 			key).Scan(&count)
-		
+
 		if err != nil {
 			log.Printf("[selfprompt] Error checking for existing global setting %s: %v", key, err)
 			return err
 		}
-		
+
 		// If it exists, update it
 		if count > 0 {
 			_, err = p.db.Exec(`
@@ -311,10 +311,10 @@ func (p *SelfPromptPlugin) setPluginSetting(chatID *int64, key string, value str
 				VALUES (NULL, 'selfprompt', ?, ?)`,
 				key, value)
 		}
-		
+
 		return err
 	}
-	
+
 	// For chat-specific settings, we can use the UNIQUE constraint
 	_, err := p.db.Exec(`
 		INSERT INTO plugin_settings (chat_id, plugin_name, key, value)
@@ -495,22 +495,29 @@ func (p *SelfPromptPlugin) generateNewPrompt(history string, currentPrompt strin
 
 	client := openai.NewClientWithConfig(config)
 
-	// Prepare system message
-	systemMsg := `You are a prompt engineer. Analyze the chat history and current prompt to create a new system prompt for a chat bot.
-	The new prompt should:
-	1. Identify key discussion topics
-	2. For EVERY MEMBER OF THE CHAT try to:
-		- Identify user relationships, user personality traits, interests and preferences
-		- Write it down with a header "[USERNAME]: " before each line
-	3. Preserve any important personality traits or instructions from the current prompt
-	4. Be concise but informative
+	systemMsg := `You are a prompt engineer tasked with creating a system prompt for a chat bot.`
+	userMsg := `
+	You are a prompt engineer tasked with creating and refining a system prompt for a chat bot. Analyze the provided chat history and refine the current system prompt to produce a concise, informative new prompt that:  
+1. Identifies key discussion topics from the chat history.  
+2. For every chat member:  
+   - Assesses user relationships, personality traits, interests, and preferences.  
+   - Lists findings under a header "[USERNAME]: ".  
+3. Preserves and refines critical personality traits or instructions from the current prompt, such as analytical precision and prompt engineering focus.  
+4. Ensures clarity and brevity.  
+5. Preferrably written in the main language of the chat, such as English or Russian.
 
-	Output only the new prompt text, no explanations. Start with a system prompt, then proceed with list of discussion topics.
-	End with a list of usernames and their traits.`
+Output only the new prompt text, starting with the system prompt, followed by discussion topics, and concluding with usernames and their traits.
 
-	// Prepare user message with chat history and current prompt
-	userMsg := fmt.Sprintf("Chat history:\n%s\n\nCurrent prompt:\n%s",
-		history, currentPrompt)
+**Discussion Topics:**  
+- [List key topics from chat history, e.g., "Programming languages", "Speed and performance"]  
+
+**[USERNAME]:**  
+- [Traits, relationships, interests, e.g., "Analytical, debates USER456, prefers Go"]  
+**[USERNAME]:**  
+- [Traits, relationships, interests, e.g., "Practical, counters USER123, likes Python"]\n\n`
+
+	userMsg += `**Current Prompt to Refine:** ` + currentPrompt + `\n\n`
+	userMsg += `**Chat History:**\n` + history
 
 	// Call GPT
 	resp, err := client.CreateChatCompletion(

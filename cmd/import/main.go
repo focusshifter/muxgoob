@@ -237,7 +237,7 @@ func main() {
 			continue
 		}
 
-		// Try to parse as a map with a "messages" key
+		// Try to parse as a map with a "messages" key (standard Telegram format)
 		var messageMap map[string][]TelegramMessage
 		err = json.Unmarshal(data, &messageMap)
 		if err == nil {
@@ -252,6 +252,81 @@ func main() {
 				}
 				continue
 			}
+		}
+		
+		// Try to parse as Telegram Desktop export format using a more flexible approach
+		// Use map[string]interface{} to handle varying field types
+		var exportData struct {
+			Name     string                   `json:"name"`
+			Type     string                   `json:"type"`
+			ID       int64                    `json:"id"`
+			Messages []map[string]interface{} `json:"messages"`
+		}
+		
+		err = json.Unmarshal(data, &exportData)
+		if err != nil {
+			// Print the error to help with debugging
+			fmt.Printf("Error parsing Telegram Desktop export format: %v\n", err)
+		} else if len(exportData.Messages) > 0 {
+			fmt.Printf("Found %d messages in Telegram Desktop export format\n", len(exportData.Messages))
+			
+			for i, exportMsg := range exportData.Messages {
+				// Skip non-message types
+				if msgType, ok := exportMsg["type"].(string); ok && msgType != "message" {
+					continue
+				}
+				
+				// Extract message ID
+				msgID := 0
+				if id, ok := exportMsg["id"].(float64); ok {
+					msgID = int(id)
+				}
+				
+				// Extract date
+				date := 0
+				if dateUnixtime, ok := exportMsg["date_unixtime"].(string); ok {
+					date = parseUnixtime(dateUnixtime)
+				}
+				
+				// Extract text
+				text := ""
+				if msgText, ok := exportMsg["text"].(string); ok {
+					text = msgText
+				}
+				
+				// Create message
+				msg := TelegramMessage{
+					MessageID: msgID,
+					Date:      date,
+					Text:      text,
+					Chat: TelegramChat{
+						ID:    exportData.ID,
+						Type:  exportData.Type,
+						Title: exportData.Name,
+					},
+				}
+				
+				// Create a basic user from the from_id field
+				if fromID, ok := exportMsg["from_id"].(string); ok && fromID != "" {
+					userID := parseUserID(fromID)
+					fromName := ""
+					if name, ok := exportMsg["from"].(string); ok {
+						fromName = name
+					}
+					msg.From = &TelegramUser{
+						ID:        userID,
+						FirstName: fromName,
+					}
+				}
+				
+				if dryRun {
+					fmt.Printf("Would import message %d/%d: ID %d from %s\n", 
+						i+1, len(exportData.Messages), msg.MessageID, exportMsg["from"])
+				} else {
+					importMessage(db, &msg)
+				}
+			}
+			continue
 		}
 
 		log.Printf("Could not parse file %s as Telegram messages", file)
@@ -787,4 +862,38 @@ func chatDataJSON(chat TelegramChat) string {
 		return ""
 	}
 	return string(data)
+}
+
+// parseUnixtime converts a string unixtime to an integer
+func parseUnixtime(unixtimeStr string) int {
+	unixtime := 0
+	if unixtimeStr != "" {
+		_, err := fmt.Sscanf(unixtimeStr, "%d", &unixtime)
+		if err != nil {
+			log.Printf("Error parsing unixtime %s: %v", unixtimeStr, err)
+		}
+	}
+	return unixtime
+}
+
+// parseUserID extracts the numeric user ID from a string like "user123456789"
+func parseUserID(userIDStr string) int64 {
+	var userID int64
+	
+	// Remove any non-digit prefix (like "user")
+	idStr := ""
+	for _, c := range userIDStr {
+		if c >= '0' && c <= '9' {
+			idStr += string(c)
+		}
+	}
+	
+	if idStr != "" {
+		_, err := fmt.Sscanf(idStr, "%d", &userID)
+		if err != nil {
+			log.Printf("Error parsing user ID %s: %v", userIDStr, err)
+		}
+	}
+	
+	return userID
 }

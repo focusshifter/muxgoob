@@ -501,10 +501,12 @@ func (p *SelfPromptPlugin) generateNewPrompt(history string, currentPrompt strin
 1. Identifies key discussion topics from the chat history.  
 2. For every chat member:  
    - Assesses user relationships, personality traits, interests, and preferences.  
-   - Lists findings under a header "[USERNAME]: ".  
+   - Lists findings under a header "[USERNAME]: ".
 3. Preserves and refines critical personality traits or instructions from the current prompt, such as analytical precision and prompt engineering focus.  
 4. Ensures clarity and brevity.  
 5. Preferrably written in the main language of the chat, such as English or Russian.
+
+Do not skip ANY chat member. Do not remove ANY existing chat members from the result even of they are inactive.
 
 Output only the new prompt text, starting with the system prompt, followed by discussion topics, and concluding with usernames and their traits.
 

@@ -62,6 +62,8 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 	// Handle specific test cases
 	if message.Text == "gooby, give me a mock response" {
 		return "This is a mock ChatGPT response"
+	} else if message.Text == "gooby,\n\ngive me a mock response" {
+		return "This is a mock ChatGPT response"
 	} else if message.Text == "gooby, are you sure?" {
 		return "Да"
 	} else if message.Text == "gooby, is this true?" {
@@ -161,6 +163,21 @@ func TestReplyPlugin_Process(t *testing.T) {
 			name: "Command with 'gooby,'",
 			message: &telebot.Message{
 				Text: "gooby, give me a mock response",
+				Sender: &telebot.User{
+					Username: "test_user",
+				},
+				Chat: &telebot.Chat{
+					ID: 123,
+				},
+			},
+			expectedCalls: true,
+			expectedReply: "This is a mock ChatGPT response",
+			rngValue:      0,
+		},
+		{
+			name: "Command with 'gooby,' and line break",
+			message: &telebot.Message{
+				Text: "gooby,\n\ngive me a mock response",
 				Sender: &telebot.User{
 					Username: "test_user",
 				},
@@ -297,6 +314,7 @@ func TestReplyPlugin_Process(t *testing.T) {
 			// Check typing notification - should be sent for ChatGPT responses only
 			shouldType := tc.message.ReplyTo != nil && tc.message.ReplyTo.Sender != nil && tc.message.ReplyTo.Sender.Username == "test_bot" || // Reply to bot
 				tc.name == "Command with 'gooby,'" || // Direct command
+				tc.name == "Command with 'gooby,' and line break" || // Command with line break
 				tc.name == "Question with 'gooby' - Yes response" || tc.name == "Question with 'gooby' - No response" // Questions
 
 			// Verify typing notification

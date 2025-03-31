@@ -292,9 +292,9 @@ func generateNewPrompt(history string, currentPrompt string) string {
    - Lists findings under a header "[USERNAME]: ".  
 3. Preserves and refines critical personality traits or instructions from the current prompt, such as analytical precision and prompt engineering focus.  
 4. Ensures clarity and brevity.  
-5. Preferrably written in the main language of the chat, such as English or Russian.
 
 Output only the new prompt text, starting with the system prompt, followed by discussion topics, and concluding with usernames and their traits.
+Use the main language of the chat, such as English or Russian.
 
 **Discussion Topics:**  
 - [List key topics from chat history, e.g., "Programming languages", "Speed and performance"]  

@@ -140,8 +140,8 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 	// Use simplified patterns in test mode for predictable behavior
 	techExp = regexp.MustCompile(`(?i)^\!ттх$`)
-	questionExp = regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*\?$`)
-	commandExp = regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),.*$`)
+	questionExp = regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н)[\s\S]*\?$`)
+	commandExp = regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),\s*([\s\S]*)$`)
 	dotkaExp = regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
 	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)

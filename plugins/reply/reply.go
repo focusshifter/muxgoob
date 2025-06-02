@@ -136,25 +136,23 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 				return
 			}
 
-			// Get the message to send (if any)
-			var msgToSend string
+			// Get the message to use for the reply
+			var targetMessage *telebot.Message
 			if len(matches) > 2 && matches[2] != "" {
-				msgToSend = matches[2]
+				// If message is provided, create a new message with it
+				targetMessage = &telebot.Message{
+					Chat: &telebot.Chat{ID: chatID},
+					Text: matches[2],
+				}
 			} else {
-				// If no message provided, use the last message from the target chat as context
+				// If no message provided, use the last message from the target chat
 				history := retrieveHistoryForChat(chatID, 1)
 				if len(history) > 0 {
-					msgToSend = history[0].Text
+					targetMessage = &history[0]
 				} else {
-					bot.Send(message.Chat, "No recent messages found in the target chat.", nil)
+					bot.Send(message.Chat, "No recent messages found in the target chat.")
 					return
 				}
-			}
-
-			// Create a new message with the target chat ID and the message to send
-			targetMessage := &telebot.Message{
-				Chat: &telebot.Chat{ID: chatID},
-				Text: msgToSend,
 			}
 
 			// Generate a reply using the chat client
@@ -165,7 +163,12 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			}
 
 			// Send the reply to the target chat
-			_, err = bot.Send(&telebot.Chat{ID: chatID}, replyText)
+			var sendOpts *telebot.SendOptions
+			if targetMessage.ID != 0 {
+				sendOpts = &telebot.SendOptions{ReplyTo: targetMessage}
+			}
+
+			_, err = bot.Send(&telebot.Chat{ID: chatID}, replyText, sendOpts)
 			if err != nil {
 				log.Printf("[reply] Error sending message to chat %d: %v", chatID, err)
 				bot.Send(message.Chat, fmt.Sprintf("Error sending message to chat %d: %v", chatID, err))

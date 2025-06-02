@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"regexp"
 	"sort"
+	"strconv"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -58,9 +59,25 @@ type ReplyPlugin struct {
 	chatClient ChatGptClient
 }
 
-var sqliteDb *sql.DB
+var (
+	sqliteDb    *sql.DB
+	techExp     *regexp.Regexp
+	questionExp *regexp.Regexp
+	commandExp  *regexp.Regexp
+	dotkaExp    *regexp.Regexp
+	majorExp    *regexp.Regexp
+	replyCmdExp *regexp.Regexp
+)
 
 func init() {
+	// Initialize all regexp patterns
+	techExp = regexp.MustCompile(`(?i)^\!ттх$`)
+	questionExp = regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н)[\s\S]*\?$`)
+	commandExp = regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),\s*([\s\S]*)$`)
+	dotkaExp = regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
+	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
+	replyCmdExp = regexp.MustCompile(`^!reply\s+(-?\d+)(?:\s+(.+))?$`)
+
 	// Register with default implementations for production
 	plugin := &ReplyPlugin{
 		random:     NewRealRandomGenerator(),
@@ -103,6 +120,64 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		return
 	}
 
+	// Check for !reply command
+	if message.Text != "" {
+		if matches := replyCmdExp.FindStringSubmatch(message.Text); matches != nil {
+			// Only process private messages from the owner
+			if message.Chat.Type != telebot.ChatPrivate ||
+				message.Sender.Username != registry.Config.OwnerUsername {
+				log.Printf("[reply] !reply command received from non-owner: %s", message.Sender.Username)
+				return
+			}
+
+			chatID, err := strconv.ParseInt(matches[1], 10, 64)
+			if err != nil {
+				log.Printf("[reply] Invalid chat ID in !reply command: %v", err)
+				return
+			}
+
+			// Get the message to send (if any)
+			var msgToSend string
+			if len(matches) > 2 && matches[2] != "" {
+				msgToSend = matches[2]
+			} else {
+				// If no message provided, use the last message from the target chat as context
+				history := retrieveHistoryForChat(chatID, 1)
+				if len(history) > 0 {
+					msgToSend = history[0].Text
+				} else {
+					bot.Send(message.Chat, "No recent messages found in the target chat.", nil)
+					return
+				}
+			}
+
+			// Create a new message with the target chat ID and the message to send
+			targetMessage := &telebot.Message{
+				Chat: &telebot.Chat{ID: chatID},
+				Text: msgToSend,
+			}
+
+			// Generate a reply using the chat client
+			replyText := p.chatClient.Ask(targetMessage)
+			if replyText == "" {
+				log.Printf("[reply] No reply generated for chat %d", chatID)
+				return
+			}
+
+			// Send the reply to the target chat
+			_, err = bot.Send(&telebot.Chat{ID: chatID}, replyText)
+			if err != nil {
+				log.Printf("[reply] Error sending message to chat %d: %v", chatID, err)
+				bot.Send(message.Chat, fmt.Sprintf("Error sending message to chat %d: %v", chatID, err))
+				return
+			}
+
+			// Send a confirmation to the original chat
+			bot.Send(message.Chat, fmt.Sprintf("Message sent to chat %d", chatID))
+			return
+		}
+	}
+
 	// Check if this is a reply to bot's message
 	if message.ReplyTo != nil {
 		log.Printf("[reply] ReplyTo is not nil")
@@ -124,7 +199,8 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 				log.Printf("[reply] Chat client returned: %s", replyText)
 				if replyText != "" {
 					log.Printf("[reply] Sending reply")
-					bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+					bot.Send(message.Chat, replyText, &telebot.SendOptions{
+						ReplyTo: message})
 				}
 				return
 			} else {
@@ -135,16 +211,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		}
 	}
 
-	// Define regex patterns based on test mode
-	var techExp, questionExp, commandExp, dotkaExp, majorExp *regexp.Regexp
-
-	// Use simplified patterns in test mode for predictable behavior
-	techExp = regexp.MustCompile(`(?i)^\!ттх$`)
-	questionExp = regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н)[\s\S]*\?$`)
-	commandExp = regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),\s*([\s\S]*)$`)
-	dotkaExp = regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
-	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
-	// highlightedExp := regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н).*$`)
+	// Regex patterns are now initialized in the init() function
 
 	switch {
 	case techExp.MatchString(message.Text):
@@ -167,14 +234,14 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			}
 		}
 
-		bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+		bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown})
 
 	case commandExp.MatchString(message.Text):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
 		if replyText != "" {
-			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown})
 		}
 
 	case dotkaExp.MatchString(message.Text):
@@ -200,7 +267,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			replyText := p.chatClient.Ask(message)
 
 			if replyText != "" {
-				bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+				bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown})
 			}
 		}
 	}

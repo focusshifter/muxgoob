@@ -177,55 +177,46 @@ func generateSpotifyPreview(albumArt []byte, albumName, artistName, year string)
 	dc.DrawImage(resized, int(albumX), int(albumY))
 	dc.Pop()
 
+	// Reset drawing state after pop
+	dc.ResetClip()
+
 	textY := albumY + albumArtSize + 60
 
-	dc.SetColor(color.White)
-
-	// Load the embedded Fira Sans font
-	font, err := truetype.Parse(firaFontData)
-	if err != nil {
-		// Fallback to basic font if parsing fails
-		dc.SetRGB(1, 1, 1)
-		dc.DrawStringAnchored(artistName, float64(previewWidth)/2, textY, 0.5, 0.5)
-		textY += 40
-
-		dc.DrawStringAnchored(albumName, float64(previewWidth)/2, textY+10, 0.5, 0.5)
-		textY += 60
-
-		if year != "" {
-			dc.SetRGB(0.8, 0.8, 0.8)
-			dc.DrawStringAnchored(year, float64(previewWidth)/2, textY+10, 0.5, 0.5)
-		}
-	} else {
-		// Artist name
-		face := truetype.NewFace(font, &truetype.Options{Size: 32})
-		dc.SetFontFace(face)
-		lines := wrapText(dc, artistName, float64(previewWidth-100))
-		for _, line := range lines {
-			dc.DrawStringAnchored(line, float64(previewWidth)/2, textY, 0.5, 0.5)
-			textY += 40
-		}
-
-		textY += 10
-
-		// Album name (larger font)
-		face = truetype.NewFace(font, &truetype.Options{Size: 42})
-		dc.SetFontFace(face)
-		dc.SetColor(color.White)
-		lines = wrapText(dc, albumName, float64(previewWidth-100))
-		for _, line := range lines {
-			dc.DrawStringAnchored(line, float64(previewWidth)/2, textY, 0.5, 0.5)
-			textY += 50
-		}
-
-		textY += 20
-
-		// Year (smaller font)
-		if year != "" {
-			face = truetype.NewFace(font, &truetype.Options{Size: 24})
+	// Load the embedded font
+	if len(firaFontData) > 0 {
+		font, err := truetype.Parse(firaFontData)
+		if err == nil {
+			// Artist name
+			face := truetype.NewFace(font, &truetype.Options{Size: 32})
 			dc.SetFontFace(face)
-			dc.SetColor(color.RGBA{200, 200, 200, 255})
-			dc.DrawStringAnchored(year, float64(previewWidth)/2, textY, 0.5, 0.5)
+			lines := wrapText(dc, artistName, float64(previewWidth-100))
+			for _, line := range lines {
+				dc.SetRGB(1, 1, 1)  // Set white color right before drawing
+				dc.DrawStringAnchored(line, float64(previewWidth)/2, textY, 0.5, 0.5)
+				textY += 40
+			}
+
+			textY += 10
+
+			// Album name
+			face = truetype.NewFace(font, &truetype.Options{Size: 42})
+			dc.SetFontFace(face)
+			lines = wrapText(dc, albumName, float64(previewWidth-100))
+			for _, line := range lines {
+				dc.SetRGB(1, 1, 1)  // Set white color right before drawing
+				dc.DrawStringAnchored(line, float64(previewWidth)/2, textY, 0.5, 0.5)
+				textY += 50
+			}
+
+			textY += 20
+
+			// Year
+			if year != "" {
+				face = truetype.NewFace(font, &truetype.Options{Size: 24})
+				dc.SetFontFace(face)
+				dc.SetRGB(0.8, 0.8, 0.8)  // Set gray color right before drawing
+				dc.DrawStringAnchored(year, float64(previewWidth)/2, textY, 0.5, 0.5)
+			}
 		}
 	}
 
@@ -239,28 +230,6 @@ func generateSpotifyPreview(albumArt []byte, albumName, artistName, year string)
 }
 
 func wrapText(dc *gg.Context, text string, maxWidth float64) []string {
-	words := []string{text}
-	w, _ := dc.MeasureString(text)
-
-	if w <= maxWidth {
-		return words
-	}
-
-	runes := []rune(text)
-	maxChars := int(float64(len(runes)) * (maxWidth / w))
-
-	if maxChars <= 0 {
-		maxChars = 1
-	}
-
-	var lines []string
-	for i := 0; i < len(runes); i += maxChars {
-		end := i + maxChars
-		if end > len(runes) {
-			end = len(runes)
-		}
-		lines = append(lines, string(runes[i:end]))
-	}
-
-	return lines
+	// Use the built-in WordWrap function which handles word boundaries
+	return dc.WordWrap(text, maxWidth)
 }

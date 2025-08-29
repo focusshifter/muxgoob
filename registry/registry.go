@@ -58,6 +58,12 @@ type SelfPromptConfig struct {
 	DisabledChats   []int64 `yaml:"disabled_chats"`
 }
 
+// SpotifyConfig holds configuration for the Spotify plugin
+type SpotifyConfig struct {
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+}
+
 type Configuration struct {
 	TelegramKey          string                  `yaml:"telegram_key"`
 	ReplyTechLink        string                  `yaml:"reply_tech_link"`
@@ -80,6 +86,7 @@ type Configuration struct {
 	AiProvider           string                 `yaml:"ai_provider"`
 	AiModel              string                 `yaml:"ai_model"`
 	SelfPromptConfig     SelfPromptConfig       `yaml:"selfprompt"`
+	SpotifyConfig        SpotifyConfig          `yaml:"spotify"`
 }
 
 // LoadConfig reads configuration into registry.Config

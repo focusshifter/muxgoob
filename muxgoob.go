@@ -20,6 +20,7 @@ import (
 	_ "github.com/focusshifter/muxgoob/plugins/promptmgr"
 	_ "github.com/focusshifter/muxgoob/plugins/reply"
 	_ "github.com/focusshifter/muxgoob/plugins/selfprompt"
+	_ "github.com/focusshifter/muxgoob/plugins/spotify"
 	_ "github.com/focusshifter/muxgoob/plugins/twitchstreams"
 )
 

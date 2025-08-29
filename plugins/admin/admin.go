@@ -2,11 +2,13 @@ package admin
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/plugins/spotify"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
@@ -28,6 +30,12 @@ func (p *AdminPlugin) Process(message *telebot.Message) {
 	// Process AI provider and model commands
 	if strings.HasPrefix(message.Text, "!ai ") {
 		p.handleAiCommands(message)
+		return
+	}
+
+	// Process Spotify commands
+	if strings.HasPrefix(message.Text, "!spotify ") {
+		p.handleSpotifyCommands(message)
 		return
 	}
 
@@ -162,5 +170,86 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 
 	default:
 		bot.Send(message.Chat, "Unknown AI command. Available commands: provider, model, get")
+	}
+}
+
+// handleSpotifyCommands processes commands related to Spotify plugin settings
+func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
+	bot := registry.Bot
+	parts := strings.Split(message.Text, " ")
+
+	if len(parts) < 2 {
+		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]")
+		return
+	}
+
+	// Parse chat_id if provided
+	var chatID *int64
+	if len(parts) >= 3 {
+		id, err := strconv.ParseInt(parts[2], 10, 64)
+		if err == nil {
+			chatID = &id
+		}
+	}
+
+	switch parts[1] {
+	case "enable":
+		var err error
+		if chatID != nil {
+			err = spotify.EnableForChat(*chatID)
+		} else {
+			err = spotify.EnableGlobally()
+		}
+
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error enabling Spotify plugin: %v", err))
+			return
+		}
+
+		if chatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Spotify plugin enabled for chat %d", *chatID))
+		} else {
+			bot.Send(message.Chat, "Spotify plugin enabled globally")
+		}
+
+	case "disable":
+		var err error
+		if chatID != nil {
+			err = spotify.DisableForChat(*chatID)
+		} else {
+			err = spotify.DisableGlobally()
+		}
+
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error disabling Spotify plugin: %v", err))
+			return
+		}
+
+		if chatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Spotify plugin disabled for chat %d", *chatID))
+		} else {
+			bot.Send(message.Chat, "Spotify plugin disabled globally")
+		}
+
+	case "status":
+		enabled := registry.GetPluginSetting(chatID, "spotify", "enabled", "true")
+		status := "disabled"
+		if enabled == "true" {
+			status = "enabled"
+		}
+
+		if chatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Spotify plugin is %s for chat %d", status, *chatID))
+		} else {
+			bot.Send(message.Chat, fmt.Sprintf("Spotify plugin is %s globally", status))
+		}
+
+		// Also check if Spotify credentials are configured
+		if registry.Config.SpotifyConfig.ClientID == "" || registry.Config.SpotifyConfig.ClientSecret == "" {
+			bot.Send(message.Chat, "⚠️ Spotify credentials are not configured in config.yml")
+		}
+
+	default:
+		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status")
 	}
 }

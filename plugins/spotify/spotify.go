@@ -141,9 +141,19 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 	}
 	artistName := strings.Join(artists, ", ")
 
-	// Build caption with link to album
+	// Generate fancy preview image
+	previewData, err := generateSpotifyPreview(imageData, album.Name, artistName, year)
+	if err != nil {
+		log.Printf("[spotify] Failed to generate preview image: %v", err)
+		// Fall back to original image if preview generation fails
+		previewData = imageData
+	}
+
+	// Build caption with links
 	albumURL := fmt.Sprintf("https://open.spotify.com/album/%s", albumID)
-	caption := fmt.Sprintf("[%s - %s (%s)](%s)", artistName, album.Name, year, albumURL)
+	searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, album.Name, year))
+	ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
+	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
 
 	// Save image to a temporary file
 	tempFile, err := ioutil.TempFile("", "spotify-album-*.jpg")
@@ -154,7 +164,7 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	if _, err := tempFile.Write(imageData); err != nil {
+	if _, err := tempFile.Write(previewData); err != nil {
 		log.Printf("[spotify] Failed to write image to temp file: %v", err)
 		return
 	}

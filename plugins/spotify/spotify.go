@@ -28,6 +28,7 @@ const (
 
 type SpotifyPlugin struct {
 	albumRegex   *regexp.Regexp
+	trackRegex   *regexp.Regexp
 	accessToken  string
 	tokenExpiry  time.Time
 }
@@ -45,12 +46,29 @@ type SpotifyAlbum struct {
 	} `json:"artists"`
 }
 
+type SpotifyTrack struct {
+	Name   string `json:"name"`
+	Album  struct {
+		Name        string `json:"name"`
+		ReleaseDate string `json:"release_date"`
+		Images      []struct {
+			URL    string `json:"url"`
+			Height int    `json:"height"`
+			Width  int    `json:"width"`
+		} `json:"images"`
+	} `json:"album"`
+	Artists []struct {
+		Name string `json:"name"`
+	} `json:"artists"`
+}
+
 func init() {
 	registry.RegisterPlugin(&SpotifyPlugin{})
 }
 
 func (p *SpotifyPlugin) Start(_ interface{}) {
 	p.albumRegex = regexp.MustCompile(`https://open\.spotify\.com/album/([a-zA-Z0-9]+)`)
+	p.trackRegex = regexp.MustCompile(`https://open\.spotify\.com/track/([a-zA-Z0-9]+)`)
 	log.Println("[spotify] Plugin started")
 }
 
@@ -72,16 +90,20 @@ func (p *SpotifyPlugin) Process(message *telebot.Message) {
 	}
 
 	// Find Spotify album links in the message
-	matches := p.albumRegex.FindAllStringSubmatch(message.Text, -1)
-	if len(matches) == 0 {
-		return
-	}
-
-	// Process each album link
-	for _, match := range matches {
+	albumMatches := p.albumRegex.FindAllStringSubmatch(message.Text, -1)
+	for _, match := range albumMatches {
 		if len(match) > 1 {
 			albumID := match[1]
 			p.processAlbum(message, albumID)
+		}
+	}
+
+	// Find Spotify track links in the message
+	trackMatches := p.trackRegex.FindAllStringSubmatch(message.Text, -1)
+	for _, match := range trackMatches {
+		if len(match) > 1 {
+			trackID := match[1]
+			p.processTrack(message, trackID)
 		}
 	}
 }
@@ -169,7 +191,7 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 		return
 	}
 
-	// Send the album art with caption and Markdown parsing
+	// Send the album art with caption and Markdown parsing as a reply
 	photo := &telebot.Photo{
 		File:    telebot.FromDisk(tempFile.Name()),
 		Caption: caption,
@@ -178,8 +200,102 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 	bot := registry.Bot
 	if _, err := bot.Send(message.Chat, photo, &telebot.SendOptions{
 		ParseMode: telebot.ModeMarkdown,
+		ReplyTo:   message,
 	}); err != nil {
 		log.Printf("[spotify] Failed to send album art: %v", err)
+	}
+}
+
+func (p *SpotifyPlugin) processTrack(message *telebot.Message, trackID string) {
+	// Ensure we have a valid access token
+	if err := p.ensureAccessToken(); err != nil {
+		log.Printf("[spotify] Failed to get access token: %v", err)
+		return
+	}
+
+	// Fetch track data from Spotify API
+	track, err := p.fetchTrack(trackID)
+	if err != nil {
+		log.Printf("[spotify] Failed to fetch track %s: %v", trackID, err)
+		return
+	}
+
+	// Get the highest quality image from the album
+	var imageURL string
+	maxSize := 0
+	for _, img := range track.Album.Images {
+		size := img.Height * img.Width
+		if size > maxSize {
+			maxSize = size
+			imageURL = img.URL
+		}
+	}
+
+	if imageURL == "" {
+		log.Printf("[spotify] No album art found for track %s", trackID)
+		return
+	}
+
+	// Download the image
+	imageData, err := p.downloadImage(imageURL)
+	if err != nil {
+		log.Printf("[spotify] Failed to download album art: %v", err)
+		return
+	}
+
+	// Extract year from release date
+	year := ""
+	if len(track.Album.ReleaseDate) >= 4 {
+		year = track.Album.ReleaseDate[:4]
+	}
+
+	// Build artist names
+	var artists []string
+	for _, artist := range track.Artists {
+		artists = append(artists, artist.Name)
+	}
+	artistName := strings.Join(artists, ", ")
+
+	// Generate fancy preview image
+	previewData, err := generateSpotifyPreview(imageData, track.Name, artistName, year)
+	if err != nil {
+		log.Printf("[spotify] Failed to generate preview image: %v", err)
+		// Fall back to original image if preview generation fails
+		previewData = imageData
+	}
+
+	// Build caption with links
+	trackURL := fmt.Sprintf("https://open.spotify.com/track/%s", trackID)
+	searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, track.Name, year))
+	ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
+	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", trackURL, ddgURL)
+
+	// Save image to a temporary file
+	tempFile, err := ioutil.TempFile("", "spotify-track-*.jpg")
+	if err != nil {
+		log.Printf("[spotify] Failed to create temp file: %v", err)
+		return
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	if _, err := tempFile.Write(previewData); err != nil {
+		log.Printf("[spotify] Failed to write image to temp file: %v", err)
+		return
+	}
+
+	// Send the track art with caption and Markdown parsing as a reply
+	photo := &telebot.Photo{
+		File:    telebot.FromDisk(tempFile.Name()),
+		Caption: caption,
+	}
+
+	bot := registry.Bot
+	if _, err := bot.Send(message.Chat, photo, &telebot.SendOptions{
+		ParseMode: telebot.ModeMarkdown,
+		ReplyTo:   message,
+	}); err != nil {
+		log.Printf("[spotify] Failed to send track art: %v", err)
 	}
 }
 
@@ -261,6 +377,36 @@ func (p *SpotifyPlugin) fetchAlbum(albumID string) (*SpotifyAlbum, error) {
 	}
 
 	return &album, nil
+}
+
+func (p *SpotifyPlugin) fetchTrack(trackID string) (*SpotifyTrack, error) {
+	url := fmt.Sprintf("%s/tracks/%s", SpotifyAPIBaseURL, trackID)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.accessToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API request failed: %s - %s", resp.Status, string(body))
+	}
+
+	var track SpotifyTrack
+	if err := json.NewDecoder(resp.Body).Decode(&track); err != nil {
+		return nil, err
+	}
+
+	return &track, nil
 }
 
 func (p *SpotifyPlugin) downloadImage(url string) ([]byte, error) {

@@ -45,8 +45,8 @@ func (p *AdminPlugin) Process(message *telebot.Message) {
 
 		// Query all chats from the database
 		rows, err := database.DB.Query(`
-			SELECT id, type, title, username, first_name, last_name 
-			FROM chats 
+			SELECT id, type, title, username, first_name, last_name
+			FROM chats
 			ORDER BY COALESCE(title, username, first_name || ' ' || last_name) ASC
 		`)
 		if err != nil {
@@ -179,7 +179,7 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]")
 		return
 	}
 
@@ -249,7 +249,56 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 			bot.Send(message.Chat, "⚠️ Spotify credentials are not configured in config.yml")
 		}
 
+	case "desc":
+		if len(parts) < 3 {
+			bot.Send(message.Chat, "Usage: !spotify desc enable [chat_id] | !spotify desc disable [chat_id]")
+			return
+		}
+		action := parts[2]
+		// Re-parse chat id for desc subcommand from position 3
+		var descChatID *int64
+		if len(parts) >= 4 {
+			if id, err := strconv.ParseInt(parts[3], 10, 64); err == nil {
+				descChatID = &id
+			}
+		}
+		switch action {
+		case "enable":
+			var err error
+			if descChatID != nil {
+				err = spotify.EnableReviewsForChat(*descChatID)
+			} else {
+				err = spotify.EnableReviewsGlobally()
+			}
+			if err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error enabling Spotify reviews: %v", err))
+				return
+			}
+			if descChatID != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Spotify reviews enabled for chat %d", *descChatID))
+			} else {
+				bot.Send(message.Chat, "Spotify reviews enabled globally")
+			}
+		case "disable":
+			var err error
+			if descChatID != nil {
+				err = spotify.DisableReviewsForChat(*descChatID)
+			} else {
+				err = spotify.DisableReviewsGlobally()
+			}
+			if err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error disabling Spotify reviews: %v", err))
+				return
+			}
+			if descChatID != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Spotify reviews disabled for chat %d", *descChatID))
+			} else {
+				bot.Send(message.Chat, "Spotify reviews disabled globally")
+			}
+		default:
+			bot.Send(message.Chat, "Unknown desc command. Use: enable or disable")
+		}
 	default:
-		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status")
+		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status, desc")
 	}
 }

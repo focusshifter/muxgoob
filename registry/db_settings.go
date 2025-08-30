@@ -10,7 +10,7 @@ import (
 const (
 	// ConfigPluginName is the name used for global configuration settings in the database
 	ConfigPluginName = "config"
-	
+
 	// AI provider and model keys
 	AiProviderKey = "ai_provider"
 	AiModelKey    = "ai_model"
@@ -26,19 +26,19 @@ func InitializeDbSettings() {
 	if dbInitialized {
 		return
 	}
-	
+
 	// Ensure the database is initialized
 	if database.DB == nil {
 		log.Printf("[registry] Database not initialized yet, skipping plugin_settings table creation")
 		return
 	}
-	
+
 	err := EnsurePluginSettingsTable()
 	if err != nil {
 		log.Printf("[registry] Failed to create plugin_settings table: %v", err)
 		return
 	}
-	
+
 	dbInitialized = true
 	log.Printf("[registry] Plugin settings table initialized")
 }
@@ -103,12 +103,12 @@ func SetPluginSetting(chatID *int64, pluginName string, key string, value string
 			SELECT COUNT(*) FROM plugin_settings
 			WHERE chat_id IS NULL AND plugin_name = ? AND key = ?`,
 			pluginName, key).Scan(&count)
-		
+
 		if err != nil {
 			log.Printf("[registry] Error checking for existing global setting %s.%s: %v", pluginName, key, err)
 			return err
 		}
-		
+
 		// If it exists, update it
 		if count > 0 {
 			_, err = database.DB.Exec(`
@@ -122,20 +122,20 @@ func SetPluginSetting(chatID *int64, pluginName string, key string, value string
 				VALUES (NULL, ?, ?, ?)`,
 				pluginName, key, value)
 		}
-		
+
 		if err != nil {
 			log.Printf("[registry] Error setting global %s.%s: %v", pluginName, key, err)
 		}
 		return err
 	}
-	
+
 	// For chat-specific settings, we can use the UNIQUE constraint
 	_, err := database.DB.Exec(`
 		INSERT INTO plugin_settings (chat_id, plugin_name, key, value)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(chat_id, plugin_name, key) DO UPDATE SET value = ?`,
 		chatID, pluginName, key, value, value)
-	
+
 	if err != nil {
 		log.Printf("[registry] Error setting %s.%s for chat %d: %v", pluginName, key, *chatID, err)
 	}

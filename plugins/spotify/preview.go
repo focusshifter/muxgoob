@@ -36,7 +36,7 @@ func extractDominantColors(img image.Image) []color.Color {
 		for x := 0; x < width; x += step {
 			c := img.At(x, y)
 			r, g, b, _ := c.RGBA()
-			key := (r/256)<<16 | (g/256)<<8 | (b/256)
+			key := (r/256)<<16 | (g/256)<<8 | (b / 256)
 			colorMap[key]++
 		}
 	}
@@ -191,7 +191,7 @@ func generateSpotifyPreview(albumArt []byte, albumName, artistName, year string)
 			dc.SetFontFace(face)
 			lines := wrapText(dc, artistName, float64(previewWidth-100))
 			for _, line := range lines {
-				dc.SetRGB(1, 1, 1)  // Set white color right before drawing
+				dc.SetRGB(1, 1, 1) // Set white color right before drawing
 				dc.DrawStringAnchored(line, float64(previewWidth)/2, textY, 0.5, 0.5)
 				textY += 40
 			}
@@ -203,7 +203,7 @@ func generateSpotifyPreview(albumArt []byte, albumName, artistName, year string)
 			dc.SetFontFace(face)
 			lines = wrapText(dc, albumName, float64(previewWidth-100))
 			for _, line := range lines {
-				dc.SetRGB(1, 1, 1)  // Set white color right before drawing
+				dc.SetRGB(1, 1, 1) // Set white color right before drawing
 				dc.DrawStringAnchored(line, float64(previewWidth)/2, textY, 0.5, 0.5)
 				textY += 50
 			}
@@ -214,7 +214,7 @@ func generateSpotifyPreview(albumArt []byte, albumName, artistName, year string)
 			if year != "" {
 				face = truetype.NewFace(font, &truetype.Options{Size: 24})
 				dc.SetFontFace(face)
-				dc.SetRGB(0.8, 0.8, 0.8)  // Set gray color right before drawing
+				dc.SetRGB(0.8, 0.8, 0.8) // Set gray color right before drawing
 				dc.DrawStringAnchored(year, float64(previewWidth)/2, textY, 0.5, 0.5)
 			}
 		}

@@ -4,7 +4,7 @@ nametrigger:
   triggers:
     - usernames: []
       chance:
-      reply: 
+      reply:
 time_zone: Europe/Moscow
 birthdays:
   - chat_id: 123456789
@@ -17,7 +17,7 @@ twitch_api_key: no_key
 twitch_streams:
   - chat_id: 123456789
     twitch_usernames:
-      - username1 
+      - username1
       - username2
 ai_provider: openrouter
 ai_model: deepseek/deepseek-chat
@@ -29,7 +29,7 @@ chat_gpt_system_prompt:
 chat_gpt_config_per_chat:
   - chat_id: -1
     system_prompt: "Custom chat prompt"
-chat_gpt_user_prompt: 
+chat_gpt_user_prompt:
 owner_username: your_username
 
 # Self-updating prompt plugin configuration
@@ -44,3 +44,11 @@ selfprompt:
 spotify:
   client_id:      # Your Spotify app client ID
   client_secret:  # Your Spotify app client secret
+
+# Gooby the Music Critic
+# https://api.telegra.ph/createAccount?short_name=foo&author_name=bar
+spotify_review_prompt: |
+    Supports templating! See plugins/spotify/review.go
+    {type} {artist} {title} {year}
+    {grounding}
+spotify_review_microblog_auth:

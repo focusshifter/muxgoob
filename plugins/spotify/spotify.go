@@ -171,11 +171,16 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 		previewData = imageData
 	}
 
-	// Build caption with links
-	albumURL := fmt.Sprintf("https://open.spotify.com/album/%s", albumID)
-	searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, album.Name, year))
-	ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
-	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
+    // Optionally generate and publish review, then build caption with links
+    reviewURL := generateAndPublishReview(message.Chat.ID, "album", artistName, album.Name, year)
+
+    albumURL := fmt.Sprintf("https://open.spotify.com/album/%s", albumID)
+    searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, album.Name, year))
+    ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
+    caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
+    if reviewURL != "" {
+        caption = fmt.Sprintf("%s | [Review](%s)", caption, reviewURL)
+    }
 
 	// Save image to a temporary file
 	tempFile, err := ioutil.TempFile("", "spotify-album-*.jpg")
@@ -264,11 +269,16 @@ func (p *SpotifyPlugin) processTrack(message *telebot.Message, trackID string) {
 		previewData = imageData
 	}
 
-	// Build caption with links
-	trackURL := fmt.Sprintf("https://open.spotify.com/track/%s", trackID)
-	searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, track.Name, year))
-	ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
-	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", trackURL, ddgURL)
+    // Optionally generate and publish review, then build caption with links
+    reviewURL := generateAndPublishReview(message.Chat.ID, "track", artistName, track.Name, year)
+
+    trackURL := fmt.Sprintf("https://open.spotify.com/track/%s", trackID)
+    searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, track.Name, year))
+    ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
+    caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", trackURL, ddgURL)
+    if reviewURL != "" {
+        caption = fmt.Sprintf("%s | [Review](%s)", caption, reviewURL)
+    }
 
 	// Save image to a temporary file
 	tempFile, err := ioutil.TempFile("", "spotify-track-*.jpg")

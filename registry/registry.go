@@ -60,8 +60,8 @@ type SelfPromptConfig struct {
 
 // SpotifyConfig holds configuration for the Spotify plugin
 type SpotifyConfig struct {
-	ClientID     string `yaml:"client_id"`
-	ClientSecret string `yaml:"client_secret"`
+    ClientID     string `yaml:"client_id"`
+    ClientSecret string `yaml:"client_secret"`
 }
 
 type Configuration struct {
@@ -86,7 +86,9 @@ type Configuration struct {
 	AiProvider           string                 `yaml:"ai_provider"`
 	AiModel              string                 `yaml:"ai_model"`
 	SelfPromptConfig     SelfPromptConfig       `yaml:"selfprompt"`
-	SpotifyConfig        SpotifyConfig          `yaml:"spotify"`
+    SpotifyConfig        SpotifyConfig          `yaml:"spotify"`
+    SpotifyReviewPrompt       string `yaml:"spotify_review_prompt"`
+    SpotifyReviewMicroblogAuth string `yaml:"spotify_review_microblog_auth"`
 }
 
 // LoadConfig reads configuration into registry.Config

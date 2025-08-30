@@ -20,18 +20,18 @@ import (
 )
 
 const (
-    SpotifyPluginName       = "spotify"
-    SpotifyEnabledKey       = "enabled"
-    SpotifyReviewEnabledKey = "review_enabled"
-    SpotifyAuthURL          = "https://accounts.spotify.com/api/token"
-    SpotifyAPIBaseURL       = "https://api.spotify.com/v1"
+	SpotifyPluginName       = "spotify"
+	SpotifyEnabledKey       = "enabled"
+	SpotifyReviewEnabledKey = "review_enabled"
+	SpotifyAuthURL          = "https://accounts.spotify.com/api/token"
+	SpotifyAPIBaseURL       = "https://api.spotify.com/v1"
 )
 
 type SpotifyPlugin struct {
-	albumRegex   *regexp.Regexp
-	trackRegex   *regexp.Regexp
-	accessToken  string
-	tokenExpiry  time.Time
+	albumRegex  *regexp.Regexp
+	trackRegex  *regexp.Regexp
+	accessToken string
+	tokenExpiry time.Time
 }
 
 type SpotifyAlbum struct {
@@ -48,8 +48,8 @@ type SpotifyAlbum struct {
 }
 
 type SpotifyTrack struct {
-	Name   string `json:"name"`
-	Album  struct {
+	Name  string `json:"name"`
+	Album struct {
 		Name        string `json:"name"`
 		ReleaseDate string `json:"release_date"`
 		Images      []struct {
@@ -110,13 +110,13 @@ func (p *SpotifyPlugin) Process(message *telebot.Message) {
 }
 
 func (p *SpotifyPlugin) isEnabled(chatID *int64) bool {
-    enabled := registry.GetPluginSetting(chatID, SpotifyPluginName, SpotifyEnabledKey, "true")
-    return enabled == "true"
+	enabled := registry.GetPluginSetting(chatID, SpotifyPluginName, SpotifyEnabledKey, "true")
+	return enabled == "true"
 }
 
 func (p *SpotifyPlugin) isReviewEnabled(chatID *int64) bool {
-    enabled := registry.GetPluginSetting(chatID, SpotifyPluginName, SpotifyReviewEnabledKey, "true")
-    return enabled == "true"
+	enabled := registry.GetPluginSetting(chatID, SpotifyPluginName, SpotifyReviewEnabledKey, "true")
+	return enabled == "true"
 }
 
 func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
@@ -177,17 +177,17 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 		previewData = imageData
 	}
 
-    // Build caption with links
-    albumURL := fmt.Sprintf("https://open.spotify.com/album/%s", albumID)
-    searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, album.Name, year))
-    ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
-    caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
-    // Optionally generate and publish a funny review
-    if p.isReviewEnabled(&message.Chat.ID) {
-        if reviewURL := generateAndPublishReview(message.Chat.ID, "album", artistName, album.Name, year); reviewURL != "" {
-            caption = fmt.Sprintf("%s | [Рецензия от Губи](%s)", caption, reviewURL)
-        }
-    }
+	// Build caption with links
+	albumURL := fmt.Sprintf("https://open.spotify.com/album/%s", albumID)
+	searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, album.Name, year))
+	ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
+	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
+	// Optionally generate and publish a funny review
+	if p.isReviewEnabled(&message.Chat.ID) {
+		if reviewURL := generateAndPublishReview(message.Chat.ID, "album", artistName, album.Name, year); reviewURL != "" {
+			caption = fmt.Sprintf("%s | [Рецензия от Губи](%s)", caption, reviewURL)
+		}
+	}
 
 	// Save image to a temporary file
 	tempFile, err := ioutil.TempFile("", "spotify-album-*.jpg")
@@ -276,10 +276,10 @@ func (p *SpotifyPlugin) processTrack(message *telebot.Message, trackID string) {
 		previewData = imageData
 	}
 
-    trackURL := fmt.Sprintf("https://open.spotify.com/track/%s", trackID)
-    searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, track.Name, year))
-    ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
-    caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", trackURL, ddgURL)
+	trackURL := fmt.Sprintf("https://open.spotify.com/track/%s", trackID)
+	searchQuery := url.QueryEscape(fmt.Sprintf("%s %s %s", artistName, track.Name, year))
+	ddgURL := fmt.Sprintf("https://duckduckgo.com/?q=%s", searchQuery)
+	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", trackURL, ddgURL)
 
 	// Save image to a temporary file
 	tempFile, err := ioutil.TempFile("", "spotify-track-*.jpg")
@@ -452,25 +452,25 @@ func EnableGlobally() error {
 
 // DisableGlobally disables the Spotify plugin globally
 func DisableGlobally() error {
-    return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyEnabledKey, "false")
+	return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyEnabledKey, "false")
 }
 
 // EnableReviewsForChat enables review generation for a specific chat
 func EnableReviewsForChat(chatID int64) error {
-    return registry.SetPluginSetting(&chatID, SpotifyPluginName, SpotifyReviewEnabledKey, "true")
+	return registry.SetPluginSetting(&chatID, SpotifyPluginName, SpotifyReviewEnabledKey, "true")
 }
 
 // DisableReviewsForChat disables review generation for a specific chat
 func DisableReviewsForChat(chatID int64) error {
-    return registry.SetPluginSetting(&chatID, SpotifyPluginName, SpotifyReviewEnabledKey, "false")
+	return registry.SetPluginSetting(&chatID, SpotifyPluginName, SpotifyReviewEnabledKey, "false")
 }
 
 // EnableReviewsGlobally enables review generation globally
 func EnableReviewsGlobally() error {
-    return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyReviewEnabledKey, "true")
+	return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyReviewEnabledKey, "true")
 }
 
 // DisableReviewsGlobally disables review generation globally
 func DisableReviewsGlobally() error {
-    return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyReviewEnabledKey, "false")
+	return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyReviewEnabledKey, "false")
 }

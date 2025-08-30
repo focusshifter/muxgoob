@@ -67,7 +67,7 @@ func TestSpotifyPlugin_Process_NoConfig(t *testing.T) {
 	// Setup test database
 	testDB := testutils.SetupTestDB(t)
 	defer testDB.Close()
-	
+
 	// Set the database for the registry to use
 	database.DB = testDB
 
@@ -100,7 +100,7 @@ func TestSpotifyPlugin_Process_Disabled(t *testing.T) {
 	// Setup test database
 	testDB := testutils.SetupTestDB(t)
 	defer testDB.Close()
-	
+
 	// Set the database for the registry to use
 	database.DB = testDB
 
@@ -144,7 +144,7 @@ func TestSpotifyPlugin_EnableDisable(t *testing.T) {
 	// Setup test database
 	testDB := testutils.SetupTestDB(t)
 	defer testDB.Close()
-	
+
 	// Set the database for the registry to use
 	database.DB = testDB
 
@@ -207,7 +207,7 @@ func TestSpotifyPlugin_TokenManagement(t *testing.T) {
 
 	// Without actual API credentials, we can't test ensureAccessToken fully,
 	// but we can verify the token expiry logic
-	
+
 	// Set a valid token
 	plugin.accessToken = "test_token"
 	plugin.tokenExpiry = time.Now().Add(1 * time.Hour)

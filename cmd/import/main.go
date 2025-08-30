@@ -34,12 +34,12 @@ type TelegramChat struct {
 }
 
 type TelegramMessageEntity struct {
-	Type     string       `json:"type"`
-	Offset   int          `json:"offset"`
-	Length   int          `json:"length"`
-	URL      string       `json:"url,omitempty"`
+	Type     string        `json:"type"`
+	Offset   int           `json:"offset"`
+	Length   int           `json:"length"`
+	URL      string        `json:"url,omitempty"`
 	User     *TelegramUser `json:"user,omitempty"`
-	Language string       `json:"language,omitempty"`
+	Language string        `json:"language,omitempty"`
 }
 
 type TelegramPhotoSize struct {
@@ -51,49 +51,49 @@ type TelegramPhotoSize struct {
 }
 
 type TelegramAudio struct {
-	FileID       string `json:"file_id"`
-	FileUniqueID string `json:"file_unique_id"`
-	Duration     int    `json:"duration"`
-	Performer    string `json:"performer,omitempty"`
-	Title        string `json:"title,omitempty"`
-	FileName     string `json:"file_name,omitempty"`
-	MimeType     string `json:"mime_type,omitempty"`
-	FileSize     int    `json:"file_size,omitempty"`
+	FileID       string             `json:"file_id"`
+	FileUniqueID string             `json:"file_unique_id"`
+	Duration     int                `json:"duration"`
+	Performer    string             `json:"performer,omitempty"`
+	Title        string             `json:"title,omitempty"`
+	FileName     string             `json:"file_name,omitempty"`
+	MimeType     string             `json:"mime_type,omitempty"`
+	FileSize     int                `json:"file_size,omitempty"`
 	Thumbnail    *TelegramPhotoSize `json:"thumb,omitempty"`
 }
 
 type TelegramDocument struct {
-	FileID       string `json:"file_id"`
-	FileUniqueID string `json:"file_unique_id"`
-	FileName     string `json:"file_name,omitempty"`
-	MimeType     string `json:"mime_type,omitempty"`
-	FileSize     int    `json:"file_size,omitempty"`
+	FileID       string             `json:"file_id"`
+	FileUniqueID string             `json:"file_unique_id"`
+	FileName     string             `json:"file_name,omitempty"`
+	MimeType     string             `json:"mime_type,omitempty"`
+	FileSize     int                `json:"file_size,omitempty"`
 	Thumbnail    *TelegramPhotoSize `json:"thumb,omitempty"`
 }
 
 type TelegramVideo struct {
-	FileID       string `json:"file_id"`
-	FileUniqueID string `json:"file_unique_id"`
-	Width        int    `json:"width"`
-	Height       int    `json:"height"`
-	Duration     int    `json:"duration"`
-	FileName     string `json:"file_name,omitempty"`
-	MimeType     string `json:"mime_type,omitempty"`
-	FileSize     int    `json:"file_size,omitempty"`
+	FileID       string             `json:"file_id"`
+	FileUniqueID string             `json:"file_unique_id"`
+	Width        int                `json:"width"`
+	Height       int                `json:"height"`
+	Duration     int                `json:"duration"`
+	FileName     string             `json:"file_name,omitempty"`
+	MimeType     string             `json:"mime_type,omitempty"`
+	FileSize     int                `json:"file_size,omitempty"`
 	Thumbnail    *TelegramPhotoSize `json:"thumb,omitempty"`
 }
 
 type TelegramSticker struct {
-	FileID       string `json:"file_id"`
-	FileUniqueID string `json:"file_unique_id"`
-	Width        int    `json:"width"`
-	Height       int    `json:"height"`
-	IsAnimated   bool   `json:"is_animated,omitempty"`
-	IsVideo      bool   `json:"is_video,omitempty"`
+	FileID       string             `json:"file_id"`
+	FileUniqueID string             `json:"file_unique_id"`
+	Width        int                `json:"width"`
+	Height       int                `json:"height"`
+	IsAnimated   bool               `json:"is_animated,omitempty"`
+	IsVideo      bool               `json:"is_video,omitempty"`
 	Thumbnail    *TelegramPhotoSize `json:"thumb,omitempty"`
-	Emoji        string `json:"emoji,omitempty"`
-	SetName      string `json:"set_name,omitempty"`
-	FileSize     int    `json:"file_size,omitempty"`
+	Emoji        string             `json:"emoji,omitempty"`
+	SetName      string             `json:"set_name,omitempty"`
+	FileSize     int                `json:"file_size,omitempty"`
 }
 
 type TelegramVoice struct {
@@ -105,55 +105,55 @@ type TelegramVoice struct {
 }
 
 type TelegramVideoNote struct {
-	FileID       string `json:"file_id"`
-	FileUniqueID string `json:"file_unique_id"`
-	Length       int    `json:"length"`
-	Duration     int    `json:"duration"`
+	FileID       string             `json:"file_id"`
+	FileUniqueID string             `json:"file_unique_id"`
+	Length       int                `json:"length"`
+	Duration     int                `json:"duration"`
 	Thumbnail    *TelegramPhotoSize `json:"thumb,omitempty"`
-	FileSize     int    `json:"file_size,omitempty"`
+	FileSize     int                `json:"file_size,omitempty"`
 }
 
 type TelegramMessage struct {
-	MessageID         int                   `json:"message_id"`
-	From              *TelegramUser         `json:"from,omitempty"`
-	Date              int                   `json:"date"`
-	Chat              TelegramChat          `json:"chat"`
-	ForwardFrom       *TelegramUser         `json:"forward_from,omitempty"`
-	ForwardFromChat   *TelegramChat         `json:"forward_from_chat,omitempty"`
-	ForwardDate       int                   `json:"forward_date,omitempty"`
-	ReplyToMessage    *TelegramMessage      `json:"reply_to_message,omitempty"`
-	EditDate          int                   `json:"edit_date,omitempty"`
-	MediaGroupID      string                `json:"media_group_id,omitempty"`
-	AuthorSignature   string                `json:"author_signature,omitempty"`
-	Text              string                `json:"text,omitempty"`
-	Entities          []TelegramMessageEntity `json:"entities,omitempty"`
-	CaptionEntities   []TelegramMessageEntity `json:"caption_entities,omitempty"`
-	Audio             *TelegramAudio         `json:"audio,omitempty"`
-	Document          *TelegramDocument      `json:"document,omitempty"`
-	Photo             []TelegramPhotoSize    `json:"photo,omitempty"`
-	Sticker           *TelegramSticker       `json:"sticker,omitempty"`
-	Video             *TelegramVideo         `json:"video,omitempty"`
-	VideoNote         *TelegramVideoNote     `json:"video_note,omitempty"`
-	Voice             *TelegramVoice         `json:"voice,omitempty"`
-	Caption           string                 `json:"caption,omitempty"`
-	NewChatMembers    []TelegramUser         `json:"new_chat_members,omitempty"`
-	LeftChatMember    *TelegramUser          `json:"left_chat_member,omitempty"`
-	NewChatTitle      string                 `json:"new_chat_title,omitempty"`
-	NewChatPhoto      []TelegramPhotoSize    `json:"new_chat_photo,omitempty"`
-	DeleteChatPhoto   bool                   `json:"delete_chat_photo,omitempty"`
-	GroupChatCreated  bool                   `json:"group_chat_created,omitempty"`
-	SupergroupChatCreated bool               `json:"supergroup_chat_created,omitempty"`
-	ChannelChatCreated bool                  `json:"channel_chat_created,omitempty"`
-	MigrateToChatID   int64                  `json:"migrate_to_chat_id,omitempty"`
-	MigrateFromChatID int64                  `json:"migrate_from_chat_id,omitempty"`
-	PinnedMessage     *TelegramMessage       `json:"pinned_message,omitempty"`
+	MessageID             int                     `json:"message_id"`
+	From                  *TelegramUser           `json:"from,omitempty"`
+	Date                  int                     `json:"date"`
+	Chat                  TelegramChat            `json:"chat"`
+	ForwardFrom           *TelegramUser           `json:"forward_from,omitempty"`
+	ForwardFromChat       *TelegramChat           `json:"forward_from_chat,omitempty"`
+	ForwardDate           int                     `json:"forward_date,omitempty"`
+	ReplyToMessage        *TelegramMessage        `json:"reply_to_message,omitempty"`
+	EditDate              int                     `json:"edit_date,omitempty"`
+	MediaGroupID          string                  `json:"media_group_id,omitempty"`
+	AuthorSignature       string                  `json:"author_signature,omitempty"`
+	Text                  string                  `json:"text,omitempty"`
+	Entities              []TelegramMessageEntity `json:"entities,omitempty"`
+	CaptionEntities       []TelegramMessageEntity `json:"caption_entities,omitempty"`
+	Audio                 *TelegramAudio          `json:"audio,omitempty"`
+	Document              *TelegramDocument       `json:"document,omitempty"`
+	Photo                 []TelegramPhotoSize     `json:"photo,omitempty"`
+	Sticker               *TelegramSticker        `json:"sticker,omitempty"`
+	Video                 *TelegramVideo          `json:"video,omitempty"`
+	VideoNote             *TelegramVideoNote      `json:"video_note,omitempty"`
+	Voice                 *TelegramVoice          `json:"voice,omitempty"`
+	Caption               string                  `json:"caption,omitempty"`
+	NewChatMembers        []TelegramUser          `json:"new_chat_members,omitempty"`
+	LeftChatMember        *TelegramUser           `json:"left_chat_member,omitempty"`
+	NewChatTitle          string                  `json:"new_chat_title,omitempty"`
+	NewChatPhoto          []TelegramPhotoSize     `json:"new_chat_photo,omitempty"`
+	DeleteChatPhoto       bool                    `json:"delete_chat_photo,omitempty"`
+	GroupChatCreated      bool                    `json:"group_chat_created,omitempty"`
+	SupergroupChatCreated bool                    `json:"supergroup_chat_created,omitempty"`
+	ChannelChatCreated    bool                    `json:"channel_chat_created,omitempty"`
+	MigrateToChatID       int64                   `json:"migrate_to_chat_id,omitempty"`
+	MigrateFromChatID     int64                   `json:"migrate_from_chat_id,omitempty"`
+	PinnedMessage         *TelegramMessage        `json:"pinned_message,omitempty"`
 }
 
 func main() {
 	var (
-		inputFile  string
-		dbFile     string
-		dryRun     bool
+		inputFile string
+		dbFile    string
+		dryRun    bool
 	)
 
 	flag.StringVar(&inputFile, "input", "", "Path to Telegram JSON file or directory containing JSON files")
@@ -203,7 +203,7 @@ func main() {
 	// Process each file
 	for _, file := range filesToProcess {
 		fmt.Printf("Processing file: %s\n", file)
-		
+
 		data, err := ioutil.ReadFile(file)
 		if err != nil {
 			log.Printf("Error reading file %s: %v", file, err)
@@ -253,7 +253,7 @@ func main() {
 				continue
 			}
 		}
-		
+
 		// Try to parse as Telegram Desktop export format using a more flexible approach
 		// Use map[string]interface{} to handle varying field types
 		var exportData struct {
@@ -262,38 +262,38 @@ func main() {
 			ID       int64                    `json:"id"`
 			Messages []map[string]interface{} `json:"messages"`
 		}
-		
+
 		err = json.Unmarshal(data, &exportData)
 		if err != nil {
 			// Print the error to help with debugging
 			fmt.Printf("Error parsing Telegram Desktop export format: %v\n", err)
 		} else if len(exportData.Messages) > 0 {
 			fmt.Printf("Found %d messages in Telegram Desktop export format\n", len(exportData.Messages))
-			
+
 			for i, exportMsg := range exportData.Messages {
 				// Skip non-message types
 				if msgType, ok := exportMsg["type"].(string); ok && msgType != "message" {
 					continue
 				}
-				
+
 				// Extract message ID
 				msgID := 0
 				if id, ok := exportMsg["id"].(float64); ok {
 					msgID = int(id)
 				}
-				
+
 				// Extract date
 				date := 0
 				if dateUnixtime, ok := exportMsg["date_unixtime"].(string); ok {
 					date = parseUnixtime(dateUnixtime)
 				}
-				
+
 				// Extract text
 				text := ""
 				if msgText, ok := exportMsg["text"].(string); ok {
 					text = msgText
 				}
-				
+
 				// Create message
 				msg := TelegramMessage{
 					MessageID: msgID,
@@ -305,7 +305,7 @@ func main() {
 						Title: exportData.Name,
 					},
 				}
-				
+
 				// Create a basic user from the from_id field
 				if fromID, ok := exportMsg["from_id"].(string); ok && fromID != "" {
 					userID := parseUserID(fromID)
@@ -318,9 +318,9 @@ func main() {
 						FirstName: fromName,
 					}
 				}
-				
+
 				if dryRun {
-					fmt.Printf("Would import message %d/%d: ID %d from %s\n", 
+					fmt.Printf("Would import message %d/%d: ID %d from %s\n",
 						i+1, len(exportData.Messages), msg.MessageID, exportMsg["from"])
 				} else {
 					importMessage(db, &msg)
@@ -359,15 +359,15 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 			first_name = COALESCE(excluded.first_name, first_name),
 			last_name = COALESCE(excluded.last_name, last_name),
 			data = COALESCE(excluded.data, data)
-	`, 
-	chatID, 
-	message.Chat.Type, 
-	message.Chat.Title, 
-	message.Chat.Username, 
-	message.Chat.FirstName, 
-	message.Chat.LastName,
-	chatDataJSON(message.Chat))
-	
+	`,
+		chatID,
+		message.Chat.Type,
+		message.Chat.Title,
+		message.Chat.Username,
+		message.Chat.FirstName,
+		message.Chat.LastName,
+		chatDataJSON(message.Chat))
+
 	if err != nil {
 		tx.Rollback()
 		log.Printf("Failed to insert chat: %v", err)
@@ -379,7 +379,7 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 	if message.From != nil {
 		senderID.Int64 = message.From.ID
 		senderID.Valid = true
-		
+
 		_, err = tx.Exec(`
 			INSERT INTO users (id, username, first_name, last_name, data)
 			VALUES (?, ?, ?, ?, ?)
@@ -388,13 +388,13 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 				first_name = COALESCE(excluded.first_name, first_name),
 				last_name = COALESCE(excluded.last_name, last_name),
 				data = COALESCE(excluded.data, data)
-		`, 
-		message.From.ID, 
-		message.From.Username, 
-		message.From.FirstName, 
-		message.From.LastName,
-		userDataJSON(message.From))
-		
+		`,
+			message.From.ID,
+			message.From.Username,
+			message.From.FirstName,
+			message.From.LastName,
+			userDataJSON(message.From))
+
 		if err != nil {
 			tx.Rollback()
 			log.Printf("Failed to insert sender: %v", err)
@@ -407,7 +407,7 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 	if message.ForwardFrom != nil {
 		forwardFromID.Int64 = message.ForwardFrom.ID
 		forwardFromID.Valid = true
-		
+
 		_, err = tx.Exec(`
 			INSERT INTO users (id, username, first_name, last_name, data)
 			VALUES (?, ?, ?, ?, ?)
@@ -416,13 +416,13 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 				first_name = COALESCE(excluded.first_name, first_name),
 				last_name = COALESCE(excluded.last_name, last_name),
 				data = COALESCE(excluded.data, data)
-		`, 
-		message.ForwardFrom.ID, 
-		message.ForwardFrom.Username, 
-		message.ForwardFrom.FirstName, 
-		message.ForwardFrom.LastName,
-		userDataJSON(message.ForwardFrom))
-		
+		`,
+			message.ForwardFrom.ID,
+			message.ForwardFrom.Username,
+			message.ForwardFrom.FirstName,
+			message.ForwardFrom.LastName,
+			userDataJSON(message.ForwardFrom))
+
 		if err != nil {
 			tx.Rollback()
 			log.Printf("Failed to insert forward_from user: %v", err)
@@ -435,7 +435,7 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 	if message.ForwardFromChat != nil {
 		forwardFromChatID.Int64 = message.ForwardFromChat.ID
 		forwardFromChatID.Valid = true
-		
+
 		_, err = tx.Exec(`
 			INSERT INTO chats (id, type, title, username, first_name, last_name, data)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -446,15 +446,15 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 				first_name = COALESCE(excluded.first_name, first_name),
 				last_name = COALESCE(excluded.last_name, last_name),
 				data = COALESCE(excluded.data, data)
-		`, 
-		message.ForwardFromChat.ID, 
-		message.ForwardFromChat.Type, 
-		message.ForwardFromChat.Title, 
-		message.ForwardFromChat.Username, 
-		message.ForwardFromChat.FirstName, 
-		message.ForwardFromChat.LastName,
-		chatDataJSON(*message.ForwardFromChat))
-		
+		`,
+			message.ForwardFromChat.ID,
+			message.ForwardFromChat.Type,
+			message.ForwardFromChat.Title,
+			message.ForwardFromChat.Username,
+			message.ForwardFromChat.FirstName,
+			message.ForwardFromChat.LastName,
+			chatDataJSON(*message.ForwardFromChat))
+
 		if err != nil {
 			tx.Rollback()
 			log.Printf("Failed to insert forward_from_chat: %v", err)
@@ -467,7 +467,7 @@ func importMessage(db *sql.DB, message *TelegramMessage) {
 	if message.ReplyToMessage != nil {
 		replyToMessageID.Int64 = int64(message.ReplyToMessage.MessageID)
 		replyToMessageID.Valid = true
-		
+
 		// Recursively import the replied message first
 		importMessage(db, message.ReplyToMessage)
 	}
@@ -767,7 +767,7 @@ func insertMessageEntity(tx *sql.Tx, messageID int, chatID int64, entity Telegra
 	if entity.User != nil {
 		userID.Int64 = entity.User.ID
 		userID.Valid = true
-		
+
 		// Insert the user first
 		_, err := tx.Exec(`
 			INSERT INTO users (id, username, first_name, last_name, data)
@@ -777,13 +777,13 @@ func insertMessageEntity(tx *sql.Tx, messageID int, chatID int64, entity Telegra
 				first_name = COALESCE(excluded.first_name, first_name),
 				last_name = COALESCE(excluded.last_name, last_name),
 				data = COALESCE(excluded.data, data)
-		`, 
-		entity.User.ID, 
-		entity.User.Username, 
-		entity.User.FirstName, 
-		entity.User.LastName,
-		userDataJSON(entity.User))
-		
+		`,
+			entity.User.ID,
+			entity.User.Username,
+			entity.User.FirstName,
+			entity.User.LastName,
+			userDataJSON(entity.User))
+
 		if err != nil {
 			return err
 		}
@@ -879,7 +879,7 @@ func parseUnixtime(unixtimeStr string) int {
 // parseUserID extracts the numeric user ID from a string like "user123456789"
 func parseUserID(userIDStr string) int64 {
 	var userID int64
-	
+
 	// Remove any non-digit prefix (like "user")
 	idStr := ""
 	for _, c := range userIDStr {
@@ -887,13 +887,13 @@ func parseUserID(userIDStr string) int64 {
 			idStr += string(c)
 		}
 	}
-	
+
 	if idStr != "" {
 		_, err := fmt.Sscanf(idStr, "%d", &userID)
 		if err != nil {
 			log.Printf("Error parsing user ID %s: %v", userIDStr, err)
 		}
 	}
-	
+
 	return userID
 }

@@ -22,6 +22,7 @@ import (
 	_ "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	_ "github.com/focusshifter/muxgoob/plugins/spotify"
 	_ "github.com/focusshifter/muxgoob/plugins/twitchstreams"
+	_ "github.com/focusshifter/muxgoob/plugins/version"
 )
 
 var token string

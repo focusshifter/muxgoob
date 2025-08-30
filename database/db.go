@@ -187,6 +187,16 @@ func Initialize() {
 			created_at INTEGER DEFAULT (strftime('%s', 'now'))
 		);
 
+		-- Spotify reviews table
+		CREATE TABLE IF NOT EXISTS spotify_reviews (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL,  -- 'album' or 'track'
+			item_key TEXT NOT NULL,  -- unique identifier for the item (spotify format)
+			review_url TEXT NOT NULL,  -- telegraph URL of the review
+			created_at INTEGER DEFAULT (strftime('%s', 'now')),
+			UNIQUE(type, item_key)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_messages_unixtime ON messages(unixtime);
 		CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 		CREATE INDEX IF NOT EXISTS idx_messages_media_group ON messages(media_group_id);
@@ -195,6 +205,7 @@ func Initialize() {
 		CREATE INDEX IF NOT EXISTS idx_birthday_notifications_username ON birthday_notifications(username);
 		CREATE INDEX IF NOT EXISTS idx_helix_streams_user_name ON helix_streams(user_name);
 		CREATE INDEX IF NOT EXISTS idx_stream_notifications_stream_id ON stream_notifications(stream_id);
+		CREATE INDEX IF NOT EXISTS idx_spotify_reviews_item ON spotify_reviews(type, item_key);
 	`)
 	if err != nil {
 		log.Fatal("[database] Failed to create tables:", err)

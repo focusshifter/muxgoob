@@ -184,7 +184,7 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
 	// Optionally generate and publish a funny review
 	if p.isReviewEnabled(&message.Chat.ID) {
-		if reviewURL := generateAndPublishReview(message.Chat.ID, "album", artistName, album.Name, year); reviewURL != "" {
+		if reviewURL := generateAndPublishReview(message.Chat.ID, "album", albumID, artistName, album.Name, year); reviewURL != "" {
 			caption = fmt.Sprintf("%s | [Рецензия от Губи](%s)", caption, reviewURL)
 		}
 	}

@@ -2,6 +2,7 @@ package spotify
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/registry"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
@@ -17,9 +19,15 @@ import (
 
 // generateAndPublishReview builds a review using LLMs and publishes it
 // Returns the Telegraph page URL or an empty string on failure
-func generateAndPublishReview(chatID int64, typ, artist, title, year string) string {
+func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year string) string {
 	if registry.Config.SpotifyReviewMicroblogAuth == "" {
 		return ""
+	}
+
+	// Check if we already have a review for this item using Spotify ID
+	if existingURL := getExistingReview(typ, spotifyID); existingURL != "" {
+		log.Printf("[spotify] Reusing existing review for %s ID %s: %s", typ, spotifyID, existingURL)
+		return existingURL
 	}
 
 	// Keep typing while we do our stuff
@@ -47,6 +55,13 @@ func generateAndPublishReview(chatID int64, typ, artist, title, year string) str
 		log.Printf("[spotify] Telegraph publish failed: %v", err)
 		return ""
 	}
+
+	// Save the review URL to database for future reuse
+	if err := saveReview(typ, spotifyID, pageURL); err != nil {
+		log.Printf("[spotify] Failed to save review to database: %v", err)
+		// Don't fail the operation, just log the error
+	}
+
 	return pageURL
 }
 
@@ -229,4 +244,31 @@ func withTyping(chatID int64) func() {
 		}
 	}()
 	return func() { close(done) }
+}
+
+// getExistingReview checks if we already have a review for this item
+func getExistingReview(typ, itemKey string) string {
+	var reviewURL string
+	err := database.DB.QueryRow(
+		"SELECT review_url FROM spotify_reviews WHERE type = ? AND item_key = ?",
+		typ, itemKey,
+	).Scan(&reviewURL)
+
+	if err == sql.ErrNoRows {
+		return ""
+	}
+	if err != nil {
+		log.Printf("[spotify] Failed to check for existing review: %v", err)
+		return ""
+	}
+	return reviewURL
+}
+
+// saveReview saves a review URL to the database for future reuse
+func saveReview(typ, itemKey, reviewURL string) error {
+	_, err := database.DB.Exec(
+		"INSERT OR REPLACE INTO spotify_reviews (type, item_key, review_url) VALUES (?, ?, ?)",
+		typ, itemKey, reviewURL,
+	)
+	return err
 }

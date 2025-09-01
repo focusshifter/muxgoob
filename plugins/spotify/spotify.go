@@ -121,13 +121,13 @@ func (p *SpotifyPlugin) isReviewEnabled(chatID *int64) bool {
 
 func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 	// Ensure we have a valid access token
-	if err := p.ensureAccessToken(); err != nil {
+	if err := p.EnsureAccessToken(); err != nil {
 		log.Printf("[spotify] Failed to get access token: %v", err)
 		return
 	}
 
 	// Fetch album data from Spotify API
-	album, err := p.fetchAlbum(albumID)
+	album, err := p.FetchAlbum(albumID)
 	if err != nil {
 		log.Printf("[spotify] Failed to fetch album %s: %v", albumID, err)
 		return
@@ -220,13 +220,13 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 
 func (p *SpotifyPlugin) processTrack(message *telebot.Message, trackID string) {
 	// Ensure we have a valid access token
-	if err := p.ensureAccessToken(); err != nil {
+	if err := p.EnsureAccessToken(); err != nil {
 		log.Printf("[spotify] Failed to get access token: %v", err)
 		return
 	}
 
 	// Fetch track data from Spotify API
-	track, err := p.fetchTrack(trackID)
+	track, err := p.FetchTrack(trackID)
 	if err != nil {
 		log.Printf("[spotify] Failed to fetch track %s: %v", trackID, err)
 		return
@@ -310,7 +310,7 @@ func (p *SpotifyPlugin) processTrack(message *telebot.Message, trackID string) {
 	}
 }
 
-func (p *SpotifyPlugin) ensureAccessToken() error {
+func (p *SpotifyPlugin) EnsureAccessToken() error {
 	// Check if token is still valid
 	if time.Now().Before(p.tokenExpiry) && p.accessToken != "" {
 		return nil
@@ -360,7 +360,7 @@ func (p *SpotifyPlugin) ensureAccessToken() error {
 	return nil
 }
 
-func (p *SpotifyPlugin) fetchAlbum(albumID string) (*SpotifyAlbum, error) {
+func (p *SpotifyPlugin) FetchAlbum(albumID string) (*SpotifyAlbum, error) {
 	url := fmt.Sprintf("%s/albums/%s", SpotifyAPIBaseURL, albumID)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -390,7 +390,7 @@ func (p *SpotifyPlugin) fetchAlbum(albumID string) (*SpotifyAlbum, error) {
 	return &album, nil
 }
 
-func (p *SpotifyPlugin) fetchTrack(trackID string) (*SpotifyTrack, error) {
+func (p *SpotifyPlugin) FetchTrack(trackID string) (*SpotifyTrack, error) {
 	url := fmt.Sprintf("%s/tracks/%s", SpotifyAPIBaseURL, trackID)
 
 	req, err := http.NewRequest("GET", url, nil)

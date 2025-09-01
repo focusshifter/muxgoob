@@ -225,6 +225,76 @@ func publishToTelegraph(artist, title, year, review string) (string, error) {
 	return result.Result.URL, nil
 }
 
+func editTelegraph(existingURL, artist, title, year, review string) error {
+	accessToken := registry.Config.SpotifyReviewMicroblogAuth
+	if accessToken == "" {
+		return fmt.Errorf("no telegraph access token configured")
+	}
+
+	// Extract path from the URL (e.g., "Article-Title-12-31" from "https://telegra.ph/Article-Title-12-31")
+	parts := strings.Split(existingURL, "/")
+	if len(parts) < 4 {
+		return fmt.Errorf("invalid telegraph URL format")
+	}
+	path := parts[len(parts)-1]
+
+	// Very simple paragraph node with the review text
+	type node struct {
+		Tag      string        `json:"tag"`
+		Children []interface{} `json:"children"`
+	}
+
+	content := []node{{
+		Tag:      "p",
+		Children: []interface{}{review},
+	}}
+	contentJSON, _ := json.Marshal(content)
+
+	var titleText string
+	if strings.TrimSpace(year) != "" {
+		titleText = fmt.Sprintf("%s — %s (%s)", artist, title, year)
+	} else {
+		titleText = fmt.Sprintf("%s — %s", artist, title)
+	}
+	
+	form := url.Values{}
+	form.Set("access_token", accessToken)
+	form.Set("path", path)
+	form.Set("title", titleText)
+	form.Set("author_name", "Губи")
+	form.Set("return_content", "false")
+	form.Set("content", string(contentJSON))
+
+	req, err := http.NewRequest("POST", "https://api.telegra.ph/editPage/"+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			URL string `json:"url"`
+		} `json:"result"`
+		Error string `json:"error"`
+	}
+	dec := json.NewDecoder(resp.Body)
+	if err := dec.Decode(&result); err != nil {
+		return err
+	}
+	if !result.OK {
+		return fmt.Errorf("telegraph error: %s", result.Error)
+	}
+	return nil
+}
+
 // withTyping continuously sends "typing" until the returned stop function is called
 func withTyping(chatID int64) func() {
 	chat := &telebot.Chat{ID: chatID}
@@ -271,4 +341,95 @@ func saveReview(typ, itemKey, reviewURL string) error {
 		typ, itemKey, reviewURL,
 	)
 	return err
+}
+
+// RegenerateReview regenerates a review for an existing Spotify item
+func RegenerateReview(chatID int64, spotifyID string) (string, error) {
+	// Check if we have an existing review
+	var reviewURL string
+	var itemType string
+	
+	// Try to find the item as an album first
+	err := database.DB.QueryRow(
+		"SELECT review_url FROM spotify_reviews WHERE item_key = ? AND type = 'album'",
+		spotifyID,
+	).Scan(&reviewURL)
+	
+	if err == sql.ErrNoRows {
+		// Try as a track
+		err = database.DB.QueryRow(
+			"SELECT review_url FROM spotify_reviews WHERE item_key = ? AND type = 'track'",
+			spotifyID,
+		).Scan(&reviewURL)
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("no existing review found for Spotify ID: %s", spotifyID)
+		}
+		itemType = "track"
+	} else if err != nil {
+		return "", fmt.Errorf("database error: %v", err)
+	} else {
+		itemType = "album"
+	}
+
+	// Keep typing while we do our stuff
+	stopTyping := withTyping(chatID)
+	defer stopTyping()
+	
+	// Fetch metadata from Spotify
+	p := &SpotifyPlugin{}
+	if err := p.EnsureAccessToken(); err != nil {
+		return "", fmt.Errorf("failed to get Spotify access token: %v", err)
+	}
+	
+	var artist, title, year string
+	
+	if itemType == "album" {
+		album, err := p.FetchAlbum(spotifyID)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch album from Spotify: %v", err)
+		}
+		
+		if len(album.Artists) > 0 {
+			artist = album.Artists[0].Name
+		}
+		title = album.Name
+		if len(album.ReleaseDate) >= 4 {
+			year = album.ReleaseDate[:4]
+		}
+	} else {
+		track, err := p.FetchTrack(spotifyID)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch track from Spotify: %v", err)
+		}
+		
+		if len(track.Artists) > 0 {
+			artist = track.Artists[0].Name
+		}
+		title = track.Name
+		if len(track.Album.ReleaseDate) >= 4 {
+			year = track.Album.ReleaseDate[:4]
+		}
+	}
+	
+	// Try to get grounded context
+	grounding := fetchPerplexityGrounding(artist, title, year)
+	
+	// Generate new review
+	prompt := buildSpotifyReviewPrompt(itemType, artist, title, year, grounding)
+	if prompt == "" {
+		return "", fmt.Errorf("failed to build review prompt")
+	}
+	
+	review := callChatModelForReview(&chatID, prompt)
+	if strings.TrimSpace(review) == "" {
+		return "", fmt.Errorf("failed to generate review")
+	}
+	
+	// Edit the existing Telegraph article
+	if err := editTelegraph(reviewURL, artist, title, year, review); err != nil {
+		return "", fmt.Errorf("failed to edit Telegraph article: %v", err)
+	}
+	
+	log.Printf("[spotify] Successfully regenerated review for %s ID %s: %s", itemType, spotifyID, reviewURL)
+	return reviewURL, nil
 }

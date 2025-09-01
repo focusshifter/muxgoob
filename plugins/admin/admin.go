@@ -179,7 +179,7 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify regenerate <spotify_id>")
 		return
 	}
 
@@ -298,7 +298,22 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 		default:
 			bot.Send(message.Chat, "Unknown desc command. Use: enable or disable")
 		}
+	case "regenerate":
+		if len(parts) < 3 {
+			bot.Send(message.Chat, "Usage: !spotify regenerate <spotify_id>")
+			return
+		}
+		spotifyID := parts[2]
+		
+		// Call the regenerate function
+		reviewURL, err := spotify.RegenerateReview(message.Chat.ID, spotifyID)
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Failed to regenerate review: %v", err))
+			return
+		}
+		
+		bot.Send(message.Chat, fmt.Sprintf("✅ Review regenerated successfully: %s", reviewURL))
 	default:
-		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status, desc")
+		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status, desc, regenerate")
 	}
 }

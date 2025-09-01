@@ -86,7 +86,7 @@ func fetchPerplexityGrounding(artist, title, year string) string {
 			{Role: openai.ChatMessageRoleUser, Content: query},
 		},
 		Temperature: float32(0.2),
-		MaxTokens:   300,
+		MaxTokens:   600,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		if err != nil {
@@ -152,7 +152,7 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
 		Temperature: float32(0.8),
-		MaxTokens:   500,
+		MaxTokens:   1500,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		if err != nil {

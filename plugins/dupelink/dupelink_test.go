@@ -255,6 +255,144 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "YouTube URL normalization - youtu.be duplicate",
+			message: &telebot.Message{
+				Text: "Check out https://youtu.be/hbO1z13WP8o?si=WEuRHV_zJEOTT867",
+				Entities: []telebot.MessageEntity{
+					{
+						Type:   "url",
+						Offset: 10,
+						Length: 48,
+					},
+				},
+				Sender: &telebot.User{
+					ID:        789,
+					Username:  "another_user",
+					FirstName: "Another",
+					LastName:  "User",
+				},
+				Chat: &telebot.Chat{
+					ID: 456,
+				},
+			},
+			expectedCalls: true,
+			setup: func() {
+				// Insert a YouTube URL in www.youtube.com format
+				_, err := mockDB.Exec(`
+					INSERT INTO dupe_links (url, message_id, sender_id, chat_id, unixtime)
+					VALUES ('youtube.com/v/hbO1z13WP8o', 1, 123, 456, ?);
+				`, time.Now().Unix()-3600)
+				if err != nil {
+					t.Fatalf("Failed to insert test YouTube link: %v", err)
+				}
+				mockBot.SendCalled = false
+			},
+			verify: func(t *testing.T) {
+				if !mockBot.SendCalled {
+					t.Error("Expected Send to be called for duplicate YouTube URL")
+				}
+
+				// Verify the message contains the expected text
+				message, ok := mockBot.SendWhat.(string)
+				if !ok {
+					t.Error("Expected Send to be called with a string message")
+				}
+				if message == "" || !contains(message, "already posted") || !contains(message, "Test User") {
+					t.Errorf("Unexpected message: %s", message)
+				}
+			},
+		},
+		{
+			name: "YouTube URL normalization - www.youtube.com duplicate",
+			message: &telebot.Message{
+				Text: "Check out https://www.youtube.com/watch?v=hbO1z13WP8o",
+				Entities: []telebot.MessageEntity{
+					{
+						Type:   "url",
+						Offset: 10,
+						Length: 43,
+					},
+				},
+				Sender: &telebot.User{
+					ID:        789,
+					Username:  "another_user",
+					FirstName: "Another",
+					LastName:  "User",
+				},
+				Chat: &telebot.Chat{
+					ID: 456,
+				},
+			},
+			expectedCalls: true,
+			setup: func() {
+				// Insert a YouTube URL in youtu.be format
+				_, err := mockDB.Exec(`
+					INSERT INTO dupe_links (url, message_id, sender_id, chat_id, unixtime)
+					VALUES ('youtube.com/v/hbO1z13WP8o', 1, 123, 456, ?);
+				`, time.Now().Unix()-3600)
+				if err != nil {
+					t.Fatalf("Failed to insert test YouTube link: %v", err)
+				}
+				mockBot.SendCalled = false
+			},
+			verify: func(t *testing.T) {
+				if !mockBot.SendCalled {
+					t.Error("Expected Send to be called for duplicate YouTube URL")
+				}
+
+				// Verify the message contains the expected text
+				message, ok := mockBot.SendWhat.(string)
+				if !ok {
+					t.Error("Expected Send to be called with a string message")
+				}
+				if message == "" || !contains(message, "already posted") || !contains(message, "Test User") {
+					t.Errorf("Unexpected message: %s", message)
+				}
+			},
+		},
+		{
+			name: "YouTube URL normalization - new youtu.be URL",
+			message: &telebot.Message{
+				Text: "Check out https://youtu.be/newVideo123",
+				Entities: []telebot.MessageEntity{
+					{
+						Type:   "url",
+						Offset: 10,
+						Length: 28,
+					},
+				},
+				Sender: &telebot.User{
+					ID:        789,
+					Username:  "another_user",
+					FirstName: "Another",
+					LastName:  "User",
+				},
+				Chat: &telebot.Chat{
+					ID: 456,
+				},
+				Unixtime: time.Now().Unix(),
+			},
+			expectedCalls: false,
+			setup: func() {
+				mockBot.SendCalled = false
+			},
+			verify: func(t *testing.T) {
+				if mockBot.SendCalled {
+					t.Error("Expected Send not to be called for new URL")
+				}
+
+				// Verify the link was saved with normalized format
+				var count int
+				err := mockDB.QueryRow("SELECT COUNT(*) FROM dupe_links WHERE url = 'youtube.com/v/newVideo123'").Scan(&count)
+				if err != nil {
+					t.Fatalf("Failed to query dupe_links: %v", err)
+				}
+				if count != 1 {
+					t.Errorf("Expected 1 dupe_link record for 'youtube.com/v/newVideo123', got %d", count)
+				}
+			},
+		},
 	}
 
 	// Run test cases

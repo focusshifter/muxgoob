@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/tucnak/telebot"
@@ -48,7 +49,8 @@ func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 			parsedURL.RawQuery = ""
 		}
 
-		currentURL := parsedURL.Hostname() + parsedURL.RequestURI()
+		// Normalize YouTube URLs to extract video ID
+		currentURL := normalizeURL(parsedURL)
 
 		for _, ignoredHostname := range registry.Config.DupeIgnoredDomains {
 			if parsedURL.Hostname() == ignoredHostname {
@@ -74,6 +76,68 @@ func getURLs(message *telebot.Message) []string {
 	}
 
 	return urls
+}
+
+// normalizeURL normalizes URLs for duplicate detection
+// Handles special cases like YouTube URLs with different formats
+func normalizeURL(parsedURL *url.URL) string {
+	hostname := parsedURL.Hostname()
+	
+	// Normalize YouTube URLs
+	if isYouTubeDomain(hostname) {
+		videoID := extractYouTubeVideoID(parsedURL)
+		if videoID != "" {
+			// Normalize to consistent format: youtube.com/v/VIDEO_ID
+			return "youtube.com/v/" + videoID
+		}
+	}
+	
+	// Default: hostname + request URI
+	return hostname + parsedURL.RequestURI()
+}
+
+// isYouTubeDomain checks if the hostname is a YouTube domain
+func isYouTubeDomain(hostname string) bool {
+	hostname = strings.ToLower(hostname)
+	return hostname == "youtube.com" ||
+		hostname == "www.youtube.com" ||
+		hostname == "m.youtube.com" ||
+		hostname == "youtu.be"
+}
+
+// extractYouTubeVideoID extracts the video ID from various YouTube URL formats
+func extractYouTubeVideoID(parsedURL *url.URL) string {
+	hostname := strings.ToLower(parsedURL.Hostname())
+	
+	// Handle youtu.be/VIDEO_ID format
+	if hostname == "youtu.be" {
+		path := strings.TrimPrefix(parsedURL.Path, "/")
+		// Remove any query parameters from the path (shouldn't happen, but be safe)
+		if idx := strings.Index(path, "?"); idx != -1 {
+			path = path[:idx]
+		}
+		if path != "" {
+			return path
+		}
+	}
+	
+	// Handle youtube.com/watch?v=VIDEO_ID format
+	if hostname == "youtube.com" || hostname == "www.youtube.com" || hostname == "m.youtube.com" {
+		videoID := parsedURL.Query().Get("v")
+		if videoID != "" {
+			return videoID
+		}
+		// Also handle /embed/VIDEO_ID and /v/VIDEO_ID formats
+		path := strings.TrimPrefix(parsedURL.Path, "/")
+		if strings.HasPrefix(path, "embed/") {
+			return strings.TrimPrefix(path, "embed/")
+		}
+		if strings.HasPrefix(path, "v/") {
+			return strings.TrimPrefix(path, "v/")
+		}
+	}
+	
+	return ""
 }
 
 func reactToURL(currentURL string, message *telebot.Message) {

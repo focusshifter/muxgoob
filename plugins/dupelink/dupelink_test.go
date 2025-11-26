@@ -281,7 +281,7 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 				// Insert a YouTube URL in www.youtube.com format
 				_, err := mockDB.Exec(`
 					INSERT INTO dupe_links (url, message_id, sender_id, chat_id, unixtime)
-					VALUES ('youtube.com/v/hbO1z13WP8o', 1, 123, 456, ?);
+					VALUES ('youtube.com/watch?v=hbO1z13WP8o', 1, 123, 456, ?);
 				`, time.Now().Unix()-3600)
 				if err != nil {
 					t.Fatalf("Failed to insert test YouTube link: %v", err)
@@ -329,7 +329,7 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 				// Insert a YouTube URL in youtu.be format
 				_, err := mockDB.Exec(`
 					INSERT INTO dupe_links (url, message_id, sender_id, chat_id, unixtime)
-					VALUES ('youtube.com/v/hbO1z13WP8o', 1, 123, 456, ?);
+					VALUES ('youtube.com/watch?v=hbO1z13WP8o', 1, 123, 456, ?);
 				`, time.Now().Unix()-3600)
 				if err != nil {
 					t.Fatalf("Failed to insert test YouTube link: %v", err)
@@ -384,12 +384,12 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 
 				// Verify the link was saved with normalized format
 				var count int
-				err := mockDB.QueryRow("SELECT COUNT(*) FROM dupe_links WHERE url = 'youtube.com/v/newVideo123'").Scan(&count)
+				err := mockDB.QueryRow("SELECT COUNT(*) FROM dupe_links WHERE url = 'youtube.com/watch?v=newVideo123'").Scan(&count)
 				if err != nil {
 					t.Fatalf("Failed to query dupe_links: %v", err)
 				}
 				if count != 1 {
-					t.Errorf("Expected 1 dupe_link record for 'youtube.com/v/newVideo123', got %d", count)
+					t.Errorf("Expected 1 dupe_link record for 'youtube.com/watch?v=newVideo123', got %d", count)
 				}
 			},
 		},

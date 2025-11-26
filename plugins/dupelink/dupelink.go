@@ -87,8 +87,8 @@ func normalizeURL(parsedURL *url.URL) string {
 	if isYouTubeDomain(hostname) {
 		videoID := extractYouTubeVideoID(parsedURL)
 		if videoID != "" {
-			// Normalize to consistent format: youtube.com/v/VIDEO_ID
-			return "youtube.com/v/" + videoID
+			// Normalize to consistent format: youtube.com/watch?v=VIDEO_ID
+			return "youtube.com/watch?v=" + videoID
 		}
 	}
 	

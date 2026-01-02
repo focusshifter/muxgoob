@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -336,6 +337,49 @@ func generateChatGptHistory(messages []telebot.Message) string {
 	return history
 }
 
+func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, botID int, currentMessage *telebot.Message) string {
+	var prefill strings.Builder
+
+	if strings.TrimSpace(systemPrompt) != "" {
+		prefill.WriteString(systemPrompt)
+		prefill.WriteString("\n\n")
+	}
+
+	prefill.WriteString("Prefill:\n")
+
+	for _, message := range messages {
+		if currentMessage != nil && message.ID == currentMessage.ID {
+			continue
+		}
+		if strings.TrimSpace(message.Text) == "" {
+			continue
+		}
+		name := message.Sender.Username
+		if name == "" {
+			name = strings.TrimSpace(message.Sender.FirstName + " " + message.Sender.LastName)
+		}
+		role := "{{user}}"
+		if botID != 0 && message.Sender.ID == botID {
+			role = "{{char}}"
+		}
+		prefill.WriteString(fmt.Sprintf("%s (%s): %s\n", role, name, message.Text))
+	}
+
+	currentName := ""
+	if currentMessage != nil && currentMessage.Sender != nil {
+		currentName = currentMessage.Sender.Username
+		if currentName == "" {
+			currentName = strings.TrimSpace(currentMessage.Sender.FirstName + " " + currentMessage.Sender.LastName)
+		}
+	}
+	if currentName != "" {
+		prefill.WriteString(fmt.Sprintf("{{user}} (%s): %s\n", currentName, questionText))
+	} else {
+		prefill.WriteString(fmt.Sprintf("{{user}}: %s\n", questionText))
+	}
+	return prefill.String()
+}
+
 // askChatGpt is a variable function that can be replaced in tests
 var askChatGpt = func(message *telebot.Message) string {
 	// Safety check for test environment
@@ -392,17 +436,24 @@ var askChatGpt = func(message *telebot.Message) string {
 	log.Printf("ChatGPT request: system %v", systemMessage)
 	log.Printf("ChatGPT request: user %v", userMessage)
 
+	botID := 0
+	if registry.Bot != nil && registry.Bot.Bot != nil {
+		botID = registry.Bot.Bot.Me.ID
+	}
+
 	if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference
 		if message.Chat == nil {
 			log.Printf("[reply] Message.Chat is nil when retrieving history")
+			userMessage = buildNoAssPrefill(nil, userMessage, systemMessage, botID, message)
 		} else {
-			history := generateChatGptHistory(retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth))
+			historyMessages := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
+			userMessage = buildNoAssPrefill(historyMessages, userMessage, systemMessage, botID, message)
 
-			log.Printf("[reply] ChatGPT request: history %v", history)
-
-			userMessage += "\n\nВ чате произошел следующий диалог: \n" + history
+			log.Printf("[reply] ChatGPT request: noass prefill %v", userMessage)
 		}
+	} else {
+		userMessage = buildNoAssPrefill(nil, question, systemMessage, botID, message)
 	}
 
 	resp, err := client.CreateChatCompletion(
@@ -415,10 +466,6 @@ var askChatGpt = func(message *telebot.Message) string {
 			PresencePenalty:  0.2,
 
 			Messages: []openai.ChatCompletionMessage{
-				{
-					Role:    openai.ChatMessageRoleSystem,
-					Content: systemMessage,
-				},
 				{
 					Role:    openai.ChatMessageRoleUser,
 					Content: userMessage,

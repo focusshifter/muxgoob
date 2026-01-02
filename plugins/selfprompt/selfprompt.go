@@ -495,9 +495,9 @@ func (p *SelfPromptPlugin) generateNewPrompt(history string, currentPrompt strin
 
 	client := openai.NewClientWithConfig(config)
 
-	systemMsg := `You are a prompt engineer tasked with creating a system prompt for a chat bot.`
+	systemMsg := `You refine bot system prompts based on chat context.`
 	userMsg := `
-	You are a prompt engineer tasked with creating and refining a system prompt for a chat bot. Analyze the provided chat history and refine the current system prompt to produce a concise, informative new prompt that:  
+	Analyze the provided chat history and refine the current system prompt to produce a concise, informative new bot system prompt that:
 1. Identifies key discussion topics from the chat history.  
 2. For every chat member:  
    - Assesses user relationships, personality traits, interests, and preferences.  
@@ -508,7 +508,7 @@ func (p *SelfPromptPlugin) generateNewPrompt(history string, currentPrompt strin
 
 Do not skip ANY chat member. Do not remove ANY existing chat members from the result even of they are inactive.
 
-Output only the new prompt text, starting with the system prompt, followed by discussion topics, and concluding with usernames and their traits.
+Output only the new bot system prompt text. Do not include meta-instructions, role labels, or phrases like "You are a prompt engineer".
 
 **Discussion Topics:**  
 - [List key topics from chat history, e.g., "Programming languages", "Speed and performance"]  

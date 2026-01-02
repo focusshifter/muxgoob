@@ -283,9 +283,9 @@ func generateNewPrompt(history string, currentPrompt string) string {
 
 	client := openai.NewClientWithConfig(config)
 
-	systemMsg := `You are a prompt engineer tasked with creating a system prompt for a chat bot.`
+	systemMsg := `You refine bot system prompts based on chat context.`
 	userMsg := `
-	You are a prompt engineer tasked with creating and refining a system prompt for a chat bot. Analyze the provided chat history and refine the current system prompt to produce a concise, informative new prompt that:  
+	Analyze the provided chat history and refine the current system prompt to produce a concise, informative new bot system prompt that:  
 1. Identifies key discussion topics from the chat history.  
 2. For every chat member:  
    - Assesses user relationships, personality traits, interests, and preferences.  
@@ -293,7 +293,7 @@ func generateNewPrompt(history string, currentPrompt string) string {
 3. Preserves and refines critical personality traits or instructions from the current prompt, such as analytical precision and prompt engineering focus.  
 4. Ensures clarity and brevity.  
 
-Output only the new prompt text, starting with the system prompt, followed by discussion topics, and concluding with usernames and their traits.
+Output only the new bot system prompt text. Do not include meta-instructions, role labels, or phrases like "You are a prompt engineer".
 Use the main language of the chat, such as English or Russian.
 
 **Discussion Topics:**  

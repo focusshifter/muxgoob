@@ -129,9 +129,10 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 		}
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		model = registry.GetAiModel(chatID)
-		if strings.TrimSpace(model) == "" {
-			model = "deepseek/deepseek-chat"
+		model = strings.TrimSpace(registry.GetAiModel(chatID))
+		model = strings.TrimSuffix(model, ":online")
+		if model == "" {
+			model = "deepseek/deepseek-chat-v3.1"
 		}
 	} else {
 		if registry.Config.OpenaiApiKey == "" {

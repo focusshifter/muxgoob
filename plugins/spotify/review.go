@@ -143,7 +143,7 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 
 	client := openai.NewClientWithConfig(config)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{

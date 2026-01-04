@@ -152,7 +152,6 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 			{Role: openai.ChatMessageRoleUser, Content: prompt},
 		},
 		Temperature: float32(0.8),
-		MaxTokens:   1500,
 	})
 	if err != nil || len(resp.Choices) == 0 {
 		if err != nil {

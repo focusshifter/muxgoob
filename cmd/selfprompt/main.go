@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -208,7 +209,7 @@ func retrieveHistoryBatch(chatID int64, limit int, offset int) []telebot.Message
 // This is kept for backward compatibility
 func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	rows, err := database.DB.Query(
-		`SELECT data FROM messages 
+		`SELECT id, reply_to_message_id, data FROM messages 
 		WHERE chat_id = ? 
 		ORDER BY unixtime DESC LIMIT ?`,
 		chatID, messageCount)
@@ -219,9 +220,13 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	defer rows.Close()
 
 	var messages []telebot.Message
+	existingIDs := make(map[int]struct{})
+	replyParentIDs := make(map[int]struct{})
 	for rows.Next() {
+		var id int
+		var replyID sql.NullInt64
 		var data string
-		if err := rows.Scan(&data); err != nil {
+		if err := rows.Scan(&id, &replyID, &data); err != nil {
 			log.Printf("Error scanning message: %v", err)
 			continue
 		}
@@ -231,7 +236,20 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 			log.Printf("Error unmarshaling message: %v", err)
 			continue
 		}
+		existingIDs[id] = struct{}{}
+		if replyID.Valid {
+			replyParentIDs[int(replyID.Int64)] = struct{}{}
+		}
 		messages = append(messages, msg)
+	}
+
+	for id := range existingIDs {
+		delete(replyParentIDs, id)
+	}
+
+	if len(replyParentIDs) > 0 {
+		parentMessages := retrieveMessagesByIDs(database.DB, chatID, replyParentIDs)
+		messages = append(messages, parentMessages...)
 	}
 
 	// Sort by timestamp for consistent order
@@ -240,6 +258,54 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	})
 
 	log.Printf("Retrieved %v messages", len(messages))
+
+	return messages
+}
+
+func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []telebot.Message {
+	if len(idSet) == 0 {
+		return nil
+	}
+
+	ids := make([]int, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	query := fmt.Sprintf(
+		`SELECT data FROM messages WHERE chat_id = ? AND id IN (%s)`,
+		placeholders,
+	)
+
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, chatID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("Error retrieving parent messages: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var messages []telebot.Message
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			log.Printf("Error scanning parent message: %v", err)
+			continue
+		}
+
+		var msg telebot.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			log.Printf("Error unmarshaling parent message: %v", err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
 
 	return messages
 }

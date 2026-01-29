@@ -1,6 +1,7 @@
 package reply
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/tucnak/telebot"
@@ -349,5 +350,79 @@ func TestReplyPlugin_Process(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRetrieveHistoryForChat_IncludesReplyParents(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create messages table: %v", err)
+	}
+
+	chatID := int64(100)
+	parent := telebot.Message{
+		ID:       10,
+		Unixtime: 100,
+		Chat:     &telebot.Chat{ID: chatID},
+		Sender:   &telebot.User{Username: "parent_user"},
+		Text:     "Parent message",
+	}
+	child := telebot.Message{
+		ID:       11,
+		Unixtime: 200,
+		Chat:     &telebot.Chat{ID: chatID},
+		Sender:   &telebot.User{Username: "child_user"},
+		Text:     "Child message",
+		ReplyTo:  &parent,
+	}
+
+	parentData, err := json.Marshal(parent)
+	if err != nil {
+		t.Fatalf("Failed to marshal parent message: %v", err)
+	}
+	childData, err := json.Marshal(child)
+	if err != nil {
+		t.Fatalf("Failed to marshal child message: %v", err)
+	}
+
+	_, err = mockDB.Exec(
+		`INSERT INTO messages (id, chat_id, reply_to_message_id, unixtime, data) VALUES (?, ?, ?, ?, ?)`,
+		parent.ID, chatID, nil, parent.Unixtime, string(parentData),
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert parent message: %v", err)
+	}
+	_, err = mockDB.Exec(
+		`INSERT INTO messages (id, chat_id, reply_to_message_id, unixtime, data) VALUES (?, ?, ?, ?, ?)`,
+		child.ID, chatID, parent.ID, child.Unixtime, string(childData),
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert child message: %v", err)
+	}
+
+	originalDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() {
+		sqliteDb = originalDB
+	}()
+
+	history := retrieveHistoryForChat(chatID, 1)
+	if len(history) != 2 {
+		t.Fatalf("Expected 2 messages (child + parent), got %d", len(history))
+	}
+	if history[0].ID != parent.ID || history[1].ID != child.ID {
+		t.Fatalf("Expected parent then child order, got IDs %d and %d", history[0].ID, history[1].ID)
 	}
 }

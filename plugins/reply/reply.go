@@ -285,7 +285,7 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	}
 
 	rows, err := sqliteDb.Query(
-		`SELECT data FROM messages 
+		`SELECT id, reply_to_message_id, data FROM messages 
 		WHERE chat_id = ? 
 		ORDER BY unixtime DESC LIMIT ?`,
 		chatID, messageCount)
@@ -296,9 +296,13 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	defer rows.Close()
 
 	var messages []telebot.Message
+	existingIDs := make(map[int]struct{})
+	replyParentIDs := make(map[int]struct{})
 	for rows.Next() {
+		var id int
+		var replyID sql.NullInt64
 		var data string
-		if err := rows.Scan(&data); err != nil {
+		if err := rows.Scan(&id, &replyID, &data); err != nil {
 			log.Printf("[reply] Error scanning message: %v", err)
 			continue
 		}
@@ -308,7 +312,20 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 			log.Printf("[reply] Error unmarshaling message: %v", err)
 			continue
 		}
+		existingIDs[id] = struct{}{}
+		if replyID.Valid {
+			replyParentIDs[int(replyID.Int64)] = struct{}{}
+		}
 		messages = append(messages, msg)
+	}
+
+	for id := range existingIDs {
+		delete(replyParentIDs, id)
+	}
+
+	if len(replyParentIDs) > 0 {
+		parentMessages := retrieveMessagesByIDs(sqliteDb, chatID, replyParentIDs)
+		messages = append(messages, parentMessages...)
 	}
 
 	// Sort by ID for consistent order
@@ -319,6 +336,119 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 	log.Printf("[reply] Retrieved %v messages", len(messages))
 
 	return messages
+}
+
+func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []telebot.Message {
+	if len(idSet) == 0 {
+		return nil
+	}
+
+	ids := make([]int, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	query := fmt.Sprintf(
+		`SELECT data FROM messages WHERE chat_id = ? AND id IN (%s)`,
+		placeholders,
+	)
+
+	args := make([]interface{}, 0, len(ids)+1)
+	args = append(args, chatID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		log.Printf("[reply] Error retrieving parent messages: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var messages []telebot.Message
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			log.Printf("[reply] Error scanning parent message: %v", err)
+			continue
+		}
+
+		var msg telebot.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			log.Printf("[reply] Error unmarshaling parent message: %v", err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages
+}
+
+func retrieveChatMembers(chatID int64, maxMembers int) []string {
+	if sqliteDb == nil {
+		log.Printf("[reply] Database not initialized when retrieving members")
+		return nil
+	}
+
+	var count int
+	err := sqliteDb.QueryRow(
+		`SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id = ?`,
+		chatID,
+	).Scan(&count)
+	if err != nil {
+		log.Printf("[reply] Error counting chat members: %v", err)
+		return nil
+	}
+	if count == 0 {
+		return nil
+	}
+
+	query := `
+		SELECT u.username, u.first_name, u.last_name, m.sender_id
+		FROM messages m
+		JOIN users u ON u.id = m.sender_id
+		WHERE m.chat_id = ?
+		GROUP BY m.sender_id
+		ORDER BY MAX(m.unixtime) DESC`
+	var rows *sql.Rows
+	if count > maxMembers {
+		query += " LIMIT ?"
+		rows, err = sqliteDb.Query(query, chatID, maxMembers)
+	} else {
+		rows, err = sqliteDb.Query(query, chatID)
+	}
+	if err != nil {
+		log.Printf("[reply] Error retrieving chat members: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var members []string
+	for rows.Next() {
+		var username, firstName, lastName sql.NullString
+		var senderID int64
+		if err := rows.Scan(&username, &firstName, &lastName, &senderID); err != nil {
+			log.Printf("[reply] Error scanning chat member: %v", err)
+			continue
+		}
+		name := strings.TrimSpace(strings.Join([]string{firstName.String, lastName.String}, " "))
+		if username.Valid && username.String != "" {
+			members = append(members, username.String)
+		} else if name != "" {
+			members = append(members, name)
+		} else {
+			members = append(members, fmt.Sprintf("user_%d", senderID))
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("[reply] Error iterating chat members: %v", err)
+		return nil
+	}
+
+	return members
 }
 
 func generateChatGptHistory(messages []telebot.Message) string {
@@ -337,11 +467,17 @@ func generateChatGptHistory(messages []telebot.Message) string {
 	return history
 }
 
-func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, botID int, currentMessage *telebot.Message) string {
+func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, botID int, currentMessage *telebot.Message, members []string) string {
 	var prefill strings.Builder
 
 	if strings.TrimSpace(systemPrompt) != "" {
 		prefill.WriteString(systemPrompt)
+		prefill.WriteString("\n\n")
+	}
+
+	if len(members) > 0 {
+		prefill.WriteString("Chat members: ")
+		prefill.WriteString(strings.Join(members, ", "))
 		prefill.WriteString("\n\n")
 	}
 
@@ -441,19 +577,24 @@ var askChatGpt = func(message *telebot.Message) string {
 		botID = registry.Bot.Bot.Me.ID
 	}
 
+	var members []string
+	if message.Chat != nil {
+		members = retrieveChatMembers(message.Chat.ID, 50)
+	}
+
 	if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference
 		if message.Chat == nil {
 			log.Printf("[reply] Message.Chat is nil when retrieving history")
-			userMessage = buildNoAssPrefill(nil, userMessage, systemMessage, botID, message)
+			userMessage = buildNoAssPrefill(nil, userMessage, systemMessage, botID, message, members)
 		} else {
 			historyMessages := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
-			userMessage = buildNoAssPrefill(historyMessages, userMessage, systemMessage, botID, message)
+			userMessage = buildNoAssPrefill(historyMessages, userMessage, systemMessage, botID, message, members)
 
 			log.Printf("[reply] ChatGPT request: noass prefill %v", userMessage)
 		}
 	} else {
-		userMessage = buildNoAssPrefill(nil, question, systemMessage, botID, message)
+		userMessage = buildNoAssPrefill(nil, question, systemMessage, botID, message, members)
 	}
 
 	resp, err := client.CreateChatCompletion(

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -555,6 +557,8 @@ func buildSpotifyReviewContext(messages []telebot.Message) string {
 	return strings.TrimSpace(out.String())
 }
 
+var fetchTelegraphReviewText = realFetchTelegraphReviewText
+
 func extractSpotifyAlbumIDs(messages []telebot.Message) []string {
 	seen := make(map[string]struct{})
 	var ordered []string
@@ -589,8 +593,8 @@ func lookupSpotifyReviewTexts(albumIDs []string) map[string]string {
 
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(albumIDs)), ",")
 	query := fmt.Sprintf(
-		`SELECT item_key, review_text FROM spotify_reviews
-		WHERE type = 'album' AND item_key IN (%s) AND review_text IS NOT NULL AND review_text != ''`,
+		`SELECT item_key, review_url, review_text FROM spotify_reviews
+		WHERE type = 'album' AND item_key IN (%s)`,
 		placeholders,
 	)
 
@@ -604,21 +608,121 @@ func lookupSpotifyReviewTexts(albumIDs []string) map[string]string {
 		log.Printf("[reply] Error retrieving spotify reviews: %v", err)
 		return nil
 	}
-	defer rows.Close()
 
 	reviewTexts := make(map[string]string)
+	pendingUpdates := make(map[string]string)
 	for rows.Next() {
-		var itemKey, reviewText string
-		if err := rows.Scan(&itemKey, &reviewText); err != nil {
+		var itemKey, reviewURL, reviewText string
+		if err := rows.Scan(&itemKey, &reviewURL, &reviewText); err != nil {
 			log.Printf("[reply] Error scanning spotify review: %v", err)
 			continue
 		}
-		reviewTexts[itemKey] = reviewText
+		reviewText = strings.TrimSpace(reviewText)
+		if reviewText == "" && strings.TrimSpace(reviewURL) != "" {
+			fetched := strings.TrimSpace(fetchTelegraphReviewText(reviewURL))
+			if fetched != "" {
+				reviewText = fetched
+				pendingUpdates[itemKey] = fetched
+			}
+		}
+		if reviewText != "" {
+			reviewTexts[itemKey] = reviewText
+		}
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("[reply] Error iterating spotify reviews: %v", err)
 	}
+	if err := rows.Close(); err != nil {
+		log.Printf("[reply] Error closing spotify review rows: %v", err)
+	}
+	for itemKey, reviewText := range pendingUpdates {
+		if err := saveSpotifyReviewText(itemKey, reviewText); err != nil {
+			log.Printf("[reply] Error saving spotify review text: %v", err)
+		}
+	}
 	return reviewTexts
+}
+
+func saveSpotifyReviewText(itemKey, reviewText string) error {
+	if sqliteDb == nil || strings.TrimSpace(reviewText) == "" {
+		return nil
+	}
+	_, err := sqliteDb.Exec(
+		"UPDATE spotify_reviews SET review_text = ? WHERE type = 'album' AND item_key = ?",
+		reviewText, itemKey,
+	)
+	return err
+}
+
+func realFetchTelegraphReviewText(reviewURL string) string {
+	parsed, err := url.Parse(reviewURL)
+	if err != nil {
+		return ""
+	}
+	path := strings.Trim(parsed.Path, "/")
+	if path == "" {
+		return ""
+	}
+	apiURL := fmt.Sprintf("https://api.telegra.ph/getPage/%s?return_content=true", url.PathEscape(path))
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return ""
+	}
+
+	httpClient := &http.Client{Timeout: 5 * time.Second}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Content []interface{} `json:"content"`
+		} `json:"result"`
+		Error string `json:"error"`
+	}
+	dec := json.NewDecoder(resp.Body)
+	if err := dec.Decode(&result); err != nil {
+		return ""
+	}
+	if !result.OK {
+		return ""
+	}
+	text := strings.TrimSpace(extractTelegraphText(result.Result.Content))
+	if text == "" {
+		return ""
+	}
+	return truncateText(text, 1200)
+}
+
+func extractTelegraphText(node interface{}) string {
+	switch v := node.(type) {
+	case string:
+		return v
+	case []interface{}:
+		var parts []string
+		for _, item := range v {
+			text := strings.TrimSpace(extractTelegraphText(item))
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	case map[string]interface{}:
+		if children, ok := v["children"]; ok {
+			return extractTelegraphText(children)
+		}
+	}
+	return ""
+}
+
+func truncateText(text string, maxChars int) string {
+	if maxChars <= 0 || len(text) <= maxChars {
+		return text
+	}
+	return text[:maxChars] + "…"
 }
 
 // askChatGpt is a variable function that can be replaced in tests

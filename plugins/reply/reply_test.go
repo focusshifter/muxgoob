@@ -474,3 +474,67 @@ func TestBuildSpotifyReviewContext_UsesStoredReviewText(t *testing.T) {
 		t.Fatalf("Expected review text in context, got: %s", context)
 	}
 }
+
+func TestBuildSpotifyReviewContext_FetchesReviewWhenMissing(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS spotify_reviews (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL,
+			item_key TEXT NOT NULL,
+			review_url TEXT NOT NULL,
+			review_text TEXT,
+			created_at INTEGER,
+			UNIQUE(type, item_key)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create spotify_reviews table: %v", err)
+	}
+
+	_, err = mockDB.Exec(
+		"INSERT INTO spotify_reviews (type, item_key, review_url, review_text) VALUES (?, ?, ?, ?)",
+		"album", "xyz789", "https://telegra.ph/test", "",
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert review: %v", err)
+	}
+
+	originalDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() {
+		sqliteDb = originalDB
+	}()
+
+	originalFetch := fetchTelegraphReviewText
+	fetchTelegraphReviewText = func(_ string) string {
+		return "Recovered review text"
+	}
+	defer func() {
+		fetchTelegraphReviewText = originalFetch
+	}()
+
+	messages := []telebot.Message{
+		{
+			Text: "https://open.spotify.com/album/xyz789",
+		},
+	}
+	context := buildSpotifyReviewContext(messages)
+	if !strings.Contains(context, "Recovered review text") {
+		t.Fatalf("Expected recovered review text in context, got: %s", context)
+	}
+
+	var savedText string
+	err = mockDB.QueryRow(
+		"SELECT review_text FROM spotify_reviews WHERE type = 'album' AND item_key = ?",
+		"xyz789",
+	).Scan(&savedText)
+	if err != nil {
+		t.Fatalf("Failed to query saved review text: %v", err)
+	}
+	if savedText != "Recovered review text" {
+		t.Fatalf("Expected saved review text, got: %s", savedText)
+	}
+}

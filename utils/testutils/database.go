@@ -16,6 +16,9 @@ func SetupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("Failed to open in-memory SQLite database: %v", err)
 	}
+	// Ensure all queries use the same connection for in-memory DBs.
+	mockDB.SetMaxOpenConns(1)
+	mockDB.SetMaxIdleConns(1)
 
 	return mockDB
 }

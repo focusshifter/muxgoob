@@ -29,6 +29,7 @@
 - Use the standard `testing` package. Name tests `TestXxx` in `*_test.go`.
 - For DB interactions, prefer `utils/testutils.SetupTestDB(t)` to isolate state.
 - Add tests for new behavior and edge cases; ensure `go test ./...` passes.
+- Always run `go test ./...` after making changes.
 
 ## Commit & Pull Request Guidelines
 - Commits: short, imperative messages (e.g., “Add spotify review history”).

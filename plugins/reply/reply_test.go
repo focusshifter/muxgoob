@@ -2,6 +2,7 @@ package reply
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/tucnak/telebot"
@@ -424,5 +425,52 @@ func TestRetrieveHistoryForChat_IncludesReplyParents(t *testing.T) {
 	}
 	if history[0].ID != parent.ID || history[1].ID != child.ID {
 		t.Fatalf("Expected parent then child order, got IDs %d and %d", history[0].ID, history[1].ID)
+	}
+}
+
+func TestBuildSpotifyReviewContext_UsesStoredReviewText(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS spotify_reviews (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			type TEXT NOT NULL,
+			item_key TEXT NOT NULL,
+			review_url TEXT NOT NULL,
+			review_text TEXT,
+			created_at INTEGER,
+			UNIQUE(type, item_key)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create spotify_reviews table: %v", err)
+	}
+
+	_, err = mockDB.Exec(
+		"INSERT INTO spotify_reviews (type, item_key, review_url, review_text) VALUES (?, ?, ?, ?)",
+		"album", "abc123", "https://telegra.ph/test", "Great album, surprisingly good.",
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert review: %v", err)
+	}
+
+	originalDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() {
+		sqliteDb = originalDB
+	}()
+
+	messages := []telebot.Message{
+		{
+			Text: "Check this https://open.spotify.com/album/abc123",
+		},
+	}
+	context := buildSpotifyReviewContext(messages)
+	if context == "" {
+		t.Fatalf("Expected spotify review context, got empty")
+	}
+	if !strings.Contains(context, "Great album") {
+		t.Fatalf("Expected review text in context, got: %s", context)
 	}
 }

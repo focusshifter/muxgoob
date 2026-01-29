@@ -49,6 +49,10 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 		return ""
 	}
 
+	if err := saveReviewText(typ, spotifyID, review); err != nil {
+		log.Printf("[spotify] Failed to save review text: %v", err)
+	}
+
 	// Publish
 	pageURL, err := publishToTelegraph(artist, title, year, review)
 	if err != nil {
@@ -57,7 +61,7 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 	}
 
 	// Save the review URL to database for future reuse
-	if err := saveReview(typ, spotifyID, pageURL); err != nil {
+	if err := saveReviewURL(typ, spotifyID, pageURL); err != nil {
 		log.Printf("[spotify] Failed to save review to database: %v", err)
 		// Don't fail the operation, just log the error
 	}
@@ -256,7 +260,7 @@ func editTelegraph(existingURL, artist, title, year, review string) error {
 	} else {
 		titleText = fmt.Sprintf("%s — %s", artist, title)
 	}
-	
+
 	form := url.Values{}
 	form.Set("access_token", accessToken)
 	form.Set("path", path)
@@ -331,16 +335,55 @@ func getExistingReview(typ, itemKey string) string {
 		log.Printf("[spotify] Failed to check for existing review: %v", err)
 		return ""
 	}
-	return reviewURL
+	return strings.TrimSpace(reviewURL)
 }
 
-// saveReview saves a review URL to the database for future reuse
-func saveReview(typ, itemKey, reviewURL string) error {
-	_, err := database.DB.Exec(
-		"INSERT OR REPLACE INTO spotify_reviews (type, item_key, review_url) VALUES (?, ?, ?)",
-		typ, itemKey, reviewURL,
+// saveReviewText stores review text locally before publishing.
+func saveReviewText(typ, itemKey, reviewText string) error {
+	if strings.TrimSpace(reviewText) == "" {
+		return nil
+	}
+
+	var existingURL string
+	err := database.DB.QueryRow(
+		"SELECT review_url FROM spotify_reviews WHERE type = ? AND item_key = ?",
+		typ, itemKey,
+	).Scan(&existingURL)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	_, err = database.DB.Exec(
+		"INSERT OR REPLACE INTO spotify_reviews (type, item_key, review_url, review_text) VALUES (?, ?, ?, ?)",
+		typ, itemKey, strings.TrimSpace(existingURL), reviewText,
 	)
 	return err
+}
+
+// saveReviewURL updates the review URL while preserving any stored review text.
+func saveReviewURL(typ, itemKey, reviewURL string) error {
+	if strings.TrimSpace(reviewURL) == "" {
+		return nil
+	}
+
+	_, err := database.DB.Exec(
+		"UPDATE spotify_reviews SET review_url = ? WHERE type = ? AND item_key = ?",
+		reviewURL, typ, itemKey,
+	)
+	if err != nil {
+		return err
+	}
+
+	// If there was no existing row, insert with empty review_text.
+	res, err := database.DB.Exec(
+		"INSERT OR IGNORE INTO spotify_reviews (type, item_key, review_url, review_text) VALUES (?, ?, ?, ?)",
+		typ, itemKey, reviewURL, "",
+	)
+	if err != nil {
+		return err
+	}
+	_ = res
+	return nil
 }
 
 // RegenerateReview regenerates a review for an existing Spotify item
@@ -348,13 +391,13 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 	// Check if we have an existing review
 	var reviewURL string
 	var itemType string
-	
+
 	// Try to find the item as an album first
 	err := database.DB.QueryRow(
 		"SELECT review_url FROM spotify_reviews WHERE item_key = ? AND type = 'album'",
 		spotifyID,
 	).Scan(&reviewURL)
-	
+
 	if err == sql.ErrNoRows {
 		// Try as a track
 		err = database.DB.QueryRow(
@@ -374,21 +417,21 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 	// Keep typing while we do our stuff
 	stopTyping := withTyping(chatID)
 	defer stopTyping()
-	
+
 	// Fetch metadata from Spotify
 	p := &SpotifyPlugin{}
 	if err := p.EnsureAccessToken(); err != nil {
 		return "", fmt.Errorf("failed to get Spotify access token: %v", err)
 	}
-	
+
 	var artist, title, year string
-	
+
 	if itemType == "album" {
 		album, err := p.FetchAlbum(spotifyID)
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch album from Spotify: %v", err)
 		}
-		
+
 		if len(album.Artists) > 0 {
 			artist = album.Artists[0].Name
 		}
@@ -401,7 +444,7 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch track from Spotify: %v", err)
 		}
-		
+
 		if len(track.Artists) > 0 {
 			artist = track.Artists[0].Name
 		}
@@ -410,26 +453,30 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 			year = track.Album.ReleaseDate[:4]
 		}
 	}
-	
+
 	// Try to get grounded context
 	grounding := fetchPerplexityGrounding(artist, title, year)
-	
+
 	// Generate new review
 	prompt := buildSpotifyReviewPrompt(itemType, artist, title, year, grounding)
 	if prompt == "" {
 		return "", fmt.Errorf("failed to build review prompt")
 	}
-	
+
 	review := callChatModelForReview(&chatID, prompt)
 	if strings.TrimSpace(review) == "" {
 		return "", fmt.Errorf("failed to generate review")
 	}
-	
+
+	if err := saveReviewText(itemType, spotifyID, review); err != nil {
+		log.Printf("[spotify] Failed to save review text: %v", err)
+	}
+
 	// Edit the existing Telegraph article
 	if err := editTelegraph(reviewURL, artist, title, year, review); err != nil {
 		return "", fmt.Errorf("failed to edit Telegraph article: %v", err)
 	}
-	
+
 	log.Printf("[spotify] Successfully regenerated review for %s ID %s: %s", itemType, spotifyID, reviewURL)
 	return reviewURL, nil
 }

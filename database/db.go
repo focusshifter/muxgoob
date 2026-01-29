@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -192,7 +193,8 @@ func Initialize() {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			type TEXT NOT NULL,  -- 'album' or 'track'
 			item_key TEXT NOT NULL,  -- unique identifier for the item (spotify format)
-			review_url TEXT NOT NULL,  -- telegraph URL of the review
+			review_url TEXT NOT NULL,  -- telegraph URL of the review (may be empty if not published yet)
+			review_text TEXT,  -- stored review text
 			created_at INTEGER DEFAULT (strftime('%s', 'now')),
 			UNIQUE(type, item_key)
 		);
@@ -209,6 +211,13 @@ func Initialize() {
 	`)
 	if err != nil {
 		log.Fatal("[database] Failed to create tables:", err)
+	}
+
+	// Add review_text for older databases (ignore if already exists)
+	if _, err := DB.Exec(`ALTER TABLE spotify_reviews ADD COLUMN review_text TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			log.Printf("[database] Failed to add review_text column: %v", err)
+		}
 	}
 }
 

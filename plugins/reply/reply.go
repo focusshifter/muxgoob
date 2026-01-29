@@ -61,13 +61,14 @@ type ReplyPlugin struct {
 }
 
 var (
-	sqliteDb    *sql.DB
-	techExp     *regexp.Regexp
-	questionExp *regexp.Regexp
-	commandExp  *regexp.Regexp
-	dotkaExp    *regexp.Regexp
-	majorExp    *regexp.Regexp
-	replyCmdExp *regexp.Regexp
+	sqliteDb        *sql.DB
+	techExp         *regexp.Regexp
+	questionExp     *regexp.Regexp
+	commandExp      *regexp.Regexp
+	dotkaExp        *regexp.Regexp
+	majorExp        *regexp.Regexp
+	replyCmdExp     *regexp.Regexp
+	spotifyAlbumExp *regexp.Regexp
 )
 
 func init() {
@@ -78,6 +79,7 @@ func init() {
 	dotkaExp = regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
 	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	replyCmdExp = regexp.MustCompile(`^!reply\s+(-?\d+)(?:\s+(.+))?$`)
+	spotifyAlbumExp = regexp.MustCompile(`https://open\.spotify\.com/album/([a-zA-Z0-9]+)`)
 
 	// Register with default implementations for production
 	plugin := &ReplyPlugin{
@@ -481,6 +483,12 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 		prefill.WriteString("\n\n")
 	}
 
+	if spotifyContext := buildSpotifyReviewContext(messages); spotifyContext != "" {
+		prefill.WriteString("Mentioned spotify albums:\n")
+		prefill.WriteString(spotifyContext)
+		prefill.WriteString("\n\n")
+	}
+
 	prefill.WriteString("Prefill:\n")
 
 	for _, message := range messages {
@@ -514,6 +522,103 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 		prefill.WriteString(fmt.Sprintf("{{user}}: %s\n", questionText))
 	}
 	return prefill.String()
+}
+
+func buildSpotifyReviewContext(messages []telebot.Message) string {
+	if sqliteDb == nil {
+		return ""
+	}
+
+	albumIDs := extractSpotifyAlbumIDs(messages)
+	if len(albumIDs) == 0 {
+		return ""
+	}
+
+	reviewTexts := lookupSpotifyReviewTexts(albumIDs)
+	if len(reviewTexts) == 0 {
+		return ""
+	}
+
+	var out strings.Builder
+	for _, albumID := range albumIDs {
+		reviewText, ok := reviewTexts[albumID]
+		if !ok {
+			continue
+		}
+		reviewText = strings.TrimSpace(reviewText)
+		if reviewText == "" {
+			continue
+		}
+		out.WriteString(fmt.Sprintf("Album %s review: %s\n", albumID, reviewText))
+	}
+
+	return strings.TrimSpace(out.String())
+}
+
+func extractSpotifyAlbumIDs(messages []telebot.Message) []string {
+	seen := make(map[string]struct{})
+	var ordered []string
+	for _, message := range messages {
+		text := strings.TrimSpace(message.Text)
+		if message.Caption != "" {
+			text = strings.TrimSpace(text + " " + message.Caption)
+		}
+		if text == "" {
+			continue
+		}
+		matches := spotifyAlbumExp.FindAllStringSubmatch(text, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			albumID := match[1]
+			if _, ok := seen[albumID]; ok {
+				continue
+			}
+			seen[albumID] = struct{}{}
+			ordered = append(ordered, albumID)
+		}
+	}
+	return ordered
+}
+
+func lookupSpotifyReviewTexts(albumIDs []string) map[string]string {
+	if len(albumIDs) == 0 {
+		return nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(albumIDs)), ",")
+	query := fmt.Sprintf(
+		`SELECT item_key, review_text FROM spotify_reviews
+		WHERE type = 'album' AND item_key IN (%s) AND review_text IS NOT NULL AND review_text != ''`,
+		placeholders,
+	)
+
+	args := make([]interface{}, 0, len(albumIDs))
+	for _, id := range albumIDs {
+		args = append(args, id)
+	}
+
+	rows, err := sqliteDb.Query(query, args...)
+	if err != nil {
+		log.Printf("[reply] Error retrieving spotify reviews: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	reviewTexts := make(map[string]string)
+	for rows.Next() {
+		var itemKey, reviewText string
+		if err := rows.Scan(&itemKey, &reviewText); err != nil {
+			log.Printf("[reply] Error scanning spotify review: %v", err)
+			continue
+		}
+		reviewTexts[itemKey] = reviewText
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("[reply] Error iterating spotify reviews: %v", err)
+	}
+	return reviewTexts
 }
 
 // askChatGpt is a variable function that can be replaced in tests

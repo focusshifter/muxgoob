@@ -179,7 +179,7 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify model <model_name> [chat_id]\n!spotify regenerate <spotify_id>")
+		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify model <model_name> [chat_id]\n!spotify regenerate <spotify_id_or_url>")
 		return
 	}
 
@@ -333,10 +333,15 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 		}
 	case "regenerate":
 		if len(parts) < 3 {
-			bot.Send(message.Chat, "Usage: !spotify regenerate <spotify_id>")
+			bot.Send(message.Chat, "Usage: !spotify regenerate <spotify_id_or_url>")
 			return
 		}
-		spotifyID := parts[2]
+
+		spotifyID, err := spotify.ExtractSpotifyID(parts[2])
+		if err != nil {
+			bot.Send(message.Chat, "Please provide a valid Spotify album/track ID or URL")
+			return
+		}
 
 		// Call the regenerate function
 		reviewURL, err := spotify.RegenerateReview(message.Chat.ID, spotifyID)

@@ -23,6 +23,7 @@ const (
 	SpotifyPluginName       = "spotify"
 	SpotifyEnabledKey       = "enabled"
 	SpotifyReviewEnabledKey = "review_enabled"
+	SpotifyReviewModelKey   = "review_model"
 	SpotifyAuthURL          = "https://accounts.spotify.com/api/token"
 	SpotifyAPIBaseURL       = "https://api.spotify.com/v1"
 )
@@ -473,4 +474,14 @@ func EnableReviewsGlobally() error {
 // DisableReviewsGlobally disables review generation globally
 func DisableReviewsGlobally() error {
 	return registry.SetPluginSetting(nil, SpotifyPluginName, SpotifyReviewEnabledKey, "false")
+}
+
+// SetReviewModel sets a dedicated model for Spotify review generation.
+func SetReviewModel(chatID *int64, model string) error {
+	return registry.SetPluginSetting(chatID, SpotifyPluginName, SpotifyReviewModelKey, strings.TrimSpace(model))
+}
+
+// GetReviewModel returns the dedicated Spotify review model, or empty if not set.
+func GetReviewModel(chatID *int64) string {
+	return strings.TrimSpace(registry.GetPluginSetting(chatID, SpotifyPluginName, SpotifyReviewModelKey, ""))
 }

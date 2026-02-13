@@ -37,7 +37,7 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 	// Try to get grounded context
 	grounding := fetchPerplexityGrounding(artist, title, year)
 
-	// Prompt for final review using the same model as general chat
+	// Prompt for final review.
 	prompt := buildSpotifyReviewPrompt(typ, artist, title, year, grounding)
 	if prompt == "" {
 		return ""
@@ -124,7 +124,7 @@ func buildSpotifyReviewPrompt(typ, artist, title, year, grounding string) string
 
 func callChatModelForReview(chatID *int64, prompt string) string {
 	var config openai.ClientConfig
-	var model string
+	model := resolveSpotifyReviewModel(chatID)
 
 	provider := registry.GetAiProvider(chatID)
 	if provider == "openrouter" {
@@ -133,7 +133,6 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 		}
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		model = strings.TrimSpace(registry.GetAiModel(chatID))
 		model = strings.TrimSuffix(model, ":online")
 		if model == "" {
 			model = "deepseek/deepseek-chat-v3.1"
@@ -143,7 +142,9 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 			return ""
 		}
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
-		model = "gpt-5"
+		if model == "" {
+			model = "gpt-4o-mini"
+		}
 	}
 
 	client := openai.NewClientWithConfig(config)
@@ -165,6 +166,19 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 		return ""
 	}
 	return strings.TrimSpace(resp.Choices[0].Message.Content)
+}
+
+func resolveSpotifyReviewModel(chatID *int64) string {
+	model := GetReviewModel(chatID)
+	if model != "" {
+		return model
+	}
+
+	// Fallback to the same defaults chat replies use.
+	if registry.GetAiProvider(chatID) == "openrouter" {
+		return strings.TrimSpace(registry.GetAiModel(chatID))
+	}
+	return "gpt-4o-mini"
 }
 
 func publishToTelegraph(artist, title, year, review string) (string, error) {

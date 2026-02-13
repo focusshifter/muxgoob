@@ -198,6 +198,81 @@ func TestSpotifyPlugin_EnableDisable(t *testing.T) {
 	}
 }
 
+func TestSpotifyReviewModelSetting(t *testing.T) {
+	testDB := testutils.SetupTestDB(t)
+	defer testDB.Close()
+	database.DB = testDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	if err := SetReviewModel(nil, "openrouter/meta-llama/llama-3.1-70b-instruct"); err != nil {
+		t.Fatalf("SetReviewModel global failed: %v", err)
+	}
+
+	if got := GetReviewModel(nil); got != "openrouter/meta-llama/llama-3.1-70b-instruct" {
+		t.Fatalf("Expected global review model to be saved, got %q", got)
+	}
+
+	chatID := int64(321)
+	if got := GetReviewModel(&chatID); got != "openrouter/meta-llama/llama-3.1-70b-instruct" {
+		t.Fatalf("Expected chat to inherit global review model, got %q", got)
+	}
+
+	if err := SetReviewModel(&chatID, "openrouter/deepseek/deepseek-chat-v3.1"); err != nil {
+		t.Fatalf("SetReviewModel chat failed: %v", err)
+	}
+
+	if got := GetReviewModel(&chatID); got != "openrouter/deepseek/deepseek-chat-v3.1" {
+		t.Fatalf("Expected chat-specific review model, got %q", got)
+	}
+}
+
+func TestResolveSpotifyReviewModelFallback(t *testing.T) {
+	testDB := testutils.SetupTestDB(t)
+	defer testDB.Close()
+	database.DB = testDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	chatID := int64(654)
+	registry.Config = registry.Configuration{
+		AiProvider: "openrouter",
+		AiModel:    "openrouter/default-model",
+	}
+
+	if got := resolveSpotifyReviewModel(&chatID); got != "openrouter/default-model" {
+		t.Fatalf("Expected OpenRouter chat fallback model, got %q", got)
+	}
+
+	if err := SetReviewModel(nil, "openrouter/spotify-model"); err != nil {
+		t.Fatalf("SetReviewModel global failed: %v", err)
+	}
+	if got := resolveSpotifyReviewModel(&chatID); got != "openrouter/spotify-model" {
+		t.Fatalf("Expected dedicated Spotify model to override fallback, got %q", got)
+	}
+
+	if err := SetReviewModel(&chatID, "openrouter/spotify-chat-model"); err != nil {
+		t.Fatalf("SetReviewModel chat failed: %v", err)
+	}
+	if got := resolveSpotifyReviewModel(&chatID); got != "openrouter/spotify-chat-model" {
+		t.Fatalf("Expected chat-specific Spotify model, got %q", got)
+	}
+
+	if err := SetReviewModel(nil, ""); err != nil {
+		t.Fatalf("Failed to clear global Spotify model: %v", err)
+	}
+
+	otherChatID := int64(777)
+	registry.Config.AiProvider = "openai"
+	if got := resolveSpotifyReviewModel(&otherChatID); got != "gpt-4o-mini" {
+		t.Fatalf("Expected OpenAI fallback model, got %q", got)
+	}
+}
+
 func TestSpotifyPlugin_TokenManagement(t *testing.T) {
 	plugin := &SpotifyPlugin{}
 

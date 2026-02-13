@@ -179,7 +179,7 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify regenerate <spotify_id>")
+		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify model <model_name> [chat_id]\n!spotify regenerate <spotify_id>")
 		return
 	}
 
@@ -298,22 +298,55 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 		default:
 			bot.Send(message.Chat, "Unknown desc command. Use: enable or disable")
 		}
+	case "model":
+		if len(parts) < 3 {
+			bot.Send(message.Chat, "Usage: !spotify model <model_name> [chat_id]")
+			return
+		}
+
+		model := strings.TrimSpace(parts[2])
+		if model == "" {
+			bot.Send(message.Chat, "Please specify a model name")
+			return
+		}
+
+		var modelChatID *int64
+		if len(parts) >= 4 {
+			id, err := strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				bot.Send(message.Chat, "Invalid chat_id")
+				return
+			}
+			modelChatID = &id
+		}
+
+		err := spotify.SetReviewModel(modelChatID, model)
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error setting Spotify review model: %v", err))
+			return
+		}
+
+		if modelChatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Spotify review model for chat %d set to: %s", *modelChatID, model))
+		} else {
+			bot.Send(message.Chat, fmt.Sprintf("Global Spotify review model set to: %s", model))
+		}
 	case "regenerate":
 		if len(parts) < 3 {
 			bot.Send(message.Chat, "Usage: !spotify regenerate <spotify_id>")
 			return
 		}
 		spotifyID := parts[2]
-		
+
 		// Call the regenerate function
 		reviewURL, err := spotify.RegenerateReview(message.Chat.ID, spotifyID)
 		if err != nil {
 			bot.Send(message.Chat, fmt.Sprintf("Failed to regenerate review: %v", err))
 			return
 		}
-		
+
 		bot.Send(message.Chat, fmt.Sprintf("✅ Review regenerated successfully: %s", reviewURL))
 	default:
-		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status, desc, regenerate")
+		bot.Send(message.Chat, "Unknown Spotify command. Available commands: enable, disable, status, desc, model, regenerate")
 	}
 }

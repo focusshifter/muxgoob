@@ -7,6 +7,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/plugins/spotify"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
@@ -142,6 +143,73 @@ func TestAdminPlugin_Process(t *testing.T) {
 			plugin.Process(tc.message)
 			tc.verify(t)
 		})
+	}
+}
+
+func TestAdminPlugin_SpotifyModelCommand(t *testing.T) {
+	originalConfig := registry.Config
+	defer func() {
+		registry.Config = originalConfig
+	}()
+	registry.Config.OwnerUsername = "test_owner"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+
+	plugin := &AdminPlugin{}
+
+	globalModel := "openrouter/deepseek/deepseek-chat-v3.1"
+	plugin.Process(&telebot.Message{
+		Text: "!spotify model " + globalModel,
+		Sender: &telebot.User{
+			Username: "test_owner",
+		},
+		Chat: &telebot.Chat{
+			Type: telebot.ChatPrivate,
+		},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for global spotify model command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Global Spotify review model set to") {
+		t.Fatalf("Unexpected global response: %v", mockBot.SendWhat)
+	}
+	if got := registry.GetPluginSetting(nil, spotify.SpotifyPluginName, spotify.SpotifyReviewModelKey, ""); got != globalModel {
+		t.Fatalf("Expected global spotify model %q, got %q", globalModel, got)
+	}
+
+	mockBot.SendCalled = false
+	mockBot.SendWhat = nil
+
+	chatModel := "openrouter/meta-llama/llama-3.1-70b-instruct"
+	targetChatID := int64(777)
+	plugin.Process(&telebot.Message{
+		Text: "!spotify model " + chatModel + " 777",
+		Sender: &telebot.User{
+			Username: "test_owner",
+		},
+		Chat: &telebot.Chat{
+			Type: telebot.ChatPrivate,
+		},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for chat spotify model command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Spotify review model for chat 777 set to") {
+		t.Fatalf("Unexpected chat response: %v", mockBot.SendWhat)
+	}
+	if got := registry.GetPluginSetting(&targetChatID, spotify.SpotifyPluginName, spotify.SpotifyReviewModelKey, ""); got != chatModel {
+		t.Fatalf("Expected chat spotify model %q, got %q", chatModel, got)
 	}
 }
 

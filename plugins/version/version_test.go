@@ -2,6 +2,8 @@ package version
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -13,13 +15,21 @@ import (
 )
 
 func TestReadCurrentVersion(t *testing.T) {
-	originalDescribe := gitDescribeFunc
+	tempDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get cwd: %v", err)
+	}
 	defer func() {
-		gitDescribeFunc = originalDescribe
+		_ = os.Chdir(oldWd)
 	}()
 
-	gitDescribeFunc = func() (string, error) {
-		return "v0.7.0", nil
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tempDir, ".muxgoob_version"), []byte("v0.6.3\n"), 0o644); err != nil {
+		t.Fatalf("failed to write version file: %v", err)
 	}
 
 	versionText, err := readCurrentVersion()
@@ -27,8 +37,8 @@ func TestReadCurrentVersion(t *testing.T) {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
-	if versionText != "v0.7.0" {
-		t.Fatalf("expected v0.7.0, got %q", versionText)
+	if versionText != "v0.6.3" {
+		t.Fatalf("expected v0.6.3, got %q", versionText)
 	}
 }
 
@@ -41,7 +51,7 @@ func TestNotifyOwnerVersion(t *testing.T) {
 	mockBot := &testutils.MockBotWrapper{}
 	registry.SetTestBot(mockBot)
 
-	err := notifyOwnerVersion(registry.Bot, 123456789, "v0.7.0")
+	err := notifyOwnerVersion(registry.Bot, 123456789, "v0.6.3")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -64,7 +74,7 @@ func TestNotifyOwnerVersion(t *testing.T) {
 		t.Fatalf("expected string message, got %T", mockBot.SendWhat)
 	}
 
-	if message != "Gooby is now running v0.7.0" {
+	if message != "Gooby is now running v0.6.3" {
 		t.Fatalf("unexpected notification message: %q", message)
 	}
 }
@@ -97,13 +107,21 @@ func TestLookupOwnerChatID(t *testing.T) {
 }
 
 func TestStartNotifiesOwnerFromUsersTable(t *testing.T) {
-	originalDescribe := gitDescribeFunc
+	tempDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get cwd: %v", err)
+	}
 	defer func() {
-		gitDescribeFunc = originalDescribe
+		_ = os.Chdir(oldWd)
 	}()
 
-	gitDescribeFunc = func() (string, error) {
-		return "v0.7.0", nil
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(tempDir, ".muxgoob_version"), []byte("v0.6.4\n"), 0o644); err != nil {
+		t.Fatalf("failed to write version file: %v", err)
 	}
 
 	db := testutils.SetupTestDB(t)
@@ -114,7 +132,7 @@ func TestStartNotifiesOwnerFromUsersTable(t *testing.T) {
 	database.DB = db
 	createUsersTable(t, db)
 
-	_, err := db.Exec("INSERT INTO users (id, username) VALUES (?, ?)", 123456789, "focusshifter")
+	_, err = db.Exec("INSERT INTO users (id, username) VALUES (?, ?)", 123456789, "focusshifter")
 	if err != nil {
 		t.Fatalf("failed to insert test user: %v", err)
 	}
@@ -152,7 +170,7 @@ func TestStartNotifiesOwnerFromUsersTable(t *testing.T) {
 		t.Fatalf("expected string message, got %T", mockBot.SendWhat)
 	}
 
-	if message != "Gooby is now running v0.7.0" {
+	if message != "Gooby is now running v0.6.4" {
 		t.Fatalf("unexpected notification message: %q", message)
 	}
 }

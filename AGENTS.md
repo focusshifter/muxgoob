@@ -93,6 +93,10 @@ Also run these when relevant:
 - Preserve existing plugin registration and blank imports unless the task is explicitly removing a plugin.
 - Be careful with schema edits and message-processing concurrency; subtle breakage here affects the whole bot.
 
+## Release Notes
+
+- When creating a new release tag, increment the patch version by default unless explicitly asked to bump minor or major.
+
 ## Change Checklist
 
 Before wrapping up, verify the following:

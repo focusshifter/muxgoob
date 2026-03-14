@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/focusshifter/muxgoob/database"
@@ -13,6 +13,8 @@ import (
 )
 
 type VersionPlugin struct{}
+
+var gitDescribeFunc = describeGitVersion
 
 func init() {
 	registry.RegisterPlugin(&VersionPlugin{})
@@ -25,8 +27,8 @@ func (p *VersionPlugin) Start(_ interface{}) {
 
 	versionText, err := readCurrentVersion()
 	if err != nil || versionText == "" {
-		if err != nil && !os.IsNotExist(err) {
-			log.Printf("[version] Failed to read version file: %v", err)
+		if err != nil {
+			log.Printf("[version] Failed to read git version: %v", err)
 		}
 		return
 	}
@@ -57,7 +59,6 @@ func (p *VersionPlugin) Process(message *telebot.Message) {
 
 	versionText, err := readCurrentVersion()
 	if err != nil {
-		// Fail silently if file not found
 		return
 	}
 
@@ -67,12 +68,16 @@ func (p *VersionPlugin) Process(message *telebot.Message) {
 }
 
 func readCurrentVersion() (string, error) {
-	content, err := os.ReadFile(".muxgoob_version")
+	return gitDescribeFunc()
+}
+
+func describeGitVersion() (string, error) {
+	cmd := exec.Command("git", "describe", "--tags", "--always", "--dirty")
+	output, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
-
-	return strings.TrimSpace(string(content)), nil
+	return strings.TrimSpace(string(output)), nil
 }
 
 func lookupOwnerChatID(username string) (int64, error) {

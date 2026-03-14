@@ -133,6 +133,7 @@ func (p *SelfPromptPlugin) handleCommand(message *telebot.Message) {
 		registry.Bot.Reply(message, "Only chat administrators can change self-prompt settings")
 		return
 	}
+	isOwnerPrivateChat := message.Chat.Type == telebot.ChatPrivate && isOwner
 
 	// Handle global commands (owner only)
 	if strings.HasPrefix(parts[1], "global") {
@@ -182,6 +183,20 @@ func (p *SelfPromptPlugin) handleCommand(message *telebot.Message) {
 
 	// Handle chat-specific commands (admin or owner)
 	switch parts[1] {
+	case "force":
+		targetChatID := message.Chat.ID
+		if isOwnerPrivateChat && len(parts) >= 3 {
+			parsedChatID, err := strconv.ParseInt(parts[2], 10, 64)
+			if err != nil {
+				registry.Bot.Reply(message, "Invalid chat ID. Please specify a valid numeric chat ID")
+				return
+			}
+			targetChatID = parsedChatID
+		}
+
+		p.updatePrompt(targetChatID)
+		registry.Bot.Reply(message, fmt.Sprintf("Forced self-prompt refresh for chat %d", targetChatID))
+
 	case "enable":
 		err := p.setChatEnabled(message.Chat.ID, true)
 		if err != nil {
@@ -218,9 +233,9 @@ func (p *SelfPromptPlugin) handleCommand(message *telebot.Message) {
 	default:
 		var availableCommands string
 		if isOwner {
-			availableCommands = "enable, disable, interval <number>, global-enable, global-disable, global-interval <number>"
+			availableCommands = "force [chat_id], enable, disable, interval <number>, global-enable, global-disable, global-interval <number>"
 		} else {
-			availableCommands = "enable, disable, interval <number>"
+			availableCommands = "force, enable, disable, interval <number>"
 		}
 		registry.Bot.Reply(message, fmt.Sprintf("Unknown command. Available commands: %s", availableCommands))
 	}

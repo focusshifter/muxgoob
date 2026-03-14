@@ -63,9 +63,12 @@ func TestSelfPromptPlugin_Process(t *testing.T) {
 
 	// Save original bot to restore later
 	originalBot := registry.Bot
+	originalConfig := registry.Config
 	defer func() {
 		registry.Bot = originalBot
+		registry.Config = originalConfig
 	}()
+	registry.Config.OwnerUsername = "test_user"
 
 	// Setup mock bot with Reply and Send methods
 	mockBot := &testutils.MockBotWrapper{}
@@ -226,6 +229,58 @@ func TestSelfPromptPlugin_Process(t *testing.T) {
 			},
 		},
 		{
+			name: "!selfprompt force command",
+			message: &telebot.Message{
+				Text: "!selfprompt force",
+				Sender: &telebot.User{
+					Username: "test_user",
+				},
+				Chat: &telebot.Chat{
+					ID: 790,
+				},
+			},
+			setup: func() {
+				mockBot.SendCalled = false
+				_, err := mockDB.Exec("DELETE FROM messages WHERE chat_id = 790")
+				if err != nil {
+					t.Fatalf("Failed to delete messages: %v", err)
+				}
+				msg := telebot.Message{
+					ID:       1,
+					Unixtime: time.Now().Unix(),
+					Chat:     &telebot.Chat{ID: 790},
+					Sender:   &telebot.User{ID: 11, Username: "test_user"},
+					Text:     "hello there",
+				}
+				data, err := json.Marshal(msg)
+				if err != nil {
+					t.Fatalf("Failed to marshal message: %v", err)
+				}
+				_, err = mockDB.Exec(
+					"INSERT INTO messages (id, chat_id, sender_id, unixtime, text, data) VALUES (?, ?, ?, ?, ?, ?)",
+					msg.ID, msg.Chat.ID, msg.Sender.ID, msg.Unixtime, msg.Text, string(data),
+				)
+				if err != nil {
+					t.Fatalf("Failed to insert message: %v", err)
+				}
+			},
+			expectedCalls: true,
+			verify: func(t *testing.T) {
+				if !mockBot.SendCalled {
+					t.Error("Expected Send to be called")
+				}
+
+				var prompt string
+				err := mockDB.QueryRow(`SELECT prompt FROM prompts WHERE chat_id = ? ORDER BY version DESC LIMIT 1`, 790).Scan(&prompt)
+				if err != nil {
+					t.Fatalf("Expected forced prompt to be saved: %v", err)
+				}
+				if prompt != "This is a new mock prompt generated from history" {
+					t.Fatalf("Unexpected prompt: %q", prompt)
+				}
+			},
+		},
+		{
 			name: "!selfprompt enable command",
 			message: &telebot.Message{
 				Text: "!selfprompt enable",
@@ -285,6 +340,83 @@ func TestSelfPromptPlugin_Process(t *testing.T) {
 			plugin.Process(tc.message)
 			tc.verify(t)
 		})
+	}
+}
+
+func TestSelfPromptPlugin_ForceSpecificChatFromOwnerPrivateChat(t *testing.T) {
+	originalFunc := generateNewPromptFunc
+	originalUserFactsFunc := generateUserFactsFunc
+	defer func() {
+		generateNewPromptFunc = originalFunc
+		generateUserFactsFunc = originalUserFactsFunc
+	}()
+
+	generateNewPromptFunc = mockGenerateNewPromptFunc
+	generateUserFactsFunc = func(p *SelfPromptPlugin, chatID int64, user activeChatUser, history string, currentFacts string) string {
+		_ = p
+		_ = chatID
+		_ = user
+		_ = history
+		return currentFacts
+	}
+
+	plugin := &SelfPromptPlugin{msgCounter: make(map[int64]int64)}
+	plugin.SetTestMode(true)
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	createTables(t, mockDB)
+	database.DB = mockDB
+	plugin.db = mockDB
+
+	originalBot := registry.Bot
+	originalConfig := registry.Config
+	defer func() {
+		registry.Bot = originalBot
+		registry.Config = originalConfig
+	}()
+	registry.Config.OwnerUsername = "owner"
+
+	mockBot := &testutils.MockBotWrapper{}
+	mockBot.ReplyFunc = func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error) {
+		mockBot.SendCalled = true
+		mockBot.SendWhat = what
+		return &telebot.Message{}, nil
+	}
+	registry.SetTestBot(mockBot)
+
+	msg := telebot.Message{
+		ID:       1,
+		Unixtime: time.Now().Unix(),
+		Chat:     &telebot.Chat{ID: -999},
+		Sender:   &telebot.User{ID: 12, Username: "alice"},
+		Text:     "force me",
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Failed to marshal message: %v", err)
+	}
+	_, err = mockDB.Exec(
+		"INSERT INTO messages (id, chat_id, sender_id, unixtime, text, data) VALUES (?, ?, ?, ?, ?, ?)",
+		msg.ID, msg.Chat.ID, msg.Sender.ID, msg.Unixtime, msg.Text, string(data),
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert message: %v", err)
+	}
+
+	plugin.Process(&telebot.Message{
+		Text:   "!selfprompt force -999",
+		Sender: &telebot.User{Username: "owner"},
+		Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+	})
+
+	var prompt string
+	err = mockDB.QueryRow(`SELECT prompt FROM prompts WHERE chat_id = ? ORDER BY version DESC LIMIT 1`, -999).Scan(&prompt)
+	if err != nil {
+		t.Fatalf("Expected forced prompt for target chat: %v", err)
+	}
+	if prompt != "This is a new mock prompt generated from history" {
+		t.Fatalf("Unexpected prompt: %q", prompt)
 	}
 }
 

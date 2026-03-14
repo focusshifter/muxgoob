@@ -61,6 +61,7 @@ func main() {
 
 	// Initialize registry database settings
 	registry.InitializeDbSettings()
+	promptmgr.EnsureTables()
 
 	// Set message count from config if not specified
 	if messageCount == 0 {
@@ -125,8 +126,11 @@ func main() {
 		// Generate new prompt
 		var newPrompt string
 		if !dryRun {
+			fmt.Println("Updating person facts...")
+			updatePersonFacts(chatID, messages, history)
+
 			fmt.Println("Generating new prompt...")
-			newPrompt = generateNewPrompt(history, currentPrompt)
+			newPrompt = generateNewPrompt(chatID, history, currentPrompt)
 
 			if showPrompt {
 				fmt.Println("\n=== Generated Prompt ===")
@@ -310,67 +314,106 @@ func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []t
 	return messages
 }
 
-// generateChatGptHistory formats the messages for the AI prompt
-func generateChatGptHistory(messages []telebot.Message) string {
-	var history string
-	var username string
-
-	for _, message := range messages {
-		if message.Sender.Username != "" {
-			username = message.Sender.Username
-		} else {
-			username = message.Sender.FirstName + " " + message.Sender.LastName
-		}
-		history += fmt.Sprintf("%s: %s\n", username, message.Text)
-	}
-
-	return history
+type activeChatUser struct {
+	ID   int64
+	Name string
 }
 
-// generateNewPrompt generates a new prompt based on chat history
-func generateNewPrompt(history string, currentPrompt string) string {
-	// Create GPT client
+// generateChatGptHistory formats the messages for the AI prompt
+func generateChatGptHistory(messages []telebot.Message) string {
+	var history strings.Builder
+
+	for _, message := range messages {
+		if message.Sender == nil {
+			continue
+		}
+		history.WriteString(fmt.Sprintf("%s: %s\n", displayName(message.Sender), message.Text))
+	}
+
+	return history.String()
+}
+
+func displayName(user *telebot.User) string {
+	if user == nil {
+		return ""
+	}
+	if user.Username != "" {
+		return user.Username
+	}
+	name := strings.TrimSpace(user.FirstName + " " + user.LastName)
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("user_%d", user.ID)
+}
+
+func collectActiveUsers(messages []telebot.Message) []activeChatUser {
+	seen := make(map[int64]struct{})
+	users := make([]activeChatUser, 0)
+	for _, message := range messages {
+		if message.Sender == nil || message.Sender.ID == 0 {
+			continue
+		}
+		userID := int64(message.Sender.ID)
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		users = append(users, activeChatUser{ID: userID, Name: displayName(message.Sender)})
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
+	return users
+}
+
+func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 	var config openai.ClientConfig
 	var model string
 
-	// Get AI provider from database with fallback to config.yml
-	// Using nil for chatID to get the global setting
-	aiProvider := registry.GetAiProvider(nil)
-
+	aiProvider := registry.GetAiProvider(chatID)
 	if aiProvider == "openrouter" {
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		// Get AI model from database with fallback to config.yml
-		model = registry.GetAiModel(nil)
+		model = registry.GetAiModel(chatID)
 	} else {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"
 	}
 
-	client := openai.NewClientWithConfig(config)
+	return openai.NewClientWithConfig(config), model
+}
+
+func updatePersonFacts(chatID int64, messages []telebot.Message, history string) {
+	for _, user := range collectActiveUsers(messages) {
+		currentFacts, err := promptmgr.GetPersonFacts(chatID, user.ID)
+		if err != nil {
+			log.Printf("Error getting facts for user %d: %v", user.ID, err)
+			continue
+		}
+
+		newFacts := strings.TrimSpace(generateUserFacts(chatID, user, history, currentFacts))
+		if newFacts == "" || newFacts == strings.TrimSpace(currentFacts) {
+			continue
+		}
+
+		if err := promptmgr.SavePersonFacts(chatID, user.ID, newFacts); err != nil {
+			log.Printf("Error saving facts for user %d: %v", user.ID, err)
+		}
+	}
+}
+
+// generateNewPrompt generates a new prompt based on chat history
+func generateNewPrompt(chatID int64, history string, currentPrompt string) string {
+	client, model := buildOpenAIClient(&chatID)
 
 	systemMsg := `You refine bot system prompts based on chat context.`
 	userMsg := `
-	Analyze the provided chat history and refine the current system prompt to produce a concise, informative new bot system prompt that:  
-1. Identifies key discussion topics from the chat history.  
-2. For every chat member:  
-   - Assesses user relationships, personality traits, interests, and preferences.  
-   - Lists findings under a header "[USERNAME]: ".  
-3. Preserves and refines critical personality traits or instructions from the current prompt, such as analytical precision and prompt engineering focus.  
-4. Ensures clarity and brevity.  
-
-Output only the new bot system prompt text. Do not include meta-instructions, role labels, or phrases like "You are a prompt engineer".
-Use the main language of the chat, such as English or Russian.
-
-**Discussion Topics:**  
-- [List key topics from chat history, e.g., "Programming languages", "Speed and performance"]  
-
-**[USERNAME]:**  
-- [Traits, relationships, interests, e.g., "Analytical, debates USER456, prefers Go"]  
-**[USERNAME]:**  
-- [Traits, relationships, interests, e.g., "Practical, counters USER123, likes Python"]
-
-`
+	Analyze the provided chat history and refine the current chat-specific prompt.
+	Output only concise discussion topics, shared chat dynamics, recurring themes, or stable group context that should influence future replies.
+	Do not include per-person profiles or headings for specific users.
+	Preserve useful stable instructions from the current prompt when they still apply.
+	Prefer the main language of the chat, such as English or Russian.
+	Keep it compact and durable, avoiding overfitting to a single short-lived tangent.
+	`
 
 	userMsg += `**Current Prompt to Refine:** ` + currentPrompt + `
 
@@ -378,7 +421,6 @@ Use the main language of the chat, such as English or Russian.
 	userMsg += `**Chat History:**
 ` + history
 
-	// Call GPT
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -389,26 +431,70 @@ Use the main language of the chat, such as English or Russian.
 			},
 		},
 	)
-
 	if err != nil {
 		log.Printf("Error generating new prompt: %v", err)
 		return currentPrompt
 	}
-
 	if len(resp.Choices) == 0 {
 		log.Printf("No prompt generated by GPT")
 		return currentPrompt
 	}
 
-	newPrompt := resp.Choices[0].Message.Content
+	newPrompt := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if newPrompt == "" {
 		log.Printf("Empty prompt generated by GPT")
 		return currentPrompt
 	}
 
 	log.Printf("Generated new prompt: %s", newPrompt)
-
 	return newPrompt
+}
+
+func generateUserFacts(chatID int64, user activeChatUser, history string, currentFacts string) string {
+	client, model := buildOpenAIClient(&chatID)
+
+	systemMsg := `You update one chat member profile using recent chat history.`
+	userMsg := fmt.Sprintf(`
+Analyze the recent chat history and update the profile for exactly one person: %s.
+
+Rules:
+1. Output only facts about that person.
+2. Preserve existing stable facts unless the new chat history clearly contradicts them.
+3. Focus on durable traits, interests, preferences, recurring relationships, and notable communication style.
+4. Ignore one-off jokes or fleeting topics unless they look stable.
+5. Prefer the main language of the chat.
+6. Keep it concise and useful for future replies.
+
+Current facts:
+%s
+
+Recent chat history:
+%s
+`, user.Name, currentFacts, history)
+
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: model,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: "system", Content: systemMsg},
+				{Role: "user", Content: userMsg},
+			},
+		},
+	)
+	if err != nil {
+		log.Printf("Error generating facts for user %d: %v", user.ID, err)
+		return currentFacts
+	}
+	if len(resp.Choices) == 0 {
+		return currentFacts
+	}
+
+	newFacts := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if newFacts == "" {
+		return currentFacts
+	}
+	return newFacts
 }
 
 // savePrompt saves a new prompt to the database

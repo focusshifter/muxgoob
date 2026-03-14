@@ -460,10 +460,16 @@ func generateChatGptHistory(messages []telebot.Message) string {
 	var username string
 
 	for _, message := range messages {
+		if message.Sender == nil {
+			continue
+		}
 		if message.Sender.Username != "" {
 			username = message.Sender.Username
 		} else {
-			username = message.Sender.FirstName + " " + message.Sender.LastName
+			username = strings.TrimSpace(message.Sender.FirstName + " " + message.Sender.LastName)
+			if username == "" {
+				username = fmt.Sprintf("user_%d", message.Sender.ID)
+			}
 		}
 		history += fmt.Sprintf("%s: %s\n", username, message.Text)
 	}
@@ -471,7 +477,79 @@ func generateChatGptHistory(messages []telebot.Message) string {
 	return history
 }
 
-func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, botID int, currentMessage *telebot.Message, members []string) string {
+func userDisplayName(user *telebot.User) string {
+	if user == nil {
+		return ""
+	}
+	if user.Username != "" {
+		return user.Username
+	}
+	name := strings.TrimSpace(user.FirstName + " " + user.LastName)
+	if name != "" {
+		return name
+	}
+	if user.ID != 0 {
+		return fmt.Sprintf("user_%d", user.ID)
+	}
+	return ""
+}
+
+func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMessage *telebot.Message, botID int) string {
+	orderedUserIDs := make([]int64, 0)
+	seen := make(map[int64]struct{})
+	userNames := make(map[int64]string)
+
+	addUser := func(user *telebot.User) {
+		if user == nil || user.ID == 0 || user.ID == botID {
+			return
+		}
+		userID := int64(user.ID)
+		if _, ok := seen[userID]; !ok {
+			seen[userID] = struct{}{}
+			orderedUserIDs = append(orderedUserIDs, userID)
+		}
+		if name := userDisplayName(user); name != "" {
+			userNames[userID] = name
+		}
+	}
+
+	for _, message := range messages {
+		addUser(message.Sender)
+	}
+	if currentMessage != nil {
+		addUser(currentMessage.Sender)
+	}
+
+	if len(orderedUserIDs) == 0 {
+		return ""
+	}
+
+	factMap, err := promptmgr.GetPersonFactsMulti(chatID, orderedUserIDs)
+	if err != nil {
+		log.Printf("[reply] Error retrieving person facts: %v", err)
+		return ""
+	}
+
+	var out strings.Builder
+	for _, userID := range orderedUserIDs {
+		facts := strings.TrimSpace(factMap[userID])
+		if facts == "" {
+			continue
+		}
+		name := userNames[userID]
+		if name == "" {
+			name = fmt.Sprintf("user_%d", userID)
+		}
+		out.WriteString(name)
+		out.WriteString(": ")
+		out.WriteString(facts)
+		out.WriteString("\n")
+	}
+
+	return strings.TrimSpace(out.String())
+}
+
+func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {
 	var prefill strings.Builder
 
 	if strings.TrimSpace(systemPrompt) != "" {
@@ -482,6 +560,12 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 	if len(members) > 0 {
 		prefill.WriteString("Chat members: ")
 		prefill.WriteString(strings.Join(members, ", "))
+		prefill.WriteString("\n\n")
+	}
+
+	if strings.TrimSpace(personFacts) != "" {
+		prefill.WriteString("Chat member profiles:\n")
+		prefill.WriteString(strings.TrimSpace(personFacts))
 		prefill.WriteString("\n\n")
 	}
 
@@ -795,15 +879,17 @@ var askChatGpt = func(message *telebot.Message) string {
 		// Check if message.Chat is nil to prevent nil pointer dereference
 		if message.Chat == nil {
 			log.Printf("[reply] Message.Chat is nil when retrieving history")
-			userMessage = buildNoAssPrefill(nil, userMessage, systemMessage, botID, message, members)
+			userMessage = buildNoAssPrefill(nil, userMessage, systemMessage, "", botID, message, members)
 		} else {
 			historyMessages := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
-			userMessage = buildNoAssPrefill(historyMessages, userMessage, systemMessage, botID, message, members)
+			personFacts := buildPersonFactsContext(message.Chat.ID, historyMessages, message, botID)
+			userMessage = buildNoAssPrefill(historyMessages, userMessage, systemMessage, personFacts, botID, message, members)
 
 			log.Printf("[reply] ChatGPT request: noass prefill %v", userMessage)
 		}
 	} else {
-		userMessage = buildNoAssPrefill(nil, question, systemMessage, botID, message, members)
+		personFacts := buildPersonFactsContext(message.Chat.ID, nil, message, botID)
+		userMessage = buildNoAssPrefill(nil, question, systemMessage, personFacts, botID, message, members)
 	}
 
 	resp, err := client.CreateChatCompletion(

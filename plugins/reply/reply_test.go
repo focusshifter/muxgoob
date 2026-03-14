@@ -7,6 +7,8 @@ import (
 
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
@@ -103,6 +105,8 @@ func TestReplyPlugin_Process(t *testing.T) {
 
 	// Set the sqliteDb variable to use our mock database
 	sqliteDb = mockDB
+	database.DB = mockDB
+	promptmgr.EnsureTables()
 
 	// Create plugin instance with mock dependencies
 	plugin := &ReplyPlugin{}
@@ -536,5 +540,65 @@ func TestBuildSpotifyReviewContext_FetchesReviewWhenMissing(t *testing.T) {
 	}
 	if savedText != "Recovered review text" {
 		t.Fatalf("Expected saved review text, got: %s", savedText)
+	}
+}
+
+func TestBuildPersonFactsContext_UsesHistoryUsersAndAsker(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create users table: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	originalDB := database.DB
+	sqliteDb = mockDB
+	database.DB = mockDB
+	defer func() {
+		sqliteDb = originalSQLiteDB
+		database.DB = originalDB
+	}()
+	promptmgr.EnsureTables()
+
+	if err := promptmgr.SavePersonFacts(123, 1, "likes Go"); err != nil {
+		t.Fatalf("failed to save user 1 facts: %v", err)
+	}
+	if err := promptmgr.SavePersonFacts(123, 2, "likes Rust"); err != nil {
+		t.Fatalf("failed to save user 2 facts: %v", err)
+	}
+	if err := promptmgr.SavePersonFacts(123, 99, "bot facts"); err != nil {
+		t.Fatalf("failed to save bot facts: %v", err)
+	}
+
+	history := []telebot.Message{{Sender: &telebot.User{ID: 1, Username: "alice"}, Text: "hello"}}
+	currentMessage := &telebot.Message{Sender: &telebot.User{ID: 2, Username: "bob"}, Text: "question"}
+
+	context := buildPersonFactsContext(123, history, currentMessage, 99)
+	if !strings.Contains(context, "alice: likes Go") {
+		t.Fatalf("expected alice facts in context, got: %s", context)
+	}
+	if !strings.Contains(context, "bob: likes Rust") {
+		t.Fatalf("expected bob facts in context, got: %s", context)
+	}
+	if strings.Contains(context, "bot facts") {
+		t.Fatalf("did not expect bot facts in context, got: %s", context)
+	}
+
+	prefill := buildNoAssPrefill(history, "question", "system prompt", context, 99, currentMessage, nil)
+	if !strings.Contains(prefill, "Chat member profiles:") {
+		t.Fatalf("expected profiles section in prefill, got: %s", prefill)
+	}
+	if !strings.Contains(prefill, "alice: likes Go") || !strings.Contains(prefill, "bob: likes Rust") {
+		t.Fatalf("expected person facts in prefill, got: %s", prefill)
 	}
 }

@@ -25,22 +25,28 @@ func TestPromptMgrPlugin_Process(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
-	// Create prompts table
+	database.DB = mockDB
+	EnsureTables()
 	_, err := mockDB.Exec(`
-		CREATE TABLE IF NOT EXISTS prompts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			chat_id INTEGER NOT NULL,
-			version INTEGER NOT NULL,
-			prompt TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			UNIQUE(chat_id, version)
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT,
+			data TEXT
 		);
 	`)
 	if err != nil {
-		t.Fatalf("Failed to create prompts table: %v", err)
+		t.Fatalf("Failed to create users table: %v", err)
 	}
-
-	database.DB = mockDB
+	_, err = mockDB.Exec(`
+		INSERT INTO users (id, username, first_name, last_name) VALUES
+		(42, 'alice', 'Alice', 'Liddell'),
+		(43, 'bob', 'Bob', 'Builder')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert users: %v", err)
+	}
 
 	// Setup mock bot
 	mockBot := &testutils.MockBotWrapper{}
@@ -227,6 +233,176 @@ func TestPromptMgrPlugin_Process(t *testing.T) {
 	}
 }
 
+func TestPromptMgrPlugin_ProcessPersonFactCommands(t *testing.T) {
+	originalConfigs := registry.Config
+	defer func() {
+		registry.Config = originalConfigs
+	}()
+
+	registry.Config.OwnerUsername = "test_owner"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	EnsureTables()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create users table: %v", err)
+	}
+	_, err = mockDB.Exec(`
+		INSERT INTO users (id, username, first_name, last_name) VALUES
+		(42, 'alice', 'Alice', 'Liddell'),
+		(43, 'bob', 'Bob', 'Builder')
+	`)
+	if err != nil {
+		t.Fatalf("Failed to insert users: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	plugin := &PromptMgrPlugin{}
+
+	t.Run("show current chat facts by username", func(t *testing.T) {
+		if err := SavePersonFacts(123, 42, "likes tea"); err != nil {
+			t.Fatalf("SavePersonFacts failed: %v", err)
+		}
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfact 123 @alice",
+			Sender: &telebot.User{Username: "test_owner"},
+			Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		messageText, _ := mockBot.SendWhat.(string)
+		if !strings.Contains(messageText, "likes tea") {
+			t.Fatalf("expected facts in response, got %q", messageText)
+		}
+	})
+
+	t.Run("update current chat facts by user id", func(t *testing.T) {
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfact 123 43 likes hammers",
+			Sender: &telebot.User{Username: "test_owner"},
+			Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		facts, err := GetPersonFacts(123, 43)
+		if err != nil {
+			t.Fatalf("GetPersonFacts failed: %v", err)
+		}
+		if facts != "likes hammers" {
+			t.Fatalf("expected updated facts, got %q", facts)
+		}
+	})
+
+	t.Run("update another chat facts from owner private chat", func(t *testing.T) {
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfact -555 @alice likes chess",
+			Sender: &telebot.User{Username: "test_owner"},
+			Chat:   &telebot.Chat{ID: 999, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		facts, err := GetPersonFacts(-555, 42)
+		if err != nil {
+			t.Fatalf("GetPersonFacts failed: %v", err)
+		}
+		if facts != "likes chess" {
+			t.Fatalf("expected other-chat facts, got %q", facts)
+		}
+	})
+
+	t.Run("non owner is rejected", func(t *testing.T) {
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfact 123 @alice",
+			Sender: &telebot.User{Username: "not_owner"},
+			Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		messageText, _ := mockBot.SendWhat.(string)
+		if !strings.Contains(messageText, "only the bot owner") {
+			t.Fatalf("expected owner error, got %q", messageText)
+		}
+	})
+
+	t.Run("missing chat id is rejected", func(t *testing.T) {
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfact @alice",
+			Sender: &telebot.User{Username: "test_owner"},
+			Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		messageText, _ := mockBot.SendWhat.(string)
+		if !strings.Contains(messageText, "Invalid command format") {
+			t.Fatalf("expected invalid format error, got %q", messageText)
+		}
+	})
+
+	t.Run("list all person facts for chat", func(t *testing.T) {
+		if err := SavePersonFacts(123, 42, "likes tea"); err != nil {
+			t.Fatalf("SavePersonFacts failed: %v", err)
+		}
+		if err := SavePersonFacts(123, 43, "likes hammers"); err != nil {
+			t.Fatalf("SavePersonFacts failed: %v", err)
+		}
+
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfacts 123",
+			Sender: &telebot.User{Username: "test_owner"},
+			Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		messageText, _ := mockBot.SendWhat.(string)
+		if !strings.Contains(messageText, "alice:") || !strings.Contains(messageText, "likes tea") {
+			t.Fatalf("expected alice facts in output, got %q", messageText)
+		}
+		if !strings.Contains(messageText, "bob:") || !strings.Contains(messageText, "likes hammers") {
+			t.Fatalf("expected bob facts in output, got %q", messageText)
+		}
+	})
+
+	t.Run("personfacts non owner is rejected", func(t *testing.T) {
+		mockBot.SendCalled = false
+		plugin.Process(&telebot.Message{
+			Text:   "!personfacts 123",
+			Sender: &telebot.User{Username: "not_owner"},
+			Chat:   &telebot.Chat{ID: 123, Type: telebot.ChatPrivate},
+		})
+		if !mockBot.SendCalled {
+			t.Fatal("expected Send to be called")
+		}
+		messageText, _ := mockBot.SendWhat.(string)
+		if !strings.Contains(messageText, "only the bot owner") {
+			t.Fatalf("expected owner error, got %q", messageText)
+		}
+	})
+}
+
 func TestSplitMessage(t *testing.T) {
 	text := strings.Repeat("a", telegramMessageChunkSize+50)
 
@@ -255,24 +431,11 @@ func TestShowCurrentPromptSplitsLongPrompt(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
-	_, err := mockDB.Exec(`
-		CREATE TABLE IF NOT EXISTS prompts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			chat_id INTEGER NOT NULL,
-			version INTEGER NOT NULL,
-			prompt TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			UNIQUE(chat_id, version)
-		);
-	`)
-	if err != nil {
-		t.Fatalf("Failed to create prompts table: %v", err)
-	}
-
 	database.DB = mockDB
+	EnsureTables()
 
 	longPrompt := strings.Repeat("x", telegramMessageChunkSize+250)
-	_, err = mockDB.Exec(
+	_, err := mockDB.Exec(
 		"INSERT INTO prompts (chat_id, version, prompt, created_at) VALUES (?, 1, ?, 0)",
 		123,
 		longPrompt,
@@ -308,5 +471,59 @@ func TestShowCurrentPromptSplitsLongPrompt(t *testing.T) {
 
 	if !strings.Contains(strings.Join(sentChunks, ""), longPrompt) {
 		t.Fatal("expected sent chunks to include the full prompt")
+	}
+}
+
+func TestPersonFactsHelpers(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	database.DB = mockDB
+	EnsureTables()
+
+	if err := SavePersonFacts(123, 1, "likes Go"); err != nil {
+		t.Fatalf("SavePersonFacts failed: %v", err)
+	}
+	if err := SavePersonFacts(123, 1, "likes Go and tea"); err != nil {
+		t.Fatalf("second SavePersonFacts failed: %v", err)
+	}
+	if err := SavePersonFacts(123, 2, "prefers Rust"); err != nil {
+		t.Fatalf("SavePersonFacts for second user failed: %v", err)
+	}
+	if err := SavePersonFacts(999, 1, "other chat facts"); err != nil {
+		t.Fatalf("SavePersonFacts for other chat failed: %v", err)
+	}
+
+	facts, err := GetPersonFacts(123, 1)
+	if err != nil {
+		t.Fatalf("GetPersonFacts failed: %v", err)
+	}
+	if facts != "likes Go and tea" {
+		t.Fatalf("expected latest facts, got %q", facts)
+	}
+
+	multi, err := GetPersonFactsMulti(123, []int64{1, 2, 1, 3})
+	if err != nil {
+		t.Fatalf("GetPersonFactsMulti failed: %v", err)
+	}
+	if multi[1] != "likes Go and tea" {
+		t.Fatalf("expected user 1 latest facts, got %q", multi[1])
+	}
+	if multi[2] != "prefers Rust" {
+		t.Fatalf("expected user 2 facts, got %q", multi[2])
+	}
+	if _, ok := multi[3]; ok {
+		t.Fatal("did not expect facts for missing user")
+	}
+
+	all, err := GetAllPersonFacts(123)
+	if err != nil {
+		t.Fatalf("GetAllPersonFacts failed: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 users in chat facts, got %d", len(all))
+	}
+	if all[1] != "likes Go and tea" || all[2] != "prefers Rust" {
+		t.Fatalf("unexpected facts map: %#v", all)
 	}
 }

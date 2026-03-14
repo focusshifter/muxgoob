@@ -45,6 +45,7 @@ func (p *SelfPromptPlugin) Start(config interface{}) {
 	p.db = database.DB
 	// Load configuration
 	p.config = registry.Config.SelfPromptConfig
+	promptmgr.EnsureTables()
 
 	// Create settings table if not exists
 	_, err := p.db.Exec(`
@@ -461,17 +462,27 @@ func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []t
 	return messages
 }
 
-// Variable to hold the generateNewPrompt function for testing
+// Variable to hold the prompt/fact generation functions for testing.
 var generateNewPromptFunc func(p *SelfPromptPlugin, history string, currentPrompt string) string
+var generateUserFactsFunc func(p *SelfPromptPlugin, chatID int64, user activeChatUser, history string, currentFacts string) string
 
 func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
-	// Log the function entry
 	log.Printf("[selfprompt] Updating prompt for chat %d", chatID)
 
-	// Get last X messages from the chat
-	messages := p.retrieveHistoryForChat(chatID, registry.Config.ChatGptHistoryDepth)
+	if p.shouldBootstrapChat(chatID) {
+		p.bootstrapChat(chatID, registry.Config.ChatGptHistoryDepth)
+		return
+	}
 
-	// Get current prompt
+	messages := p.retrieveHistoryForChat(chatID, registry.Config.ChatGptHistoryDepth)
+	p.updatePromptFromMessages(chatID, messages)
+}
+
+func (p *SelfPromptPlugin) updatePromptFromMessages(chatID int64, messages []telebot.Message) {
+	if len(messages) == 0 {
+		return
+	}
+
 	currentPrompt, err := promptmgr.GetCurrentPrompt(chatID, false)
 	if err != nil {
 		log.Printf("[selfprompt] Error getting current prompt for chat %d: %v", chatID, err)
@@ -479,21 +490,22 @@ func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
 	}
 
 	history := p.generateChatGptHistory(messages)
+	p.updatePersonFacts(chatID, messages, history)
 
-	// Analyze messages and generate new prompt
 	var newPrompt string
 	if generateNewPromptFunc != nil {
-		// Use the mock function if provided (for testing)
 		newPrompt = generateNewPromptFunc(p, history, currentPrompt)
 	} else {
-		// Use the real implementation
-		newPrompt = p.generateNewPrompt(history, currentPrompt)
+		newPrompt = p.generateNewPrompt(chatID, history, currentPrompt)
 	}
 
-	// Update the prompt in the database
+	newPrompt = strings.TrimSpace(newPrompt)
+	if newPrompt == "" {
+		return
+	}
+
 	err = database.RetryWithBackoff(func() error {
 		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			// Get next version
 			var nextVersion int
 			err = tx.QueryRow(`
 				SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`,
@@ -502,7 +514,6 @@ func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
 				return err
 			}
 
-			// Insert new prompt
 			_, err = tx.Exec(`
 				INSERT INTO prompts (chat_id, version, prompt, created_at)
 				VALUES (?, ?, ?, ?)`,
@@ -516,6 +527,83 @@ func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
 	}
 }
 
+func (p *SelfPromptPlugin) shouldBootstrapChat(chatID int64) bool {
+	var promptCount int
+	err := p.db.QueryRow(`SELECT COUNT(*) FROM prompts WHERE chat_id = ?`, chatID).Scan(&promptCount)
+	if err != nil {
+		log.Printf("[selfprompt] Error checking prompts for chat %d: %v", chatID, err)
+		return false
+	}
+	if promptCount > 0 {
+		return false
+	}
+
+	var factCount int
+	err = p.db.QueryRow(`SELECT COUNT(*) FROM person_facts WHERE chat_id = ?`, chatID).Scan(&factCount)
+	if err != nil {
+		log.Printf("[selfprompt] Error checking person facts for chat %d: %v", chatID, err)
+		return false
+	}
+
+	return factCount == 0
+}
+
+func (p *SelfPromptPlugin) bootstrapChat(chatID int64, batchSize int) {
+	if batchSize <= 0 {
+		batchSize = 20
+	}
+
+	var totalMessages int
+	err := p.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE chat_id = ?`, chatID).Scan(&totalMessages)
+	if err != nil {
+		log.Printf("[selfprompt] Error counting messages for bootstrap in chat %d: %v", chatID, err)
+		return
+	}
+	if totalMessages == 0 {
+		return
+	}
+
+	log.Printf("[selfprompt] Bootstrapping chat %d across %d messages", chatID, totalMessages)
+	for offset := 0; offset < totalMessages; offset += batchSize {
+		messages := p.retrieveHistoryBatch(chatID, batchSize, offset)
+		if len(messages) == 0 {
+			continue
+		}
+		p.updatePromptFromMessages(chatID, messages)
+	}
+}
+
+func (p *SelfPromptPlugin) retrieveHistoryBatch(chatID int64, limit int, offset int) []telebot.Message {
+	rows, err := p.db.Query(
+		`SELECT data FROM messages
+		WHERE chat_id = ?
+		ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
+		chatID, limit, offset)
+	if err != nil {
+		log.Printf("Error retrieving chat history batch: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var messages []telebot.Message
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			log.Printf("Error scanning message batch row: %v", err)
+			continue
+		}
+
+		var msg telebot.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			log.Printf("Error unmarshaling batched message: %v", err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	return messages
+}
+
 type ChatMessage struct {
 	SenderID   int64
 	SenderName string
@@ -523,70 +611,118 @@ type ChatMessage struct {
 	Timestamp  int64
 }
 
-func (p *SelfPromptPlugin) generateChatGptHistory(messages []telebot.Message) string {
-	var history string
-	var username string
-
-	for _, message := range messages {
-		if message.Sender.Username != "" {
-			username = message.Sender.Username
-		} else {
-			username = message.Sender.FirstName + " " + message.Sender.LastName
-		}
-		history += fmt.Sprintf("%s: %s\n", username, message.Text)
-	}
-
-	return history
+type activeChatUser struct {
+	ID   int64
+	Name string
 }
 
-func (p *SelfPromptPlugin) generateNewPrompt(history string, currentPrompt string) string {
-	// Create GPT client
+func (p *SelfPromptPlugin) generateChatGptHistory(messages []telebot.Message) string {
+	var history strings.Builder
+
+	for _, message := range messages {
+		if message.Sender == nil {
+			continue
+		}
+		history.WriteString(fmt.Sprintf("%s: %s\n", displayName(message.Sender), message.Text))
+	}
+
+	return history.String()
+}
+
+func displayName(user *telebot.User) string {
+	if user == nil {
+		return ""
+	}
+	if user.Username != "" {
+		return user.Username
+	}
+	name := strings.TrimSpace(user.FirstName + " " + user.LastName)
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("user_%d", user.ID)
+}
+
+func collectActiveUsers(messages []telebot.Message) []activeChatUser {
+	seen := make(map[int64]struct{})
+	users := make([]activeChatUser, 0)
+	for _, message := range messages {
+		if message.Sender == nil || message.Sender.ID == 0 {
+			continue
+		}
+		userID := int64(message.Sender.ID)
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		users = append(users, activeChatUser{ID: userID, Name: displayName(message.Sender)})
+	}
+	sort.Slice(users, func(i, j int) bool {
+		return users[i].ID < users[j].ID
+	})
+	return users
+}
+
+func (p *SelfPromptPlugin) updatePersonFacts(chatID int64, messages []telebot.Message, history string) {
+	activeUsers := collectActiveUsers(messages)
+	for _, user := range activeUsers {
+		currentFacts, err := promptmgr.GetPersonFacts(chatID, user.ID)
+		if err != nil {
+			log.Printf("[selfprompt] Error getting person facts for chat %d user %d: %v", chatID, user.ID, err)
+			continue
+		}
+
+		var newFacts string
+		if generateUserFactsFunc != nil {
+			newFacts = generateUserFactsFunc(p, chatID, user, history, currentFacts)
+		} else {
+			newFacts = p.generateUserFacts(chatID, user, history, currentFacts)
+		}
+
+		newFacts = strings.TrimSpace(newFacts)
+		if newFacts == "" || newFacts == strings.TrimSpace(currentFacts) {
+			continue
+		}
+
+		if err := promptmgr.SavePersonFacts(chatID, user.ID, newFacts); err != nil {
+			log.Printf("[selfprompt] Error saving person facts for chat %d user %d: %v", chatID, user.ID, err)
+		}
+	}
+}
+
+func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 	var config openai.ClientConfig
 	var model string
 
-	// Get AI provider from database with fallback to config.yml
-	// Using nil for chatID to get the global setting
-	aiProvider := registry.GetAiProvider(nil)
-
+	aiProvider := registry.GetAiProvider(chatID)
 	if aiProvider == "openrouter" {
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		// Get AI model from database with fallback to config.yml
-		model = registry.GetAiModel(nil)
+		model = registry.GetAiModel(chatID)
 	} else {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"
 	}
 
-	client := openai.NewClientWithConfig(config)
+	return openai.NewClientWithConfig(config), model
+}
+
+func (p *SelfPromptPlugin) generateNewPrompt(chatID int64, history string, currentPrompt string) string {
+	client, model := buildOpenAIClient(&chatID)
 
 	systemMsg := `You refine bot system prompts based on chat context.`
 	userMsg := `
-	Analyze the provided chat history and refine the current system prompt to produce a concise, informative new bot system prompt that:
-1. Identifies key discussion topics from the chat history.  
-2. For every chat member:  
-   - Assesses user relationships, personality traits, interests, and preferences.  
-   - Lists findings under a header "[USERNAME]: ".
-3. Preserves and refines critical personality traits or instructions from the current prompt, such as analytical precision and prompt engineering focus.  
-4. Ensures clarity and brevity.  
-5. Preferrably written in the main language of the chat, such as English or Russian.
-
-Do not skip ANY chat member. Do not remove ANY existing chat members from the result even of they are inactive.
-
-Output only the new bot system prompt text. Do not include meta-instructions, role labels, or phrases like "You are a prompt engineer".
-
-**Discussion Topics:**  
-- [List key topics from chat history, e.g., "Programming languages", "Speed and performance"]  
-
-**[USERNAME]:**  
-- [Traits, relationships, interests, e.g., "Analytical, debates USER456, prefers Go"]  
-**[USERNAME]:**  
-- [Traits, relationships, interests, e.g., "Practical, counters USER123, likes Python"]\n\n`
+	Analyze the provided chat history and refine the current chat-specific prompt.
+	Output only concise discussion topics, shared chat dynamics, recurring themes, or stable group context that should influence future replies.
+	Do not include per-person profiles or headings for specific users.
+	Preserve useful stable instructions from the current prompt when they still apply.
+	Prefer the main language of the chat, such as English or Russian.
+	Keep it compact and durable, avoiding overfitting to a single short-lived tangent.
+	`
 
 	userMsg += `**Current Prompt to Refine:** ` + currentPrompt + `\n\n`
 	userMsg += `**Chat History:**\n` + history
 
-	// Call GPT
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -597,24 +733,68 @@ Output only the new bot system prompt text. Do not include meta-instructions, ro
 			},
 		},
 	)
-
 	if err != nil {
 		log.Printf("[selfprompt] Error generating new prompt: %v", err)
 		return currentPrompt
 	}
-
 	if len(resp.Choices) == 0 {
 		log.Printf("[selfprompt] No prompt generated by GPT")
 		return currentPrompt
 	}
 
-	newPrompt := resp.Choices[0].Message.Content
+	newPrompt := strings.TrimSpace(resp.Choices[0].Message.Content)
 	if newPrompt == "" {
 		log.Printf("[selfprompt] Empty prompt generated by GPT")
 		return currentPrompt
 	}
 
 	log.Printf("[selfprompt] Generated new prompt: %s", newPrompt)
-
 	return newPrompt
+}
+
+func (p *SelfPromptPlugin) generateUserFacts(chatID int64, user activeChatUser, history string, currentFacts string) string {
+	client, model := buildOpenAIClient(&chatID)
+
+	systemMsg := `You update one chat member profile using recent chat history.`
+	userMsg := fmt.Sprintf(`
+Analyze the recent chat history and update the profile for exactly one person: %s.
+
+Rules:
+1. Output only facts about that person.
+2. Preserve existing stable facts unless the new chat history clearly contradicts them.
+3. Focus on durable traits, interests, preferences, recurring relationships, and notable communication style.
+4. Ignore one-off jokes or fleeting topics unless they look stable.
+5. Prefer the main language of the chat.
+6. Keep it concise and useful for future replies.
+
+Current facts:
+%s
+
+Recent chat history:
+%s
+`, user.Name, currentFacts, history)
+
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: model,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: "system", Content: systemMsg},
+				{Role: "user", Content: userMsg},
+			},
+		},
+	)
+	if err != nil {
+		log.Printf("[selfprompt] Error generating user facts for chat %d user %d: %v", chatID, user.ID, err)
+		return currentFacts
+	}
+	if len(resp.Choices) == 0 {
+		return currentFacts
+	}
+
+	newFacts := strings.TrimSpace(resp.Choices[0].Message.Content)
+	if newFacts == "" {
+		return currentFacts
+	}
+	return newFacts
 }

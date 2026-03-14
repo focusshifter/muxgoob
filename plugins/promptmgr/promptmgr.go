@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ func init() {
 }
 
 func createPromptTables() {
-	// Create the prompts table
+	// Create the prompts and person facts tables
 	_, err := database.DB.Exec(`
 		CREATE TABLE IF NOT EXISTS prompts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,15 +39,31 @@ func createPromptTables() {
 			created_at INTEGER NOT NULL,
 			UNIQUE(chat_id, version)
 		);
+
+		CREATE TABLE IF NOT EXISTS person_facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			facts TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(chat_id, user_id, version)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_person_facts_chat_user
+			ON person_facts(chat_id, user_id);
 	`)
 	if err != nil {
 		log.Fatal("Failed to create prompts table:", err)
 	}
 }
 
-func (p *PromptMgrPlugin) Start(interface{}) {
-	// Create prompt tables if they don't exist
+func EnsureTables() {
 	createPromptTables()
+}
+
+func (p *PromptMgrPlugin) Start(interface{}) {
+	EnsureTables()
 }
 
 func (p *PromptMgrPlugin) Process(message *telebot.Message) {
@@ -55,6 +72,16 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 	}
 
 	log.Printf("[promptmgr] Received message: %q", message.Text)
+
+	if strings.HasPrefix(message.Text, "!personfacts") {
+		p.processPersonFactsCommand(message)
+		return
+	}
+
+	if strings.HasPrefix(message.Text, "!personfact") {
+		p.processPersonFactCommand(message)
+		return
+	}
 
 	// Check if the message starts with !prompt (but not !promptmgr or other variants)
 	if !strings.HasPrefix(message.Text, "!prompt ") && message.Text != "!prompt" {
@@ -174,6 +201,195 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 		"!prompt current <new_prompt> - Set current chat's prompt\n"+
 		"!prompt <chat_id> - Show another chat's prompt\n"+
 		"!prompt <chat_id> <new_prompt> - Set another chat's prompt")
+}
+
+func (p *PromptMgrPlugin) processPersonFactCommand(message *telebot.Message) {
+	bot := registry.Bot
+	args := strings.Fields(message.Text)
+	if len(args) < 3 {
+		sendPromptMessage(bot, message.Chat, "Invalid command format. Use:\n"+
+			"!personfact <chat_id> <user_id|@username> - Show facts for a chat\n"+
+			"!personfact <chat_id> <user_id|@username> <new_facts> - Set facts for another chat")
+		return
+	}
+
+	isOwner := message.Sender.Username == registry.Config.OwnerUsername
+	if !isOwner {
+		sendPromptMessage(bot, message.Chat, "Sorry, only the bot owner can control person facts.")
+		return
+	}
+
+	chatID, err := strconv.ParseInt(args[1], 10, 64)
+	if err != nil {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("Invalid chat ID: %s", args[1]))
+		return
+	}
+	userArgIndex := 2
+
+	if len(args) <= userArgIndex {
+		sendPromptMessage(bot, message.Chat, "Missing user identifier for !personfact command.")
+		return
+	}
+
+	userID, displayName, err := resolvePersonFactUser(args[userArgIndex])
+	if err != nil {
+		sendPromptMessage(bot, message.Chat, err.Error())
+		return
+	}
+
+	if len(args) == userArgIndex+1 {
+		showPersonFact(chatID, userID, displayName, bot, message)
+		return
+	}
+
+	prefixParts := []string{"!personfact"}
+	prefixParts = append(prefixParts, args[1])
+	prefixParts = append(prefixParts, args[userArgIndex])
+	newFacts := strings.TrimSpace(strings.TrimPrefix(message.Text, strings.Join(prefixParts, " ")+" "))
+	if newFacts == "" {
+		sendPromptMessage(bot, message.Chat, "Facts cannot be empty.")
+		return
+	}
+
+	updatePersonFact(chatID, userID, displayName, newFacts, bot, message)
+}
+
+func (p *PromptMgrPlugin) processPersonFactsCommand(message *telebot.Message) {
+	bot := registry.Bot
+	args := strings.Fields(message.Text)
+	if len(args) != 2 {
+		sendPromptMessage(bot, message.Chat, "Invalid command format. Use:\n!personfacts <chat_id>")
+		return
+	}
+
+	isOwner := message.Sender.Username == registry.Config.OwnerUsername
+	if !isOwner {
+		sendPromptMessage(bot, message.Chat, "Sorry, only the bot owner can control person facts.")
+		return
+	}
+
+	chatID, err := strconv.ParseInt(args[1], 10, 64)
+	if err != nil {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("Invalid chat ID: %s", args[1]))
+		return
+	}
+
+	showPersonFacts(chatID, bot, message)
+}
+
+func resolvePersonFactUser(identifier string) (int64, string, error) {
+	if identifier == "" {
+		return 0, "", fmt.Errorf("missing user identifier")
+	}
+
+	if userID, err := strconv.ParseInt(identifier, 10, 64); err == nil {
+		name, lookupErr := lookupUserDisplayName(userID)
+		if lookupErr != nil {
+			return 0, "", lookupErr
+		}
+		return userID, name, nil
+	}
+
+	username := strings.TrimPrefix(identifier, "@")
+	var userID int64
+	var storedUsername, firstName, lastName sql.NullString
+	err := database.DB.QueryRow(`
+		SELECT id, username, first_name, last_name
+		FROM users
+		WHERE username = ?
+		LIMIT 1`, username).Scan(&userID, &storedUsername, &firstName, &lastName)
+	if err == sql.ErrNoRows {
+		return 0, "", fmt.Errorf("user %q not found", identifier)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("error resolving user %q: %v", identifier, err)
+	}
+
+	name := strings.TrimSpace(strings.Join([]string{firstName.String, lastName.String}, " "))
+	if storedUsername.Valid && storedUsername.String != "" {
+		name = storedUsername.String
+	}
+	if name == "" {
+		name = fmt.Sprintf("user_%d", userID)
+	}
+	return userID, name, nil
+}
+
+func lookupUserDisplayName(userID int64) (string, error) {
+	var username, firstName, lastName sql.NullString
+	err := database.DB.QueryRow(`
+		SELECT username, first_name, last_name
+		FROM users
+		WHERE id = ?`, userID).Scan(&username, &firstName, &lastName)
+	if err == sql.ErrNoRows {
+		return fmt.Sprintf("user_%d", userID), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("error looking up user %d: %v", userID, err)
+	}
+
+	if username.Valid && username.String != "" {
+		return username.String, nil
+	}
+	name := strings.TrimSpace(strings.Join([]string{firstName.String, lastName.String}, " "))
+	if name != "" {
+		return name, nil
+	}
+	return fmt.Sprintf("user_%d", userID), nil
+}
+
+func showPersonFact(chatID int64, userID int64, displayName string, bot *registry.BotWrapper, message *telebot.Message) {
+	facts, err := GetPersonFacts(chatID, userID)
+	if err != nil {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("Error retrieving person facts: %v", err))
+		return
+	}
+	if facts == "" {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("No facts stored for %s in chat %d.", displayName, chatID))
+		return
+	}
+	sendPromptMessage(bot, message.Chat, fmt.Sprintf("Facts for %s in chat %d:\n\n%s", displayName, chatID, facts))
+}
+
+func updatePersonFact(chatID int64, userID int64, displayName, facts string, bot *registry.BotWrapper, message *telebot.Message) {
+	if err := SavePersonFacts(chatID, userID, facts); err != nil {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("Error updating person facts: %v", err))
+		return
+	}
+	sendPromptMessage(bot, message.Chat, fmt.Sprintf("Facts updated for %s in chat %d.", displayName, chatID))
+}
+
+func showPersonFacts(chatID int64, bot *registry.BotWrapper, message *telebot.Message) {
+	factMap, err := GetAllPersonFacts(chatID)
+	if err != nil {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("Error retrieving person facts: %v", err))
+		return
+	}
+	if len(factMap) == 0 {
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("No person facts stored for chat %d.", chatID))
+		return
+	}
+
+	userIDs := make([]int64, 0, len(factMap))
+	for userID := range factMap {
+		userIDs = append(userIDs, userID)
+	}
+	sort.Slice(userIDs, func(i, j int) bool { return userIDs[i] < userIDs[j] })
+
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("Person facts for chat %d:\n\n", chatID))
+	for _, userID := range userIDs {
+		displayName, err := lookupUserDisplayName(userID)
+		if err != nil {
+			displayName = fmt.Sprintf("user_%d", userID)
+		}
+		out.WriteString(displayName)
+		out.WriteString(":\n")
+		out.WriteString(strings.TrimSpace(factMap[userID]))
+		out.WriteString("\n\n")
+	}
+
+	sendPromptMessage(bot, message.Chat, strings.TrimSpace(out.String()))
 }
 
 func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.Message) {
@@ -491,4 +707,138 @@ func GetCurrentPrompt(chatID int64, fullPrompt bool) (string, error) {
 	}
 
 	return finalPrompt, nil
+}
+
+func GetPersonFacts(chatID int64, userID int64) (string, error) {
+	var facts string
+	err := database.DB.QueryRow(`
+		SELECT facts FROM person_facts
+		WHERE chat_id = ? AND user_id = ?
+		ORDER BY version DESC
+		LIMIT 1`, chatID, userID).Scan(&facts)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("error retrieving person facts: %v", err)
+	}
+	return facts, nil
+}
+
+func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error) {
+	results := make(map[int64]string)
+	if len(userIDs) == 0 {
+		return results, nil
+	}
+
+	seen := make(map[int64]struct{}, len(userIDs))
+	uniqueUserIDs := make([]int64, 0, len(userIDs))
+	for _, userID := range userIDs {
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		uniqueUserIDs = append(uniqueUserIDs, userID)
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(uniqueUserIDs)), ",")
+	query := fmt.Sprintf(`
+		SELECT pf.user_id, pf.facts
+		FROM person_facts pf
+		JOIN (
+			SELECT user_id, MAX(version) AS max_version
+			FROM person_facts
+			WHERE chat_id = ? AND user_id IN (%s)
+			GROUP BY user_id
+		) latest
+		ON latest.user_id = pf.user_id AND latest.max_version = pf.version
+		WHERE pf.chat_id = ?`, placeholders)
+
+	args := make([]interface{}, 0, len(uniqueUserIDs)+2)
+	args = append(args, chatID)
+	for _, userID := range uniqueUserIDs {
+		args = append(args, userID)
+	}
+	args = append(args, chatID)
+
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving person facts: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID int64
+		var facts string
+		if err := rows.Scan(&userID, &facts); err != nil {
+			return nil, fmt.Errorf("error scanning person facts: %v", err)
+		}
+		results[userID] = facts
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating person facts: %v", err)
+	}
+
+	return results, nil
+}
+
+func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
+	results := make(map[int64]string)
+	rows, err := database.DB.Query(`
+		SELECT pf.user_id, pf.facts
+		FROM person_facts pf
+		JOIN (
+			SELECT user_id, MAX(version) AS max_version
+			FROM person_facts
+			WHERE chat_id = ?
+			GROUP BY user_id
+		) latest
+		ON latest.user_id = pf.user_id AND latest.max_version = pf.version
+		WHERE pf.chat_id = ?`, chatID, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving person facts: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID int64
+		var facts string
+		if err := rows.Scan(&userID, &facts); err != nil {
+			return nil, fmt.Errorf("error scanning person facts: %v", err)
+		}
+		results[userID] = facts
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating person facts: %v", err)
+	}
+
+	return results, nil
+}
+
+func SavePersonFacts(chatID int64, userID int64, facts string) error {
+	trimmedFacts := strings.TrimSpace(facts)
+	if trimmedFacts == "" {
+		return nil
+	}
+
+	return database.RetryWithBackoff(func() error {
+		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			var nextVersion int
+			err := tx.QueryRow(`
+				SELECT COALESCE(MAX(version) + 1, 1)
+				FROM person_facts
+				WHERE chat_id = ? AND user_id = ?`, chatID, userID).Scan(&nextVersion)
+			if err != nil {
+				return err
+			}
+
+			_, err = tx.Exec(`
+				INSERT INTO person_facts (chat_id, user_id, facts, version, created_at)
+				VALUES (?, ?, ?, ?, ?)`,
+				chatID, userID, trimmedFacts, nextVersion, time.Now().Unix())
+			return err
+		})
+	})
 }

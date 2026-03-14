@@ -199,6 +199,18 @@ func Initialize() {
 			UNIQUE(type, item_key)
 		);
 
+		CREATE TABLE IF NOT EXISTS person_facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			facts TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(chat_id, user_id, version),
+			FOREIGN KEY (chat_id) REFERENCES chats(id),
+			FOREIGN KEY (user_id) REFERENCES users(id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_messages_unixtime ON messages(unixtime);
 		CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 		CREATE INDEX IF NOT EXISTS idx_messages_media_group ON messages(media_group_id);
@@ -208,6 +220,7 @@ func Initialize() {
 		CREATE INDEX IF NOT EXISTS idx_helix_streams_user_name ON helix_streams(user_name);
 		CREATE INDEX IF NOT EXISTS idx_stream_notifications_stream_id ON stream_notifications(stream_id);
 		CREATE INDEX IF NOT EXISTS idx_spotify_reviews_item ON spotify_reviews(type, item_key);
+		CREATE INDEX IF NOT EXISTS idx_person_facts_chat_user ON person_facts(chat_id, user_id);
 	`)
 	if err != nil {
 		log.Fatal("[database] Failed to create tables:", err)

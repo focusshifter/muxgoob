@@ -9,6 +9,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
@@ -24,12 +25,23 @@ func mockGenerateNewPromptFunc(p *SelfPromptPlugin, history string, currentPromp
 func TestSelfPromptPlugin_Process(t *testing.T) {
 	// Save original function to restore later
 	originalFunc := generateNewPromptFunc
+	originalUserFactsFunc := generateUserFactsFunc
 	defer func() {
 		generateNewPromptFunc = originalFunc
+		generateUserFactsFunc = originalUserFactsFunc
 	}()
 
 	// Set mock function
 	generateNewPromptFunc = mockGenerateNewPromptFunc
+	generateUserFactsFunc = func(p *SelfPromptPlugin, chatID int64, user activeChatUser, history string, currentFacts string) string {
+		_ = p
+		_ = chatID
+		_ = history
+		if currentFacts != "" {
+			return currentFacts
+		}
+		return "facts for " + user.Name
+	}
 
 	// Create plugin instance
 	plugin := &SelfPromptPlugin{
@@ -307,6 +319,21 @@ func createTables(t *testing.T, db *sql.DB) {
 		t.Fatalf("Failed to create prompts table: %v", err)
 	}
 
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS person_facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			facts TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(chat_id, user_id, version)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create person_facts table: %v", err)
+	}
+
 	// Create messages table
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS messages (
@@ -437,5 +464,76 @@ func TestRetrieveHistoryForChat_IncludesReplyParents(t *testing.T) {
 	}
 	if history[0].ID != parent.ID || history[1].ID != child.ID {
 		t.Fatalf("Expected parent then child order, got IDs %d and %d", history[0].ID, history[1].ID)
+	}
+}
+
+func TestUpdatePrompt_BootstrapsChatWithoutFacts(t *testing.T) {
+	originalFunc := generateNewPromptFunc
+	originalUserFactsFunc := generateUserFactsFunc
+	defer func() {
+		generateNewPromptFunc = originalFunc
+		generateUserFactsFunc = originalUserFactsFunc
+	}()
+
+	generateNewPromptFunc = func(p *SelfPromptPlugin, history string, currentPrompt string) string {
+		_ = p
+		return "topics: " + history + currentPrompt
+	}
+	generateUserFactsFunc = func(p *SelfPromptPlugin, chatID int64, user activeChatUser, history string, currentFacts string) string {
+		_ = p
+		_ = chatID
+		_ = history
+		if currentFacts != "" {
+			return currentFacts
+		}
+		return "facts for " + user.Name
+	}
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	createTables(t, mockDB)
+	database.DB = mockDB
+
+	plugin := &SelfPromptPlugin{db: mockDB, msgCounter: make(map[int64]int64)}
+
+	chatID := int64(777)
+	messages := []telebot.Message{
+		{ID: 1, Unixtime: 100, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{ID: 1, Username: "alice"}, Text: "first"},
+		{ID: 2, Unixtime: 200, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{ID: 2, Username: "bob"}, Text: "second"},
+		{ID: 3, Unixtime: 300, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{ID: 1, Username: "alice"}, Text: "third"},
+	}
+
+	for _, msg := range messages {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatalf("marshal message: %v", err)
+		}
+		_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, sender_id, unixtime, text, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			msg.ID, chatID, msg.Sender.ID, msg.Unixtime, msg.Text, string(data))
+		if err != nil {
+			t.Fatalf("insert message: %v", err)
+		}
+	}
+
+	plugin.bootstrapChat(chatID, 2)
+
+	allFacts, err := promptmgr.GetAllPersonFacts(chatID)
+	if err != nil {
+		t.Fatalf("GetAllPersonFacts failed: %v", err)
+	}
+	if len(allFacts) != 2 {
+		t.Fatalf("expected facts for 2 users, got %d", len(allFacts))
+	}
+	if allFacts[1] == "" || allFacts[2] == "" {
+		t.Fatalf("expected facts for both users, got %#v", allFacts)
+	}
+
+	var promptCount int
+	err = mockDB.QueryRow(`SELECT COUNT(*) FROM prompts WHERE chat_id = ?`, chatID).Scan(&promptCount)
+	if err != nil {
+		t.Fatalf("count prompts: %v", err)
+	}
+	if promptCount < 2 {
+		t.Fatalf("expected multiple prompt versions from bootstrap, got %d", promptCount)
 	}
 }

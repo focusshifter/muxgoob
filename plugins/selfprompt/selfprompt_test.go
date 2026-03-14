@@ -3,6 +3,7 @@ package selfprompt
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -535,5 +536,52 @@ func TestUpdatePrompt_BootstrapsChatWithoutFacts(t *testing.T) {
 	}
 	if promptCount < 2 {
 		t.Fatalf("expected multiple prompt versions from bootstrap, got %d", promptCount)
+	}
+}
+
+func TestUpdatePersonFacts_UsesOnlyUsersOwnMessages(t *testing.T) {
+	originalUserFactsFunc := generateUserFactsFunc
+	defer func() {
+		generateUserFactsFunc = originalUserFactsFunc
+	}()
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	createTables(t, mockDB)
+	database.DB = mockDB
+
+	plugin := &SelfPromptPlugin{db: mockDB, msgCounter: make(map[int64]int64)}
+
+	seenHistories := make(map[int64]string)
+	generateUserFactsFunc = func(p *SelfPromptPlugin, chatID int64, user activeChatUser, history string, currentFacts string) string {
+		_ = p
+		_ = chatID
+		_ = currentFacts
+		seenHistories[user.ID] = history
+		return "facts for " + user.Name
+	}
+
+	messages := []telebot.Message{
+		{Sender: &telebot.User{ID: 1, Username: "alice"}, Text: "I love tea"},
+		{Sender: &telebot.User{ID: 2, Username: "bob"}, Text: "alice loves tea"},
+		{Sender: &telebot.User{ID: 1, Username: "alice"}, Text: "I also write Go"},
+	}
+
+	plugin.updatePersonFacts(123, messages, plugin.generateChatGptHistory(messages))
+
+	aliceHistory := seenHistories[1]
+	if strings.Contains(aliceHistory, "bob:") || strings.Contains(aliceHistory, "alice loves tea") {
+		t.Fatalf("expected alice history to exclude bob messages, got %q", aliceHistory)
+	}
+	if !strings.Contains(aliceHistory, "alice: I love tea") || !strings.Contains(aliceHistory, "alice: I also write Go") {
+		t.Fatalf("expected alice history to include only alice messages, got %q", aliceHistory)
+	}
+
+	bobHistory := seenHistories[2]
+	if strings.Contains(bobHistory, "I also write Go") || strings.Contains(bobHistory, "I love tea") {
+		t.Fatalf("expected bob history to exclude alice messages, got %q", bobHistory)
+	}
+	if !strings.Contains(bobHistory, "bob: alice loves tea") {
+		t.Fatalf("expected bob history to include bob message, got %q", bobHistory)
 	}
 }

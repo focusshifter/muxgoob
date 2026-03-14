@@ -365,6 +365,17 @@ func collectActiveUsers(messages []telebot.Message) []activeChatUser {
 	return users
 }
 
+func filterMessagesByUser(messages []telebot.Message, userID int64) []telebot.Message {
+	filtered := make([]telebot.Message, 0)
+	for _, message := range messages {
+		if message.Sender == nil || int64(message.Sender.ID) != userID {
+			continue
+		}
+		filtered = append(filtered, message)
+	}
+	return filtered
+}
+
 func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 	var config openai.ClientConfig
 	var model string
@@ -382,15 +393,21 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 	return openai.NewClientWithConfig(config), model
 }
 
-func updatePersonFacts(chatID int64, messages []telebot.Message, history string) {
+func updatePersonFacts(chatID int64, messages []telebot.Message, _ string) {
 	for _, user := range collectActiveUsers(messages) {
+		userMessages := filterMessagesByUser(messages, user.ID)
+		if len(userMessages) == 0 {
+			continue
+		}
+		userHistory := generateChatGptHistory(userMessages)
+
 		currentFacts, err := promptmgr.GetPersonFacts(chatID, user.ID)
 		if err != nil {
 			log.Printf("Error getting facts for user %d: %v", user.ID, err)
 			continue
 		}
 
-		newFacts := strings.TrimSpace(generateUserFacts(chatID, user, history, currentFacts))
+		newFacts := strings.TrimSpace(generateUserFacts(chatID, user, userHistory, currentFacts))
 		if newFacts == "" || newFacts == strings.TrimSpace(currentFacts) {
 			continue
 		}
@@ -453,24 +470,25 @@ func generateNewPrompt(chatID int64, history string, currentPrompt string) strin
 func generateUserFacts(chatID int64, user activeChatUser, history string, currentFacts string) string {
 	client, model := buildOpenAIClient(&chatID)
 
-	systemMsg := `You update one chat member profile using recent chat history.`
+	systemMsg := `You update one chat member profile using only that member's own recent messages.`
 	userMsg := fmt.Sprintf(`
-Analyze the recent chat history and update the profile for exactly one person: %s.
+Analyze the recent messages written by exactly one person: %s.
 
 Rules:
 1. Output only facts about that person.
 2. Preserve existing stable facts unless the new chat history clearly contradicts them.
-3. Focus on durable traits, interests, preferences, recurring relationships, and notable communication style.
-4. Ignore one-off jokes or fleeting topics unless they look stable.
-5. Prefer the main language of the chat.
-6. Keep it concise and useful for future replies.
+3. Use only what this person says in their own messages below. Do not infer facts from what other people say about them.
+4. Focus on durable traits, interests, preferences, self-stated relationships, and notable communication style.
+5. Ignore one-off jokes or fleeting topics unless they look stable.
+6. Prefer the main language of the chat.
+7. Keep it concise and useful for future replies.
 
 Current facts:
 %s
 
-Recent chat history:
+Recent messages from %s:
 %s
-`, user.Name, currentFacts, history)
+`, user.Name, currentFacts, user.Name, history)
 
 	resp, err := client.CreateChatCompletion(
 		context.Background(),

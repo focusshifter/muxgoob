@@ -1,6 +1,7 @@
 package promptmgr
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tucnak/telebot"
@@ -223,5 +224,89 @@ func TestPromptMgrPlugin_Process(t *testing.T) {
 			plugin.Process(tc.message)
 			tc.verify(t)
 		})
+	}
+}
+
+func TestSplitMessage(t *testing.T) {
+	text := strings.Repeat("a", telegramMessageChunkSize+50)
+
+	chunks := splitMessage(text, telegramMessageChunkSize)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+
+	for i, chunk := range chunks {
+		if len([]rune(chunk)) > telegramMessageChunkSize {
+			t.Fatalf("chunk %d exceeds limit: %d", i, len([]rune(chunk)))
+		}
+	}
+
+	if strings.Join(chunks, "") != text {
+		t.Fatal("expected chunks to reconstruct original text")
+	}
+}
+
+func TestShowCurrentPromptSplitsLongPrompt(t *testing.T) {
+	originalConfigs := registry.Config
+	defer func() {
+		registry.Config = originalConfigs
+	}()
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS prompts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			version INTEGER NOT NULL,
+			prompt TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(chat_id, version)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create prompts table: %v", err)
+	}
+
+	database.DB = mockDB
+
+	longPrompt := strings.Repeat("x", telegramMessageChunkSize+250)
+	_, err = mockDB.Exec(
+		"INSERT INTO prompts (chat_id, version, prompt, created_at) VALUES (?, 1, ?, 0)",
+		123,
+		longPrompt,
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert prompt: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	var sentChunks []string
+	mockBot.SendFunc = func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error) {
+		msg, ok := what.(string)
+		if !ok {
+			t.Fatalf("expected string message, got %T", what)
+		}
+		sentChunks = append(sentChunks, msg)
+		return &telebot.Message{}, nil
+	}
+	registry.SetTestBot(mockBot)
+
+	message := &telebot.Message{Chat: &telebot.Chat{ID: 123}}
+	showCurrentPrompt(123, registry.Bot, message)
+
+	if len(sentChunks) < 2 {
+		t.Fatalf("expected multiple sent chunks, got %d", len(sentChunks))
+	}
+
+	for i, chunk := range sentChunks {
+		if len([]rune(chunk)) > telegramMessageChunkSize {
+			t.Fatalf("sent chunk %d exceeds limit: %d", i, len([]rune(chunk)))
+		}
+	}
+
+	if !strings.Contains(strings.Join(sentChunks, ""), longPrompt) {
+		t.Fatal("expected sent chunks to include the full prompt")
 	}
 }

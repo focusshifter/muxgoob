@@ -18,6 +18,8 @@ import (
 // GLOBAL_CHAT_ID is a special chat ID used for global prompts
 const GLOBAL_CHAT_ID int64 = 0
 
+const telegramMessageChunkSize = 4000
+
 // PromptMgrPlugin manages and stores prompts in the database
 type PromptMgrPlugin struct{}
 
@@ -80,7 +82,7 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 
 	// All other commands are restricted to owners only
 	if !isOwner {
-		bot.Send(message.Chat, "Sorry, only the bot owner can control prompts.")
+		sendPromptMessage(bot, message.Chat, "Sorry, only the bot owner can control prompts.")
 		return
 	}
 
@@ -167,7 +169,7 @@ func (p *PromptMgrPlugin) Process(message *telebot.Message) {
 	}
 
 	// If we get here, it's an invalid command format
-	bot.Send(message.Chat, "Invalid command format. Use:\n"+
+	sendPromptMessage(bot, message.Chat, "Invalid command format. Use:\n"+
 		"!prompt current - Show current chat's prompt\n"+
 		"!prompt current <new_prompt> - Set current chat's prompt\n"+
 		"!prompt <chat_id> - Show another chat's prompt\n"+
@@ -197,22 +199,22 @@ func showCurrentPrompt(chatID int64, bot *registry.BotWrapper, message *telebot.
 			ORDER BY version DESC LIMIT 1`, GLOBAL_CHAT_ID).Scan(&prompt, &version)
 
 		if err == sql.ErrNoRows {
-			bot.Send(message.Chat, fmt.Sprintf("%sNo prompt is set for this chat.", chatPrefix))
+			sendPromptMessage(bot, message.Chat, fmt.Sprintf("%sNo prompt is set for this chat.", chatPrefix))
 			return
 		} else if err != nil {
-			bot.Send(message.Chat, fmt.Sprintf("%sError retrieving prompt: %s", chatPrefix, err.Error()))
+			sendPromptMessage(bot, message.Chat, fmt.Sprintf("%sError retrieving prompt: %s", chatPrefix, err.Error()))
 			return
 		}
 
-		bot.Send(message.Chat, fmt.Sprintf("%sCurrent global prompt (version %d):\n\n%s",
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("%sCurrent global prompt (version %d):\n\n%s",
 			chatPrefix, version, prompt))
 		return
 	} else if err != nil {
-		bot.Send(message.Chat, fmt.Sprintf("%sError retrieving prompt: %s", chatPrefix, err.Error()))
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("%sError retrieving prompt: %s", chatPrefix, err.Error()))
 		return
 	}
 
-	bot.Send(message.Chat, fmt.Sprintf("%sCurrent chat prompt (version %d):\n\n%s",
+	sendPromptMessage(bot, message.Chat, fmt.Sprintf("%sCurrent chat prompt (version %d):\n\n%s",
 		chatPrefix, version, prompt))
 }
 
@@ -225,7 +227,7 @@ func listPromptVersions(chatID int64, bot *registry.BotWrapper, message *telebot
 		ORDER BY version DESC`, chatID)
 
 	if err != nil {
-		bot.Send(message.Chat, "Error retrieving prompt versions: "+err.Error())
+		sendPromptMessage(bot, message.Chat, "Error retrieving prompt versions: "+err.Error())
 		return
 	}
 	defer rows.Close()
@@ -238,7 +240,7 @@ func listPromptVersions(chatID int64, bot *registry.BotWrapper, message *telebot
 		var promptPreview string
 
 		if err := rows.Scan(&version, &createdAt, &promptPreview); err != nil {
-			bot.Send(message.Chat, "Error scanning prompt row: "+err.Error())
+			sendPromptMessage(bot, message.Chat, "Error scanning prompt row: "+err.Error())
 			return
 		}
 
@@ -248,13 +250,13 @@ func listPromptVersions(chatID int64, bot *registry.BotWrapper, message *telebot
 	}
 
 	if len(versions) == 0 {
-		bot.Send(message.Chat, fmt.Sprintf("No prompts found for chat %d", chatID))
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("No prompts found for chat %d", chatID))
 		return
 	}
 
 	response := fmt.Sprintf("Prompt versions for chat %d:\n\n%s",
 		chatID, strings.Join(versions, "\n\n"))
-	bot.Send(message.Chat, response)
+	sendPromptMessage(bot, message.Chat, response)
 }
 
 func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, message *telebot.Message) {
@@ -273,11 +275,11 @@ func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, mess
 			ORDER BY version DESC LIMIT 1`, GLOBAL_CHAT_ID).Scan(&prompt, &version)
 
 		if err == sql.ErrNoRows {
-			bot.Send(message.Chat, "No global prompt is set.")
+			sendPromptMessage(bot, message.Chat, "No global prompt is set.")
 		} else if err != nil {
-			bot.Send(message.Chat, "Error retrieving global prompt: "+err.Error())
+			sendPromptMessage(bot, message.Chat, "Error retrieving global prompt: "+err.Error())
 		} else {
-			bot.Send(message.Chat, fmt.Sprintf("Current global prompt (version %d):\n\n%s", version, prompt))
+			sendPromptMessage(bot, message.Chat, fmt.Sprintf("Current global prompt (version %d):\n\n%s", version, prompt))
 		}
 		return
 	}
@@ -309,11 +311,11 @@ func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, mess
 		})
 
 		if err != nil {
-			bot.Send(message.Chat, "Error updating global prompt: "+err.Error())
+			sendPromptMessage(bot, message.Chat, "Error updating global prompt: "+err.Error())
 			return
 		}
 
-		bot.Send(message.Chat, "Global prompt updated successfully.")
+		sendPromptMessage(bot, message.Chat, "Global prompt updated successfully.")
 		return
 	}
 
@@ -339,11 +341,11 @@ func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, mess
 	})
 
 	if err != nil {
-		bot.Send(message.Chat, "Error updating prompt: "+err.Error())
+		sendPromptMessage(bot, message.Chat, "Error updating prompt: "+err.Error())
 		return
 	}
 
-	bot.Send(message.Chat, "Prompt updated successfully.")
+	sendPromptMessage(bot, message.Chat, "Prompt updated successfully.")
 }
 
 func revertPrompt(chatID int64, version int, bot *registry.BotWrapper, message *telebot.Message) {
@@ -356,10 +358,10 @@ func revertPrompt(chatID int64, version int, bot *registry.BotWrapper, message *
 		chatID, version).Scan(&prompt)
 
 	if err == sql.ErrNoRows {
-		bot.Send(message.Chat, fmt.Sprintf("Version %d not found for chat %d", version, chatID))
+		sendPromptMessage(bot, message.Chat, fmt.Sprintf("Version %d not found for chat %d", version, chatID))
 		return
 	} else if err != nil {
-		bot.Send(message.Chat, "Error retrieving prompt: "+err.Error())
+		sendPromptMessage(bot, message.Chat, "Error retrieving prompt: "+err.Error())
 		return
 	}
 
@@ -385,11 +387,57 @@ func revertPrompt(chatID int64, version int, bot *registry.BotWrapper, message *
 	})
 
 	if err != nil {
-		bot.Send(message.Chat, "Error reverting prompt: "+err.Error())
+		sendPromptMessage(bot, message.Chat, "Error reverting prompt: "+err.Error())
 		return
 	}
 
-	bot.Send(message.Chat, fmt.Sprintf("Prompt reverted to version %d content.", version))
+	sendPromptMessage(bot, message.Chat, fmt.Sprintf("Prompt reverted to version %d content.", version))
+}
+
+func sendPromptMessage(bot *registry.BotWrapper, to telebot.Recipient, text string) error {
+	for _, chunk := range splitMessage(text, telegramMessageChunkSize) {
+		_, err := bot.Send(to, chunk)
+		if err != nil {
+			log.Printf("[promptmgr] Error sending message: %v", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func splitMessage(text string, limit int) []string {
+	if text == "" {
+		return []string{""}
+	}
+
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(runes) > limit {
+		splitAt := limit
+		for i := limit; i > limit-200 && i > 0; i-- {
+			if runes[i-1] == '\n' || runes[i-1] == ' ' {
+				splitAt = i
+				break
+			}
+		}
+
+		chunks = append(chunks, strings.TrimSpace(string(runes[:splitAt])))
+		runes = runes[splitAt:]
+		for len(runes) > 0 && (runes[0] == '\n' || runes[0] == ' ') {
+			runes = runes[1:]
+		}
+	}
+
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
+	}
+
+	return chunks
 }
 
 // GetCurrentPrompt retrieves the current prompt for a chat

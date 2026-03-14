@@ -9,6 +9,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -19,6 +20,13 @@ import (
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
 )
+
+const (
+	bulkDefaultChunkSize = 1000
+	bulkLoadPageSize     = 10000
+)
+
+var modelOverride string
 
 func main() {
 	var (
@@ -31,6 +39,8 @@ func main() {
 		showHistory  bool
 		showPrompt   bool
 		dryRun       bool
+		bulk         bool
+		concurrency  int
 	)
 
 	flag.Int64Var(&chatID, "chat", 0, "Chat ID to generate prompts for")
@@ -42,10 +52,16 @@ func main() {
 	flag.BoolVar(&showHistory, "show-history", false, "Show the chat history being used")
 	flag.BoolVar(&showPrompt, "show-prompt", true, "Show the generated prompt")
 	flag.BoolVar(&dryRun, "dry-run", false, "Don't save the generated prompt to database")
+	flag.BoolVar(&bulk, "bulk", false, "Bulk mode: aggregate all messages per user, then generate facts")
+	flag.StringVar(&modelOverride, "model", "", "Override AI model for all calls")
+	flag.IntVar(&concurrency, "concurrency", 1, "Number of users to process in parallel (bulk mode only)")
 	flag.Parse()
 
 	if chatID == 0 {
 		log.Fatal("Chat ID is required")
+	}
+	if concurrency < 1 {
+		log.Fatal("Concurrency must be at least 1")
 	}
 
 	// Initialize registry and load config
@@ -65,7 +81,11 @@ func main() {
 
 	// Set message count from config if not specified
 	if messageCount == 0 {
-		messageCount = registry.Config.ChatGptHistoryDepth
+		if bulk {
+			messageCount = bulkDefaultChunkSize
+		} else {
+			messageCount = registry.Config.ChatGptHistoryDepth
+		}
 	}
 
 	fmt.Printf("Starting prompt generation for chat %d with %d iterations\n", chatID, iterations)
@@ -78,6 +98,15 @@ func main() {
 	}
 
 	fmt.Printf("Found a total of %d messages in chat history\n", totalMessages)
+
+	if bulk {
+		fmt.Printf("Running in bulk mode with chunk size %d and concurrency %d\n", messageCount, concurrency)
+		if modelOverride != "" {
+			fmt.Printf("Using model override: %s\n", modelOverride)
+		}
+		runBulkMode(chatID, totalMessages, messageCount, concurrency, showHistory, showPrompt, dryRun)
+		return
+	}
 
 	// Calculate how many batches we'll process
 	batchCount := (totalMessages + messageCount - 1) / messageCount // Ceiling division
@@ -319,6 +348,169 @@ type activeChatUser struct {
 	Name string
 }
 
+type bulkUserResult struct {
+	User         activeChatUser
+	MessageCount int
+	ChunkCount   int
+	Err          error
+}
+
+func loadAllMessages(chatID int64, totalMessages int) []telebot.Message {
+	if totalMessages <= 0 {
+		return nil
+	}
+
+	messages := make([]telebot.Message, 0, totalMessages)
+	for offset := 0; offset < totalMessages; offset += bulkLoadPageSize {
+		batch := retrieveHistoryBatch(chatID, bulkLoadPageSize, offset)
+		if len(batch) == 0 {
+			break
+		}
+		messages = append(messages, batch...)
+		fmt.Printf("Loaded %d/%d messages\n", len(messages), totalMessages)
+		if len(batch) < bulkLoadPageSize {
+			break
+		}
+	}
+
+	return messages
+}
+
+func chunkCount(total int, chunkSize int) int {
+	if total == 0 || chunkSize <= 0 {
+		return 0
+	}
+	return (total + chunkSize - 1) / chunkSize
+}
+
+func processBulkUser(chatID int64, user activeChatUser, messages []telebot.Message, chunkSize int, dryRun bool) bulkUserResult {
+	userMessages := filterMessagesByUser(messages, user.ID)
+	result := bulkUserResult{
+		User:         user,
+		MessageCount: len(userMessages),
+		ChunkCount:   chunkCount(len(userMessages), chunkSize),
+	}
+
+	if len(userMessages) == 0 {
+		return result
+	}
+
+	currentFacts := ""
+	for start := 0; start < len(userMessages); start += chunkSize {
+		end := start + chunkSize
+		if end > len(userMessages) {
+			end = len(userMessages)
+		}
+
+		currentFacts = strings.TrimSpace(generateUserFacts(
+			chatID,
+			user,
+			generateChatGptHistory(userMessages[start:end]),
+			currentFacts,
+		))
+	}
+
+	if dryRun || currentFacts == "" {
+		return result
+	}
+
+	if err := promptmgr.SavePersonFacts(chatID, user.ID, currentFacts); err != nil {
+		result.Err = err
+	}
+
+	return result
+}
+
+func runBulkMode(chatID int64, totalMessages int, chunkSize int, concurrency int, showHistory bool, showPrompt bool, dryRun bool) {
+	startedAt := time.Now()
+
+	fmt.Printf("Loading messages for chat %d...\n", chatID)
+	allMessages := loadAllMessages(chatID, totalMessages)
+	if len(allMessages) == 0 {
+		log.Fatalf("No messages loaded for chat %d", chatID)
+	}
+
+	users := collectActiveUsers(allMessages)
+	phase1StartedAt := time.Now()
+	fmt.Printf("\n=== Phase 1: Person Facts (%d users, %d concurrent) ===\n", len(users), concurrency)
+
+	jobs := make(chan activeChatUser)
+	results := make(chan bulkUserResult, len(users))
+	var workers sync.WaitGroup
+
+	for i := 0; i < concurrency; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for user := range jobs {
+				results <- processBulkUser(chatID, user, allMessages, chunkSize, dryRun)
+			}
+		}()
+	}
+
+	go func() {
+		for _, user := range users {
+			jobs <- user
+		}
+		close(jobs)
+		workers.Wait()
+		close(results)
+	}()
+
+	completedUsers := 0
+	for result := range results {
+		completedUsers++
+		if result.Err != nil {
+			fmt.Printf("[%d/%d] %s failed (%d msgs, %d chunks): %v\n", completedUsers, len(users), result.User.Name, result.MessageCount, result.ChunkCount, result.Err)
+			continue
+		}
+		fmt.Printf("[%d/%d] %s done (%d msgs, %d chunks)\n", completedUsers, len(users), result.User.Name, result.MessageCount, result.ChunkCount)
+	}
+
+	fmt.Printf("Phase 1 complete in %s\n", time.Since(phase1StartedAt).Round(time.Second))
+
+	phase2StartedAt := time.Now()
+	totalPromptChunks := chunkCount(len(allMessages), chunkSize)
+	fmt.Printf("\n=== Phase 2: Chat Prompt (%d chunks) ===\n", totalPromptChunks)
+
+	currentPrompt := ""
+	for start, chunkIndex := 0, 1; start < len(allMessages); start, chunkIndex = start+chunkSize, chunkIndex+1 {
+		end := start + chunkSize
+		if end > len(allMessages) {
+			end = len(allMessages)
+		}
+
+		history := generateChatGptHistory(allMessages[start:end])
+		if showHistory {
+			fmt.Printf("\n=== Chat History Chunk %d/%d ===\n", chunkIndex, totalPromptChunks)
+			fmt.Println(history)
+			fmt.Print("=== End of History Chunk ===\n\n")
+		}
+
+		currentPrompt = generateNewPrompt(chatID, history, currentPrompt)
+		fmt.Printf("Prompt chunk %d/%d done\n", chunkIndex, totalPromptChunks)
+	}
+
+	if showPrompt {
+		fmt.Println("\n=== Generated Prompt ===")
+		fmt.Println(currentPrompt)
+		fmt.Print("=== End of Prompt ===\n\n")
+	}
+
+	if dryRun {
+		fmt.Println("Dry run - prompt not saved to database")
+	} else {
+		if err := savePrompt(chatID, currentPrompt); err != nil {
+			log.Printf("Error saving prompt: %v", err)
+		} else {
+			fmt.Println("Prompt saved to database")
+		}
+	}
+
+	fmt.Printf("Phase 2 complete in %s\n", time.Since(phase2StartedAt).Round(time.Second))
+	fmt.Printf("Done. Total time: %s\n", time.Since(startedAt).Round(time.Second))
+}
+
 // generateChatGptHistory formats the messages for the AI prompt
 func generateChatGptHistory(messages []telebot.Message) string {
 	var history strings.Builder
@@ -388,6 +580,9 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 	} else {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"
+	}
+	if modelOverride != "" {
+		model = modelOverride
 	}
 
 	return openai.NewClientWithConfig(config), model

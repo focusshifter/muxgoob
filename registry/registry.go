@@ -10,8 +10,6 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/tucnak/telebot"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 // Plugins contains a list of loaded plugins
@@ -107,7 +105,7 @@ func LoadConfig(configPath string) {
 	loc, _ := time.LoadLocation(Config.TimeZone)
 	Config.TimeLoc = loc
 
-	spew.Dump(Config)
+	log.Printf("Loaded config from %s", configPath)
 }
 
 // RegisterPlugin

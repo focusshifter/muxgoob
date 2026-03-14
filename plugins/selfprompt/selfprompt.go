@@ -18,6 +18,7 @@ import (
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
+	"github.com/focusshifter/muxgoob/utils/facts"
 )
 
 type SelfPromptPlugin struct {
@@ -788,17 +789,27 @@ func (p *SelfPromptPlugin) generateUserFacts(chatID int64, user activeChatUser, 
 	client, model := buildOpenAIClient(&chatID)
 
 	systemMsg := `You update one chat member profile using only that member's own recent messages.`
-	userMsg := fmt.Sprintf(`
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		userMsg := fmt.Sprintf(`
 Analyze the recent messages written by exactly one person: %s.
 
 Rules:
-1. Output only facts about that person.
+1. Return the full stored dossier for that person, not a changelog or explanation.
 2. Preserve existing stable facts unless the new chat history clearly contradicts them.
 3. Use only what this person says in their own messages below. Do not infer facts from what other people say about them.
 4. Focus on durable traits, interests, preferences, self-stated relationships, and notable communication style.
 5. Ignore one-off jokes or fleeting topics unless they look stable.
 6. Prefer the main language of the chat.
-7. Keep it concise and useful for future replies.
+7. If the recent messages add nothing durable, keep the current dossier unchanged.
+8. Output exactly this structure with these exact English headings in this exact order:
+Identity:
+Interests:
+Relationships:
+Communication style:
+9. Under headings, use only '- ' bullet lines, or leave the section empty.
+10. Do not add commentary, explanations, markdown emphasis, update notes, or any text before/between/after the sections.
+11. Never replace a detailed dossier with a short summary.
 
 Current facts:
 %s
@@ -806,28 +817,40 @@ Current facts:
 Recent messages from %s:
 %s
 `, user.Name, currentFacts, user.Name, history)
+		if attempt == 2 {
+			userMsg += "\nYour previous answer was invalid. Retry once and return only the exact dossier structure.\n"
+		}
 
-	resp, err := client.CreateChatCompletion(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: model,
-			Messages: []openai.ChatCompletionMessage{
-				{Role: "system", Content: systemMsg},
-				{Role: "user", Content: userMsg},
+		resp, err := client.CreateChatCompletion(
+			context.Background(),
+			openai.ChatCompletionRequest{
+				Model: model,
+				Messages: []openai.ChatCompletionMessage{
+					{Role: "system", Content: systemMsg},
+					{Role: "user", Content: userMsg},
+				},
 			},
-		},
-	)
-	if err != nil {
-		log.Printf("[selfprompt] Error generating user facts for chat %d user %d: %v", chatID, user.ID, err)
-		return currentFacts
-	}
-	if len(resp.Choices) == 0 {
+		)
+		if err != nil {
+			log.Printf("[selfprompt] Error generating user facts for chat %d user %d: %v", chatID, user.ID, err)
+			return currentFacts
+		}
+		if len(resp.Choices) == 0 {
+			return currentFacts
+		}
+
+		evaluation := facts.EvaluatePersonFacts(currentFacts, resp.Choices[0].Message.Content)
+		if evaluation.Accepted {
+			return evaluation.Value
+		}
+		if evaluation.Retryable && attempt == 1 {
+			log.Printf("[selfprompt] Retrying facts generation for chat %d user %d after invalid output: %s", chatID, user.ID, evaluation.Reason)
+			continue
+		}
+
+		log.Printf("[selfprompt] Skipping facts update for chat %d user %d after invalid output: %s", chatID, user.ID, evaluation.Reason)
 		return currentFacts
 	}
 
-	newFacts := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if newFacts == "" {
-		return currentFacts
-	}
-	return newFacts
+	return currentFacts
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
+	"github.com/focusshifter/muxgoob/utils/facts"
 )
 
 const (
@@ -41,6 +43,7 @@ func main() {
 		dryRun       bool
 		bulk         bool
 		concurrency  int
+		userFilter   string
 	)
 
 	flag.Int64Var(&chatID, "chat", 0, "Chat ID to generate prompts for")
@@ -55,6 +58,7 @@ func main() {
 	flag.BoolVar(&bulk, "bulk", false, "Bulk mode: aggregate all messages per user, then generate facts")
 	flag.StringVar(&modelOverride, "model", "", "Override AI model for all calls")
 	flag.IntVar(&concurrency, "concurrency", 1, "Number of users to process in parallel (bulk mode only)")
+	flag.StringVar(&userFilter, "user", "", "Only regenerate facts for one user by @username or numeric user ID; skips prompt regeneration")
 	flag.Parse()
 
 	if chatID == 0 {
@@ -79,6 +83,16 @@ func main() {
 	registry.InitializeDbSettings()
 	promptmgr.EnsureTables()
 
+	var selectedUser *activeChatUser
+	if strings.TrimSpace(userFilter) != "" {
+		resolvedUser, err := resolveRequestedUser(userFilter)
+		if err != nil {
+			log.Fatal(err)
+		}
+		selectedUser = &resolvedUser
+		fmt.Printf("Limiting run to user %s (%d); prompt regeneration disabled\n", selectedUser.Name, selectedUser.ID)
+	}
+
 	// Set message count from config if not specified
 	if messageCount == 0 {
 		if bulk {
@@ -91,20 +105,27 @@ func main() {
 	fmt.Printf("Starting prompt generation for chat %d with %d iterations\n", chatID, iterations)
 	fmt.Printf("Using %d messages for history\n", messageCount)
 
-	// Get total message count for the chat
-	totalMessages := getTotalMessageCount(chatID)
+	// Get total message count for the chat or selected user
+	totalMessages := getScopedMessageCount(chatID, selectedUser)
 	if totalMessages == 0 {
+		if selectedUser != nil {
+			log.Fatalf("No messages found for user %s (%d) in chat %d", selectedUser.Name, selectedUser.ID, chatID)
+		}
 		log.Fatalf("No messages found for chat %d", chatID)
 	}
 
-	fmt.Printf("Found a total of %d messages in chat history\n", totalMessages)
+	if selectedUser != nil {
+		fmt.Printf("Found a total of %d messages for %s in chat history\n", totalMessages, selectedUser.Name)
+	} else {
+		fmt.Printf("Found a total of %d messages in chat history\n", totalMessages)
+	}
 
 	if bulk {
 		fmt.Printf("Running in bulk mode with chunk size %d and concurrency %d\n", messageCount, concurrency)
 		if modelOverride != "" {
 			fmt.Printf("Using model override: %s\n", modelOverride)
 		}
-		runBulkMode(chatID, totalMessages, messageCount, concurrency, showHistory, showPrompt, dryRun)
+		runBulkMode(chatID, totalMessages, messageCount, concurrency, showHistory, showPrompt, dryRun, selectedUser)
 		return
 	}
 
@@ -135,7 +156,7 @@ func main() {
 		}
 
 		// Get chat history for this batch
-		messages := retrieveHistoryBatch(chatID, messageCount, offset)
+		messages := retrieveScopedHistoryBatch(chatID, selectedUser, messageCount, offset)
 		if len(messages) == 0 {
 			log.Printf("No messages found for batch %d", i)
 			continue
@@ -156,12 +177,14 @@ func main() {
 		var newPrompt string
 		if !dryRun {
 			fmt.Println("Updating person facts...")
-			updatePersonFacts(chatID, messages, history)
+			updatePersonFacts(chatID, messages, history, selectedUser)
 
-			fmt.Println("Generating new prompt...")
-			newPrompt = generateNewPrompt(chatID, history, currentPrompt)
+			if selectedUser == nil {
+				fmt.Println("Generating new prompt...")
+				newPrompt = generateNewPrompt(chatID, history, currentPrompt)
+			}
 
-			if showPrompt {
+			if selectedUser == nil && showPrompt {
 				fmt.Println("\n=== Generated Prompt ===")
 				fmt.Println(newPrompt)
 				fmt.Print("=== End of Prompt ===\n\n")
@@ -169,7 +192,9 @@ func main() {
 		}
 
 		// Save the prompt if not in dry-run mode
-		if !dryRun {
+		if selectedUser != nil {
+			fmt.Println("Single-user mode - prompt regeneration skipped")
+		} else if !dryRun {
 			err = savePrompt(chatID, newPrompt)
 			if err != nil {
 				log.Printf("Error saving prompt: %v", err)
@@ -201,6 +226,25 @@ func getTotalMessageCount(chatID int64) int {
 		return 0
 	}
 	return count
+}
+
+func getUserMessageCount(chatID int64, userID int64) int {
+	var count int
+	err := database.DB.QueryRow(
+		`SELECT COUNT(*) FROM messages WHERE chat_id = ? AND sender_id = ?`,
+		chatID, userID).Scan(&count)
+	if err != nil {
+		log.Printf("Error counting messages for user %d: %v", userID, err)
+		return 0
+	}
+	return count
+}
+
+func getScopedMessageCount(chatID int64, selectedUser *activeChatUser) int {
+	if selectedUser != nil {
+		return getUserMessageCount(chatID, selectedUser.ID)
+	}
+	return getTotalMessageCount(chatID)
 }
 
 // retrieveHistoryBatch gets a batch of chat history from the database
@@ -236,6 +280,45 @@ func retrieveHistoryBatch(chatID int64, limit int, offset int) []telebot.Message
 	log.Printf("Retrieved %v messages from batch", len(messages))
 
 	return messages
+}
+
+func retrieveHistoryBatchForUser(chatID int64, userID int64, limit int, offset int) []telebot.Message {
+	rows, err := database.DB.Query(
+		`SELECT data FROM messages
+		WHERE chat_id = ? AND sender_id = ?
+		ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
+		chatID, userID, limit, offset)
+	if err != nil {
+		log.Printf("Error retrieving chat history batch for user %d: %v", userID, err)
+		return nil
+	}
+	defer rows.Close()
+
+	var messages []telebot.Message
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			log.Printf("Error scanning user message: %v", err)
+			continue
+		}
+
+		var msg telebot.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			log.Printf("Error unmarshaling user message: %v", err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	log.Printf("Retrieved %v messages from batch for user %d", len(messages), userID)
+	return messages
+}
+
+func retrieveScopedHistoryBatch(chatID int64, selectedUser *activeChatUser, limit int, offset int) []telebot.Message {
+	if selectedUser != nil {
+		return retrieveHistoryBatchForUser(chatID, selectedUser.ID, limit, offset)
+	}
+	return retrieveHistoryBatch(chatID, limit, offset)
 }
 
 // retrieveHistoryForChat gets the chat history from the database
@@ -352,6 +435,7 @@ type bulkUserResult struct {
 	User         activeChatUser
 	MessageCount int
 	ChunkCount   int
+	DoneChunks   int
 	Err          error
 }
 
@@ -376,11 +460,107 @@ func loadAllMessages(chatID int64, totalMessages int) []telebot.Message {
 	return messages
 }
 
+func loadAllMessagesForUser(chatID int64, user activeChatUser, totalMessages int) []telebot.Message {
+	if totalMessages <= 0 {
+		return nil
+	}
+
+	messages := make([]telebot.Message, 0, totalMessages)
+	for offset := 0; offset < totalMessages; offset += bulkLoadPageSize {
+		batch := retrieveHistoryBatchForUser(chatID, user.ID, bulkLoadPageSize, offset)
+		if len(batch) == 0 {
+			break
+		}
+		messages = append(messages, batch...)
+		fmt.Printf("Loaded %d/%d messages for %s\n", len(messages), totalMessages, user.Name)
+		if len(batch) < bulkLoadPageSize {
+			break
+		}
+	}
+
+	return messages
+}
+
 func chunkCount(total int, chunkSize int) int {
 	if total == 0 || chunkSize <= 0 {
 		return 0
 	}
 	return (total + chunkSize - 1) / chunkSize
+}
+
+func loadBotUserIDs(chatID int64) map[int64]struct{} {
+	botUserIDs := make(map[int64]struct{})
+
+	rows, err := database.DB.Query(
+		`SELECT DISTINCT m.sender_id
+		FROM messages m
+		JOIN users u ON u.id = m.sender_id
+		WHERE m.chat_id = ?
+		  AND m.sender_id IS NOT NULL
+		  AND (
+			json_extract(m.data, '$.from.is_bot') = 1
+			OR json_extract(u.data, '$.is_bot') = 1
+			OR LOWER(COALESCE(u.username, '')) LIKE '%bot'
+		  )`,
+		chatID,
+	)
+	if err != nil {
+		rows, err = database.DB.Query(
+			`SELECT DISTINCT m.sender_id
+			FROM messages m
+			JOIN users u ON u.id = m.sender_id
+			WHERE m.chat_id = ?
+			  AND m.sender_id IS NOT NULL
+			  AND (
+				m.data LIKE '%"is_bot":true%'
+				OR u.data LIKE '%"is_bot":true%'
+				OR LOWER(COALESCE(u.username, '')) LIKE '%bot'
+			  )`,
+			chatID,
+		)
+		if err != nil {
+			log.Printf("Error loading bot user IDs for chat %d: %v", chatID, err)
+			return botUserIDs
+		}
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			log.Printf("Error scanning bot user ID for chat %d: %v", chatID, err)
+			continue
+		}
+		botUserIDs[userID] = struct{}{}
+	}
+
+	return botUserIDs
+}
+
+func collectBulkUsers(messages []telebot.Message, botUserIDs map[int64]struct{}) ([]activeChatUser, int) {
+	seenUsers := make(map[int64]struct{})
+	seenBots := make(map[int64]struct{})
+	users := make([]activeChatUser, 0)
+
+	for _, message := range messages {
+		if message.Sender == nil || message.Sender.ID == 0 {
+			continue
+		}
+
+		userID := int64(message.Sender.ID)
+		if _, ok := botUserIDs[userID]; ok {
+			seenBots[userID] = struct{}{}
+			continue
+		}
+		if _, ok := seenUsers[userID]; ok {
+			continue
+		}
+		seenUsers[userID] = struct{}{}
+		users = append(users, activeChatUser{ID: userID, Name: displayName(message.Sender)})
+	}
+
+	sort.Slice(users, func(i, j int) bool { return users[i].ID < users[j].ID })
+	return users, len(seenBots)
 }
 
 func processBulkUser(chatID int64, user activeChatUser, messages []telebot.Message, chunkSize int, dryRun bool) bulkUserResult {
@@ -396,18 +576,35 @@ func processBulkUser(chatID int64, user activeChatUser, messages []telebot.Messa
 	}
 
 	currentFacts := ""
-	for start := 0; start < len(userMessages); start += chunkSize {
+	for start, chunkIndex := 0, 1; start < len(userMessages); start, chunkIndex = start+chunkSize, chunkIndex+1 {
 		end := start + chunkSize
 		if end > len(userMessages) {
 			end = len(userMessages)
 		}
 
-		currentFacts = strings.TrimSpace(generateUserFacts(
+		fmt.Printf("[%s] chunk %d/%d start (%d messages)\n", user.Name, chunkIndex, result.ChunkCount, end-start)
+
+		newFacts, err := generateUserFacts(
 			chatID,
 			user,
 			generateChatGptHistory(userMessages[start:end]),
 			currentFacts,
-		))
+		)
+		if err != nil {
+			result.DoneChunks = chunkIndex - 1
+			result.Err = fmt.Errorf("chunk %d/%d: %w", chunkIndex, result.ChunkCount, err)
+			return result
+		}
+
+		newFacts = strings.TrimSpace(newFacts)
+		if newFacts == strings.TrimSpace(currentFacts) {
+			fmt.Printf("[%s] chunk %d/%d done (unchanged)\n", user.Name, chunkIndex, result.ChunkCount)
+		} else {
+			fmt.Printf("[%s] chunk %d/%d done (updated)\n", user.Name, chunkIndex, result.ChunkCount)
+		}
+
+		currentFacts = newFacts
+		result.DoneChunks = chunkIndex
 	}
 
 	if dryRun || currentFacts == "" {
@@ -421,18 +618,44 @@ func processBulkUser(chatID int64, user activeChatUser, messages []telebot.Messa
 	return result
 }
 
-func runBulkMode(chatID int64, totalMessages int, chunkSize int, concurrency int, showHistory bool, showPrompt bool, dryRun bool) {
+func runBulkMode(chatID int64, totalMessages int, chunkSize int, concurrency int, showHistory bool, showPrompt bool, dryRun bool, selectedUser *activeChatUser) {
 	startedAt := time.Now()
 
-	fmt.Printf("Loading messages for chat %d...\n", chatID)
-	allMessages := loadAllMessages(chatID, totalMessages)
+	var allMessages []telebot.Message
+	if selectedUser != nil {
+		fmt.Printf("Loading messages for %s in chat %d...\n", selectedUser.Name, chatID)
+		allMessages = loadAllMessagesForUser(chatID, *selectedUser, totalMessages)
+	} else {
+		fmt.Printf("Loading messages for chat %d...\n", chatID)
+		allMessages = loadAllMessages(chatID, totalMessages)
+	}
 	if len(allMessages) == 0 {
+		if selectedUser != nil {
+			log.Fatalf("No messages loaded for user %s in chat %d", selectedUser.Name, chatID)
+		}
 		log.Fatalf("No messages loaded for chat %d", chatID)
 	}
 
-	users := collectActiveUsers(allMessages)
+	if selectedUser != nil {
+		fmt.Printf("\n=== Phase 1: Person Facts (single user) ===\n")
+		result := processBulkUser(chatID, *selectedUser, allMessages, chunkSize, dryRun)
+		if result.Err != nil {
+			log.Fatalf("%s failed (%d msgs, %d/%d chunks): %v", result.User.Name, result.MessageCount, result.DoneChunks, result.ChunkCount, result.Err)
+		}
+		fmt.Printf("%s done (%d msgs, %d/%d chunks)\n", result.User.Name, result.MessageCount, result.DoneChunks, result.ChunkCount)
+		fmt.Printf("Phase 1 complete in %s\n", time.Since(startedAt).Round(time.Second))
+		fmt.Println("Single-user mode - prompt regeneration skipped")
+		fmt.Printf("Done. Total time: %s\n", time.Since(startedAt).Round(time.Second))
+		return
+	}
+
+	botUserIDs := loadBotUserIDs(chatID)
+	users, skippedBots := collectBulkUsers(allMessages, botUserIDs)
 	phase1StartedAt := time.Now()
 	fmt.Printf("\n=== Phase 1: Person Facts (%d users, %d concurrent) ===\n", len(users), concurrency)
+	if skippedBots > 0 {
+		fmt.Printf("Skipping %d bot accounts during person fact extraction\n", skippedBots)
+	}
 
 	jobs := make(chan activeChatUser)
 	results := make(chan bulkUserResult, len(users))
@@ -461,10 +684,10 @@ func runBulkMode(chatID int64, totalMessages int, chunkSize int, concurrency int
 	for result := range results {
 		completedUsers++
 		if result.Err != nil {
-			fmt.Printf("[%d/%d] %s failed (%d msgs, %d chunks): %v\n", completedUsers, len(users), result.User.Name, result.MessageCount, result.ChunkCount, result.Err)
+			fmt.Printf("[%d/%d] %s failed (%d msgs, %d/%d chunks): %v\n", completedUsers, len(users), result.User.Name, result.MessageCount, result.DoneChunks, result.ChunkCount, result.Err)
 			continue
 		}
-		fmt.Printf("[%d/%d] %s done (%d msgs, %d chunks)\n", completedUsers, len(users), result.User.Name, result.MessageCount, result.ChunkCount)
+		fmt.Printf("[%d/%d] %s done (%d msgs, %d/%d chunks)\n", completedUsers, len(users), result.User.Name, result.MessageCount, result.DoneChunks, result.ChunkCount)
 	}
 
 	fmt.Printf("Phase 1 complete in %s\n", time.Since(phase1StartedAt).Round(time.Second))
@@ -557,6 +780,59 @@ func collectActiveUsers(messages []telebot.Message) []activeChatUser {
 	return users
 }
 
+func resolveRequestedUser(identifier string) (activeChatUser, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return activeChatUser{}, fmt.Errorf("user identifier cannot be empty")
+	}
+
+	if strings.HasPrefix(identifier, "@") {
+		identifier = strings.TrimPrefix(identifier, "@")
+	}
+
+	if userID, err := strconv.ParseInt(identifier, 10, 64); err == nil {
+		return lookupUserByID(userID)
+	}
+
+	return lookupUserByUsername(identifier)
+}
+
+func lookupUserByID(userID int64) (activeChatUser, error) {
+	row := database.DB.QueryRow(`
+		SELECT id, COALESCE(NULLIF(username, ''), TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')), 'user_' || id)
+		FROM users
+		WHERE id = ?
+	`, userID)
+
+	var user activeChatUser
+	if err := row.Scan(&user.ID, &user.Name); err != nil {
+		if err == sql.ErrNoRows {
+			return activeChatUser{}, fmt.Errorf("user %d not found", userID)
+		}
+		return activeChatUser{}, err
+	}
+
+	return user, nil
+}
+
+func lookupUserByUsername(username string) (activeChatUser, error) {
+	row := database.DB.QueryRow(`
+		SELECT id, COALESCE(NULLIF(username, ''), TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')), 'user_' || id)
+		FROM users
+		WHERE LOWER(username) = LOWER(?)
+	`, username)
+
+	var user activeChatUser
+	if err := row.Scan(&user.ID, &user.Name); err != nil {
+		if err == sql.ErrNoRows {
+			return activeChatUser{}, fmt.Errorf("user @%s not found", username)
+		}
+		return activeChatUser{}, err
+	}
+
+	return user, nil
+}
+
 func filterMessagesByUser(messages []telebot.Message, userID int64) []telebot.Message {
 	filtered := make([]telebot.Message, 0)
 	for _, message := range messages {
@@ -588,8 +864,12 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 	return openai.NewClientWithConfig(config), model
 }
 
-func updatePersonFacts(chatID int64, messages []telebot.Message, _ string) {
-	for _, user := range collectActiveUsers(messages) {
+func updatePersonFacts(chatID int64, messages []telebot.Message, _ string, selectedUser *activeChatUser) {
+	users := collectActiveUsers(messages)
+	if selectedUser != nil {
+		users = []activeChatUser{*selectedUser}
+	}
+	for _, user := range users {
 		userMessages := filterMessagesByUser(messages, user.ID)
 		if len(userMessages) == 0 {
 			continue
@@ -602,7 +882,12 @@ func updatePersonFacts(chatID int64, messages []telebot.Message, _ string) {
 			continue
 		}
 
-		newFacts := strings.TrimSpace(generateUserFacts(chatID, user, userHistory, currentFacts))
+		newFacts, err := generateUserFacts(chatID, user, userHistory, currentFacts)
+		if err != nil {
+			log.Printf("Error generating facts for user %d: %v", user.ID, err)
+			continue
+		}
+		newFacts = strings.TrimSpace(newFacts)
 		if newFacts == "" || newFacts == strings.TrimSpace(currentFacts) {
 			continue
 		}
@@ -662,21 +947,31 @@ func generateNewPrompt(chatID int64, history string, currentPrompt string) strin
 	return newPrompt
 }
 
-func generateUserFacts(chatID int64, user activeChatUser, history string, currentFacts string) string {
+func generateUserFacts(chatID int64, user activeChatUser, history string, currentFacts string) (string, error) {
 	client, model := buildOpenAIClient(&chatID)
 
 	systemMsg := `You update one chat member profile using only that member's own recent messages.`
-	userMsg := fmt.Sprintf(`
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		userMsg := fmt.Sprintf(`
 Analyze the recent messages written by exactly one person: %s.
 
 Rules:
-1. Output only facts about that person.
+1. Return the full stored dossier for that person, not a changelog or explanation.
 2. Preserve existing stable facts unless the new chat history clearly contradicts them.
 3. Use only what this person says in their own messages below. Do not infer facts from what other people say about them.
 4. Focus on durable traits, interests, preferences, self-stated relationships, and notable communication style.
 5. Ignore one-off jokes or fleeting topics unless they look stable.
 6. Prefer the main language of the chat.
-7. Keep it concise and useful for future replies.
+7. If the recent messages add nothing durable, keep the current dossier unchanged.
+8. Output exactly this structure with these exact English headings in this exact order:
+Identity:
+Interests:
+Relationships:
+Communication style:
+9. Under headings, use only '- ' bullet lines, or leave the section empty.
+10. Do not add commentary, explanations, markdown emphasis, update notes, or any text before/between/after the sections.
+11. Never replace a detailed dossier with a short summary.
 
 Current facts:
 %s
@@ -684,30 +979,41 @@ Current facts:
 Recent messages from %s:
 %s
 `, user.Name, currentFacts, user.Name, history)
+		if attempt == 2 {
+			userMsg += "\nYour previous answer was invalid. Retry once and return only the exact dossier structure.\n"
+		}
 
-	resp, err := client.CreateChatCompletion(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: model,
-			Messages: []openai.ChatCompletionMessage{
-				{Role: "system", Content: systemMsg},
-				{Role: "user", Content: userMsg},
+		resp, err := client.CreateChatCompletion(
+			context.Background(),
+			openai.ChatCompletionRequest{
+				Model: model,
+				Messages: []openai.ChatCompletionMessage{
+					{Role: "system", Content: systemMsg},
+					{Role: "user", Content: userMsg},
+				},
 			},
-		},
-	)
-	if err != nil {
-		log.Printf("Error generating facts for user %d: %v", user.ID, err)
-		return currentFacts
-	}
-	if len(resp.Choices) == 0 {
-		return currentFacts
+		)
+		if err != nil {
+			return currentFacts, err
+		}
+		if len(resp.Choices) == 0 {
+			return currentFacts, fmt.Errorf("no facts generated for user %d", user.ID)
+		}
+
+		evaluation := facts.EvaluatePersonFacts(currentFacts, resp.Choices[0].Message.Content)
+		if evaluation.Accepted {
+			return evaluation.Value, nil
+		}
+		if evaluation.Retryable && attempt == 1 {
+			log.Printf("Retrying facts generation for user %d after invalid output: %s", user.ID, evaluation.Reason)
+			continue
+		}
+
+		log.Printf("Skipping facts update for user %d after invalid output: %s", user.ID, evaluation.Reason)
+		return currentFacts, nil
 	}
 
-	newFacts := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if newFacts == "" {
-		return currentFacts
-	}
-	return newFacts
+	return currentFacts, nil
 }
 
 // savePrompt saves a new prompt to the database

@@ -57,6 +57,7 @@ func main() {
 		userFilter   string
 		sinceDate    string
 		debugOutput  bool
+		cleanState   bool
 	)
 
 	flag.Int64Var(&chatID, "chat", 0, "Chat ID to generate prompts for")
@@ -74,6 +75,7 @@ func main() {
 	flag.StringVar(&userFilter, "user", "", "Only regenerate facts for one user by @username or numeric user ID; skips prompt regeneration")
 	flag.StringVar(&sinceDate, "since-date", "", "Only process messages on or after this date (YYYY-MM-DD or RFC3339)")
 	flag.BoolVar(&debugOutput, "debug-ai", false, "Log raw AI outputs for prompt/facts/consolidation")
+	flag.BoolVar(&cleanState, "clean-state", false, "Reset chat prompt and/or stored person facts before processing")
 	flag.Parse()
 	debugAI = debugOutput
 
@@ -116,6 +118,11 @@ func main() {
 		}
 		selectedUser = &resolvedUser
 		fmt.Printf("Limiting run to user %s (%d); prompt regeneration disabled\n", selectedUser.Name, selectedUser.ID)
+	}
+	if cleanState {
+		if err := resetStoredState(chatID, selectedUser); err != nil {
+			log.Fatalf("failed to reset stored state: %v", err)
+		}
 	}
 
 	// Set message count from config if not specified
@@ -308,6 +315,42 @@ func parseSinceDate(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("expected YYYY-MM-DD or RFC3339")
+}
+
+func resetStoredState(chatID int64, selectedUser *activeChatUser) error {
+	if selectedUser != nil {
+		fmt.Printf("Resetting stored facts for %s (%d) in chat %d\n", selectedUser.Name, selectedUser.ID, chatID)
+		return promptmgr.SavePersonFacts(chatID, selectedUser.ID, "")
+	}
+
+	fmt.Printf("Resetting chat prompt and all stored person facts for chat %d\n", chatID)
+	if err := savePrompt(chatID, ""); err != nil {
+		return err
+	}
+
+	rows, err := database.DB.Query(`SELECT DISTINCT user_id FROM person_facts WHERE chat_id = ?`, chatID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var resetCount int
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return err
+		}
+		if err := promptmgr.SavePersonFacts(chatID, userID, ""); err != nil {
+			return err
+		}
+		resetCount++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	fmt.Printf("Reset prompt and %d stored fact profiles\n", resetCount)
+	return nil
 }
 
 // retrieveHistoryBatch gets a batch of chat history from the database

@@ -602,3 +602,86 @@ func TestBuildPersonFactsContext_UsesHistoryUsersAndAsker(t *testing.T) {
 		t.Fatalf("expected person facts in prefill, got: %s", prefill)
 	}
 }
+
+func TestBuildPersonFactsContext_IncludesMentionedUserFromSameChatOnly(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create users table: %v", err)
+	}
+	_, err = mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			sender_id INTEGER,
+			reply_to_message_id INTEGER,
+			forward_from_id INTEGER,
+			forward_from_chat_id INTEGER,
+			forward_date INTEGER,
+			edit_date INTEGER,
+			media_group_id TEXT,
+			author_signature TEXT,
+			unixtime INTEGER,
+			text TEXT,
+			caption TEXT,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create messages table: %v", err)
+	}
+
+	_, err = mockDB.Exec(`INSERT INTO users (id, username, first_name, last_name, data) VALUES (1, 'alice', 'Alice', '', ''), (2, 'bob', 'Bob', '', ''), (3, 'pingeee', 'Ping', '', ''), (4, 'outsider', 'Out', '', '')`)
+	if err != nil {
+		t.Fatalf("Failed to seed users: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, sender_id, unixtime, text, data) VALUES (10, 123, 3, 1, 'hi', '{}'), (11, 999, 4, 1, 'yo', '{}')`)
+	if err != nil {
+		t.Fatalf("Failed to seed messages: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	originalDB := database.DB
+	sqliteDb = mockDB
+	database.DB = mockDB
+	defer func() {
+		sqliteDb = originalSQLiteDB
+		database.DB = originalDB
+	}()
+	promptmgr.EnsureTables()
+
+	if err := promptmgr.SavePersonFacts(123, 1, "likes Go"); err != nil {
+		t.Fatalf("failed to save user 1 facts: %v", err)
+	}
+	if err := promptmgr.SavePersonFacts(123, 2, "likes Rust"); err != nil {
+		t.Fatalf("failed to save user 2 facts: %v", err)
+	}
+	if err := promptmgr.SavePersonFacts(123, 3, "likes Doom"); err != nil {
+		t.Fatalf("failed to save pingeee facts: %v", err)
+	}
+	if err := promptmgr.SavePersonFacts(999, 4, "likes secrets"); err != nil {
+		t.Fatalf("failed to save outsider facts: %v", err)
+	}
+
+	history := []telebot.Message{{Sender: &telebot.User{ID: 1, Username: "alice"}, Text: "hello"}}
+	currentMessage := &telebot.Message{Sender: &telebot.User{ID: 2, Username: "bob"}, Text: "Губи, что думаешь о @pingeee и @outsider?"}
+
+	context := buildPersonFactsContext(123, history, currentMessage, 99)
+	if !strings.Contains(context, "pingeee: likes Doom") {
+		t.Fatalf("expected same-chat mentioned user facts in context, got: %s", context)
+	}
+	if strings.Contains(context, "outsider: likes secrets") {
+		t.Fatalf("did not expect cross-chat mentioned user facts in context, got: %s", context)
+	}
+}

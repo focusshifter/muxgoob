@@ -71,6 +71,7 @@ var (
 	majorExp        *regexp.Regexp
 	replyCmdExp     *regexp.Regexp
 	spotifyAlbumExp *regexp.Regexp
+	mentionExp      *regexp.Regexp
 )
 
 func init() {
@@ -82,6 +83,7 @@ func init() {
 	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	replyCmdExp = regexp.MustCompile(`^!reply\s+(-?\d+)(?:\s+(.+))?$`)
 	spotifyAlbumExp = regexp.MustCompile(`https://open\.spotify\.com/album/([a-zA-Z0-9]+)`)
+	mentionExp = regexp.MustCompile(`(?i)@([a-z0-9_]{3,})`)
 
 	// Register with default implementations for production
 	plugin := &ReplyPlugin{
@@ -518,6 +520,7 @@ func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMe
 	}
 	if currentMessage != nil {
 		addUser(currentMessage.Sender)
+		addMentionedUsers(chatID, currentMessage, addUser)
 	}
 
 	if len(orderedUserIDs) == 0 {
@@ -547,6 +550,58 @@ func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMe
 	}
 
 	return strings.TrimSpace(out.String())
+}
+
+func addMentionedUsers(chatID int64, message *telebot.Message, addUser func(user *telebot.User)) {
+	if message == nil {
+		return
+	}
+	for _, entity := range message.Entities {
+		if entity.Type == telebot.EntityTMention && entity.User != nil {
+			addUser(entity.User)
+		}
+	}
+	if sqliteDb == nil || strings.TrimSpace(message.Text) == "" {
+		return
+	}
+	seen := make(map[string]struct{})
+	for _, match := range mentionExp.FindAllStringSubmatch(message.Text, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		username := strings.ToLower(strings.TrimSpace(match[1]))
+		if username == "" {
+			continue
+		}
+		if _, ok := seen[username]; ok {
+			continue
+		}
+		seen[username] = struct{}{}
+		user := lookupChatUserByUsername(chatID, username)
+		if user != nil {
+			addUser(user)
+		}
+	}
+}
+
+func lookupChatUserByUsername(chatID int64, username string) *telebot.User {
+	if sqliteDb == nil || strings.TrimSpace(username) == "" {
+		return nil
+	}
+	row := sqliteDb.QueryRow(`
+		SELECT u.id, COALESCE(u.username, ''), COALESCE(u.first_name, ''), COALESCE(u.last_name, '')
+		FROM users u
+		WHERE LOWER(u.username) = LOWER(?)
+		AND EXISTS (
+			SELECT 1 FROM messages m WHERE m.chat_id = ? AND m.sender_id = u.id LIMIT 1
+		)
+		LIMIT 1`, username, chatID)
+	var id int
+	var resolvedUsername, firstName, lastName string
+	if err := row.Scan(&id, &resolvedUsername, &firstName, &lastName); err != nil {
+		return nil
+	}
+	return &telebot.User{ID: id, Username: resolvedUsername, FirstName: firstName, LastName: lastName}
 }
 
 func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {

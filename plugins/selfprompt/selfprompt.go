@@ -764,6 +764,10 @@ func shouldConsolidateFacts(text string) bool {
 	return len(trimmed) >= defaultCompactChars || bulletCount >= defaultCompactBullets
 }
 
+func bootstrapFactsRequired(currentFacts string) bool {
+	return strings.TrimSpace(currentFacts) == ""
+}
+
 func consolidatePersonFacts(chatID int64, userName string, currentFacts string) string {
 	client, model := buildOpenAIClientForModel(&chatID, "")
 	systemMsg := `You consolidate a person's profile by merging overlapping bullets while preserving all durable meaning.`
@@ -918,6 +922,7 @@ func (p *SelfPromptPlugin) generateUserFacts(chatID int64, user activeChatUser, 
 	client, model := buildOpenAIClient(&chatID)
 
 	systemMsg := `You extract new evidence about a chat member from their recent messages.`
+	requireBootstrap := bootstrapFactsRequired(currentFacts)
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		userMsg := fmt.Sprintf(`
@@ -945,6 +950,9 @@ Current profile for context (do not reproduce it):
 Recent messages from %s:
 %s
 `, user.Name, user.Name, user.Name, currentFacts, user.Name, history)
+		if requireBootstrap {
+			userMsg += "\nThe current profile is empty. Bootstrap an initial profile from any durable evidence you can find. Only return NO_CHANGES if there is truly no stable personal information at all in these messages.\n"
+		}
 		if attempt == 2 {
 			userMsg += "\nYour previous answer was invalid. Retry once and return only a valid delta or NO_CHANGES.\n"
 		}
@@ -969,6 +977,10 @@ Recent messages from %s:
 
 		raw := strings.TrimSpace(resp.Choices[0].Message.Content)
 		if facts.IsNoChanges(raw) {
+			if requireBootstrap && attempt == 1 {
+				log.Printf("[selfprompt] Retrying facts generation for chat %d user %d because profile is empty and model returned NO_CHANGES", chatID, user.ID)
+				continue
+			}
 			return currentFacts
 		}
 

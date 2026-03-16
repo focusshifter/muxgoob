@@ -1100,6 +1100,10 @@ Current profile:
 	return currentFacts
 }
 
+func bootstrapFactsRequired(currentFacts string) bool {
+	return strings.TrimSpace(currentFacts) == ""
+}
+
 func updatePersonFacts(chatID int64, messages []telebot.Message, _ string, selectedUser *activeChatUser) {
 	users := collectActiveUsers(messages)
 	if selectedUser != nil {
@@ -1229,6 +1233,7 @@ func generateUserFacts(chatID int64, user activeChatUser, history string, curren
 	client, model := buildOpenAIClient(&chatID)
 
 	systemMsg := `You extract new evidence about a chat member from their recent messages.`
+	requireBootstrap := bootstrapFactsRequired(currentFacts)
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		userMsg := fmt.Sprintf(`
@@ -1256,6 +1261,9 @@ Current profile for context (do not reproduce it):
 Recent messages from %s:
 %s
 `, user.Name, user.Name, user.Name, currentFacts, user.Name, history)
+		if requireBootstrap {
+			userMsg += "\nThe current profile is empty. Bootstrap an initial profile from any durable evidence you can find. Only return NO_CHANGES if there is truly no stable personal information at all in these messages.\n"
+		}
 		if attempt == 2 {
 			userMsg += "\nYour previous answer was invalid. Retry once and return only a valid delta or NO_CHANGES.\n"
 		}
@@ -1280,6 +1288,10 @@ Recent messages from %s:
 		raw := strings.TrimSpace(resp.Choices[0].Message.Content)
 		debugLogAI(fmt.Sprintf("person-facts-delta user=%s(%d)", user.Name, user.ID), model, attempt, raw)
 		if facts.IsNoChanges(raw) {
+			if requireBootstrap && attempt == 1 {
+				log.Printf("Retrying facts generation for user %d because profile is empty and model returned NO_CHANGES", user.ID)
+				continue
+			}
 			return currentFacts, nil
 		}
 

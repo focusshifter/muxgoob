@@ -343,6 +343,18 @@ func TestSelfPromptPlugin_Process(t *testing.T) {
 	}
 }
 
+func TestBootstrapFactsRequired(t *testing.T) {
+	if !bootstrapFactsRequired("") {
+		t.Fatal("expected empty facts to require bootstrap")
+	}
+	if !bootstrapFactsRequired("   \n\t") {
+		t.Fatal("expected whitespace-only facts to require bootstrap")
+	}
+	if bootstrapFactsRequired("Identity:\n- plays games") {
+		t.Fatal("did not expect non-empty facts to require bootstrap")
+	}
+}
+
 func TestSelfPromptPlugin_ForceSpecificChatFromOwnerPrivateChat(t *testing.T) {
 	originalFunc := generateNewPromptFunc
 	originalUserFactsFunc := generateUserFactsFunc

@@ -33,3 +33,25 @@ func TestParseChatPromptLegacyStructuredHeadings(t *testing.T) {
 		t.Fatalf("unexpected legacy structured parse: %#v", parsed)
 	}
 }
+
+func TestSanitizeChatDeltaRemovesArrowLeakage(t *testing.T) {
+	delta := &ChatDelta{
+		Avoid: []DeltaOp{{Action: '+', NewText: "new guidance: old thing -> Better replacement"}},
+	}
+	cleaned := SanitizeChatDelta(delta)
+	if cleaned.Avoid[0].NewText != "Better replacement" {
+		t.Fatalf("unexpected sanitized chat delta: %#v", cleaned.Avoid[0])
+	}
+}
+
+func TestEnforceChatPromptBudgets(t *testing.T) {
+	prompt := &ChatPrompt{
+		ReplyStyle:    []string{"1", "2", "3", "4", "5", "6"},
+		StableContext: []string{"1", "2", "3", "4", "5", "6", "7"},
+		Avoid:         []string{"1", "2", "3", "4", "5"},
+	}
+	limited := EnforceChatPromptBudgets(prompt)
+	if len(limited.ReplyStyle) != 5 || len(limited.StableContext) != 6 || len(limited.Avoid) != 4 {
+		t.Fatalf("unexpected prompt budgets: %#v", limited)
+	}
+}

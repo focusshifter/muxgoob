@@ -829,6 +829,53 @@ Current profile:
 	return currentFacts
 }
 
+func consolidateChatPrompt(chatID int64, currentPrompt string) string {
+	client, model := buildOpenAIClientForModel(&chatID, "")
+	systemMsg := `You consolidate chat reply guidance by removing repetition and keeping only the highest-value durable instructions.`
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		userMsg := fmt.Sprintf(`
+Consolidate this chat prompt into a tighter version.
+
+Rules:
+1. Preserve durable reply guidance and stable context. Do not invent new facts.
+2. Merge overlapping bullets and remove duplicate wording.
+3. Keep this exact structure and order:
+Reply style:
+Stable context:
+Avoid:
+4. Under each heading, use only '- ' bullets.
+5. Budget:
+- Reply style: max 5 bullets
+- Stable context: max 6 bullets
+- Avoid: max 4 bullets
+6. Prefer canonical wording over repeated paraphrases.
+7. Do not include raw delta syntax, arrows, or notes like 'new guidance'.
+8. Do not let one recent exchange dominate the prompt.
+9. Keep bullets compact and useful for future replies.
+
+Current prompt:
+%s
+`, currentPrompt)
+		if attempt == 2 {
+			userMsg += "\nYour previous answer was invalid. Retry once and return only the exact prompt structure.\n"
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{Model: model, Messages: []openai.ChatCompletionMessage{{Role: "system", Content: systemMsg}, {Role: "user", Content: userMsg}}})
+		cancel()
+		if err != nil || len(resp.Choices) == 0 {
+			return currentPrompt
+		}
+		candidate := facts.EnforceChatPromptBudgets(facts.ParseChatPrompt(resp.Choices[0].Message.Content))
+		value := facts.RenderChatPrompt(candidate)
+		if strings.TrimSpace(value) == "" {
+			return currentPrompt
+		}
+		return value
+	}
+	return currentPrompt
+}
+
 func (p *SelfPromptPlugin) generateNewPrompt(chatID int64, history string, currentPrompt string) string {
 	client, model := buildOpenAIClient(&chatID)
 
@@ -905,11 +952,16 @@ Chat history:
 			return currentPrompt
 		}
 
-		merged := facts.ApplyChatDelta(facts.ParseChatPrompt(currentPrompt), delta)
+		current := facts.ParseChatPrompt(currentPrompt)
+		delta = facts.SanitizeChatDelta(delta)
+		delta = facts.FilterChatDelta(current, delta)
+		merged := facts.ApplyChatDelta(current, delta)
+		merged = facts.EnforceChatPromptBudgets(merged)
 		newPrompt := facts.RenderChatPrompt(merged)
 		if strings.TrimSpace(newPrompt) == "" {
 			return currentPrompt
 		}
+		newPrompt = consolidateChatPrompt(chatID, newPrompt)
 
 		log.Printf("[selfprompt] Generated new prompt: %s", newPrompt)
 		return newPrompt

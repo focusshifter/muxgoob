@@ -1212,9 +1212,7 @@ Recent messages from %s:
 			}
 			merged := facts.ApplyDelta(current, delta)
 			candidate := facts.RenderDossier(merged)
-			if shouldConsolidateFacts(candidate) {
-				candidate = consolidatePersonFacts(chatID, user.Name, candidate)
-			}
+			candidate = consolidatePersonFacts(chatID, user.Name, candidate)
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {
 				return evaluation.Value, nil

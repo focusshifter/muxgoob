@@ -982,13 +982,11 @@ Recent messages from %s:
 			}
 			merged := facts.ApplyDelta(current, delta)
 			candidate := facts.RenderDossier(merged)
-			if shouldConsolidateFacts(candidate) {
-				consolidator := consolidatePersonFacts
-				if consolidatePersonFactsFunc != nil {
-					consolidator = consolidatePersonFactsFunc
-				}
-				candidate = consolidator(chatID, user.Name, candidate)
+			consolidator := consolidatePersonFacts
+			if consolidatePersonFactsFunc != nil {
+				consolidator = consolidatePersonFactsFunc
 			}
+			candidate = consolidator(chatID, user.Name, candidate)
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {
 				return evaluation.Value

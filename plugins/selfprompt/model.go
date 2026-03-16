@@ -8,7 +8,8 @@ import (
 
 const (
 	PluginName            = "selfprompt"
-	CompressionModelKey   = "compression_model"
+	ModelKey              = "model"
+	legacyCompressionKey  = "compression_model"
 	defaultCompactChars   = 2200
 	defaultCompactBullets = 12
 )
@@ -21,10 +22,14 @@ func DefaultCompactBullets() int {
 	return defaultCompactBullets
 }
 
-func GetCompressionModel(chatID *int64) string {
-	return strings.TrimSpace(registry.GetPluginSetting(chatID, PluginName, CompressionModelKey, ""))
+func GetModel(chatID *int64) string {
+	model := strings.TrimSpace(registry.GetPluginSetting(chatID, PluginName, ModelKey, ""))
+	if model != "" {
+		return model
+	}
+	return strings.TrimSpace(registry.GetPluginSetting(chatID, PluginName, legacyCompressionKey, ""))
 }
 
-func SetCompressionModel(chatID *int64, model string) error {
-	return registry.SetPluginSetting(chatID, PluginName, CompressionModelKey, strings.TrimSpace(model))
+func SetModel(chatID *int64, model string) error {
+	return registry.SetPluginSetting(chatID, PluginName, ModelKey, strings.TrimSpace(model))
 }

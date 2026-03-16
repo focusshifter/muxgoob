@@ -18,22 +18,22 @@ func TestCompressionModelSetting(t *testing.T) {
 	}
 
 	globalModel := "openrouter/google/gemini-2.5-flash"
-	if err := SetCompressionModel(nil, globalModel); err != nil {
-		t.Fatalf("SetCompressionModel global failed: %v", err)
+	if err := SetModel(nil, globalModel); err != nil {
+		t.Fatalf("SetModel global failed: %v", err)
 	}
-	if got := GetCompressionModel(nil); got != globalModel {
+	if got := GetModel(nil); got != globalModel {
 		t.Fatalf("expected global compression model %q, got %q", globalModel, got)
 	}
 
 	chatID := int64(42)
 	chatModel := "gpt-4o-mini"
-	if err := SetCompressionModel(&chatID, chatModel); err != nil {
-		t.Fatalf("SetCompressionModel chat failed: %v", err)
+	if err := SetModel(&chatID, chatModel); err != nil {
+		t.Fatalf("SetModel chat failed: %v", err)
 	}
-	if got := GetCompressionModel(&chatID); got != chatModel {
+	if got := GetModel(&chatID); got != chatModel {
 		t.Fatalf("expected chat compression model %q, got %q", chatModel, got)
 	}
-	if got := GetCompressionModel(nil); got != globalModel {
+	if got := GetModel(nil); got != globalModel {
 		t.Fatalf("expected global compression model to remain %q, got %q", globalModel, got)
 	}
 }

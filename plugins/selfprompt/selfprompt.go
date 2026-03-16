@@ -730,19 +730,26 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 
 func buildOpenAIClientForModel(chatID *int64, requestedModel string) (*openai.Client, string) {
 	var config openai.ClientConfig
-	var model string
+	model := strings.TrimSpace(requestedModel)
 
 	aiProvider := registry.GetAiProvider(chatID)
 	if aiProvider == "openrouter" {
 		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		model = registry.GetAiModel(chatID)
+		if model == "" {
+			model = GetModel(chatID)
+		}
+		if model == "" {
+			model = registry.GetAiModel(chatID)
+		}
 	} else {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
-		model = "gpt-4o-mini"
-	}
-	if strings.TrimSpace(requestedModel) != "" {
-		model = strings.TrimSpace(requestedModel)
+		if model == "" {
+			model = GetModel(chatID)
+		}
+		if model == "" {
+			model = "gpt-4o-mini"
+		}
 	}
 
 	return openai.NewClientWithConfig(config), model
@@ -758,8 +765,7 @@ func shouldConsolidateFacts(text string) bool {
 }
 
 func consolidatePersonFacts(chatID int64, userName string, currentFacts string) string {
-	modelOverride := GetCompressionModel(&chatID)
-	client, model := buildOpenAIClientForModel(&chatID, modelOverride)
+	client, model := buildOpenAIClientForModel(&chatID, "")
 	systemMsg := `You consolidate a person's profile by merging overlapping bullets while preserving all durable meaning.`
 
 	for attempt := 1; attempt <= 2; attempt++ {

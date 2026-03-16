@@ -244,10 +244,10 @@ func TestAdminPlugin_SelfpromptCompressionModelCommand(t *testing.T) {
 	if !mockBot.SendCalled {
 		t.Fatalf("Expected response for global selfprompt model command")
 	}
-	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Global selfprompt compression model set to") {
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Global selfprompt model set to") {
 		t.Fatalf("Unexpected global response: %v", mockBot.SendWhat)
 	}
-	if got := selfpromptplugin.GetCompressionModel(nil); got != globalModel {
+	if got := selfpromptplugin.GetModel(nil); got != globalModel {
 		t.Fatalf("Expected global selfprompt model %q, got %q", globalModel, got)
 	}
 
@@ -265,10 +265,10 @@ func TestAdminPlugin_SelfpromptCompressionModelCommand(t *testing.T) {
 	if !mockBot.SendCalled {
 		t.Fatalf("Expected response for chat selfprompt model command")
 	}
-	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Selfprompt compression model for chat 777 set to") {
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Selfprompt model for chat 777 set to") {
 		t.Fatalf("Unexpected chat response: %v", mockBot.SendWhat)
 	}
-	if got := selfpromptplugin.GetCompressionModel(&targetChatID); got != chatModel {
+	if got := selfpromptplugin.GetModel(&targetChatID); got != chatModel {
 		t.Fatalf("Expected chat selfprompt model %q, got %q", chatModel, got)
 	}
 }

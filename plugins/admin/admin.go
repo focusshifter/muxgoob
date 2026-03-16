@@ -141,7 +141,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		}
 		if parts[2] == "selfprompt" {
 			if len(parts) < 4 {
-				bot.Send(message.Chat, "Please specify a selfprompt compression model name")
+				bot.Send(message.Chat, "Please specify a selfprompt model name")
 				return
 			}
 			var chatID *int64
@@ -152,15 +152,15 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 				}
 			}
 			model := parts[3]
-			err := selfpromptplugin.SetCompressionModel(chatID, model)
+			err := selfpromptplugin.SetModel(chatID, model)
 			if err != nil {
-				bot.Send(message.Chat, fmt.Sprintf("Error setting selfprompt compression model: %v", err))
+				bot.Send(message.Chat, fmt.Sprintf("Error setting selfprompt model: %v", err))
 				return
 			}
 			if chatID != nil {
-				bot.Send(message.Chat, fmt.Sprintf("Selfprompt compression model for chat %d set to: %s", *chatID, model))
+				bot.Send(message.Chat, fmt.Sprintf("Selfprompt model for chat %d set to: %s", *chatID, model))
 			} else {
-				bot.Send(message.Chat, fmt.Sprintf("Global selfprompt compression model set to: %s", model))
+				bot.Send(message.Chat, fmt.Sprintf("Global selfprompt model set to: %s", model))
 			}
 			return
 		}
@@ -196,16 +196,16 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		}
 		provider := registry.GetAiProvider(chatID)
 		model := registry.GetAiModel(chatID)
-		selfpromptModel := selfpromptplugin.GetCompressionModel(chatID)
+		selfpromptModel := selfpromptplugin.GetModel(chatID)
 		if selfpromptModel == "" {
 			selfpromptModel = "(default AI model)"
 		}
 
 		var response string
 		if chatID != nil {
-			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nSelfprompt compression model: %s", *chatID, provider, model, selfpromptModel)
+			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nSelfprompt model: %s", *chatID, provider, model, selfpromptModel)
 		} else {
-			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nSelfprompt compression model: %s", provider, model, selfpromptModel)
+			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nSelfprompt model: %s", provider, model, selfpromptModel)
 		}
 
 		bot.Send(message.Chat, response)

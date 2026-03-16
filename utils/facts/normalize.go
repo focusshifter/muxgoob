@@ -13,7 +13,12 @@ var dossierHeadings = []string{
 	"Identity:",
 	"Interests:",
 	"Relationships:",
-	"Communication style:",
+}
+
+var chatPromptHeadings = []string{
+	"Recurring topics:",
+	"Group dynamics:",
+	"Communication norms:",
 }
 
 var suspiciousMetaMarkers = []string{

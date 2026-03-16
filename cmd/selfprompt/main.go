@@ -29,6 +29,8 @@ const (
 )
 
 var modelOverride string
+var historySinceUnix int64
+var historySinceLabel string
 
 func main() {
 	var (
@@ -44,6 +46,7 @@ func main() {
 		bulk         bool
 		concurrency  int
 		userFilter   string
+		sinceDate    string
 	)
 
 	flag.Int64Var(&chatID, "chat", 0, "Chat ID to generate prompts for")
@@ -59,6 +62,7 @@ func main() {
 	flag.StringVar(&modelOverride, "model", "", "Override AI model for all calls")
 	flag.IntVar(&concurrency, "concurrency", 1, "Number of users to process in parallel (bulk mode only)")
 	flag.StringVar(&userFilter, "user", "", "Only regenerate facts for one user by @username or numeric user ID; skips prompt regeneration")
+	flag.StringVar(&sinceDate, "since-date", "", "Only process messages on or after this date (YYYY-MM-DD or RFC3339)")
 	flag.Parse()
 
 	if chatID == 0 {
@@ -82,6 +86,15 @@ func main() {
 	// Initialize registry database settings
 	registry.InitializeDbSettings()
 	promptmgr.EnsureTables()
+	if strings.TrimSpace(sinceDate) != "" {
+		sinceTime, err := parseSinceDate(sinceDate)
+		if err != nil {
+			log.Fatalf("invalid since-date: %v", err)
+		}
+		historySinceUnix = sinceTime.Unix()
+		historySinceLabel = sinceTime.Format(time.RFC3339)
+		fmt.Printf("Limiting history to messages since %s\n", historySinceLabel)
+	}
 
 	var selectedUser *activeChatUser
 	if strings.TrimSpace(userFilter) != "" {
@@ -218,9 +231,16 @@ func main() {
 // getTotalMessageCount returns the total number of messages in a chat
 func getTotalMessageCount(chatID int64) int {
 	var count int
-	err := database.DB.QueryRow(
-		`SELECT COUNT(*) FROM messages WHERE chat_id = ?`,
-		chatID).Scan(&count)
+	var err error
+	if historySinceUnix > 0 {
+		err = database.DB.QueryRow(
+			`SELECT COUNT(*) FROM messages WHERE chat_id = ? AND unixtime >= ?`,
+			chatID, historySinceUnix).Scan(&count)
+	} else {
+		err = database.DB.QueryRow(
+			`SELECT COUNT(*) FROM messages WHERE chat_id = ?`,
+			chatID).Scan(&count)
+	}
 	if err != nil {
 		log.Printf("Error counting messages: %v", err)
 		return 0
@@ -230,9 +250,16 @@ func getTotalMessageCount(chatID int64) int {
 
 func getUserMessageCount(chatID int64, userID int64) int {
 	var count int
-	err := database.DB.QueryRow(
-		`SELECT COUNT(*) FROM messages WHERE chat_id = ? AND sender_id = ?`,
-		chatID, userID).Scan(&count)
+	var err error
+	if historySinceUnix > 0 {
+		err = database.DB.QueryRow(
+			`SELECT COUNT(*) FROM messages WHERE chat_id = ? AND sender_id = ? AND unixtime >= ?`,
+			chatID, userID, historySinceUnix).Scan(&count)
+	} else {
+		err = database.DB.QueryRow(
+			`SELECT COUNT(*) FROM messages WHERE chat_id = ? AND sender_id = ?`,
+			chatID, userID).Scan(&count)
+	}
 	if err != nil {
 		log.Printf("Error counting messages for user %d: %v", userID, err)
 		return 0
@@ -247,14 +274,47 @@ func getScopedMessageCount(chatID int64, selectedUser *activeChatUser) int {
 	return getTotalMessageCount(chatID)
 }
 
+func parseSinceDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty date")
+	}
+
+	layouts := []string{time.RFC3339, "2006-01-02"}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err != nil {
+			continue
+		}
+		if layout == "2006-01-02" {
+			return time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.Local), nil
+		}
+		return parsed, nil
+	}
+
+	return time.Time{}, fmt.Errorf("expected YYYY-MM-DD or RFC3339")
+}
+
 // retrieveHistoryBatch gets a batch of chat history from the database
 // offset is the number of messages to skip from the beginning
 func retrieveHistoryBatch(chatID int64, limit int, offset int) []telebot.Message {
-	rows, err := database.DB.Query(
-		`SELECT data FROM messages 
-		WHERE chat_id = ? 
-		ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
-		chatID, limit, offset)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if historySinceUnix > 0 {
+		rows, err = database.DB.Query(
+			`SELECT data FROM messages 
+			WHERE chat_id = ? AND unixtime >= ?
+			ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
+			chatID, historySinceUnix, limit, offset)
+	} else {
+		rows, err = database.DB.Query(
+			`SELECT data FROM messages 
+			WHERE chat_id = ? 
+			ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
+			chatID, limit, offset)
+	}
 	if err != nil {
 		log.Printf("Error retrieving chat history batch: %v", err)
 		return nil
@@ -283,11 +343,23 @@ func retrieveHistoryBatch(chatID int64, limit int, offset int) []telebot.Message
 }
 
 func retrieveHistoryBatchForUser(chatID int64, userID int64, limit int, offset int) []telebot.Message {
-	rows, err := database.DB.Query(
-		`SELECT data FROM messages
-		WHERE chat_id = ? AND sender_id = ?
-		ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
-		chatID, userID, limit, offset)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if historySinceUnix > 0 {
+		rows, err = database.DB.Query(
+			`SELECT data FROM messages
+			WHERE chat_id = ? AND sender_id = ? AND unixtime >= ?
+			ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
+			chatID, userID, historySinceUnix, limit, offset)
+	} else {
+		rows, err = database.DB.Query(
+			`SELECT data FROM messages
+			WHERE chat_id = ? AND sender_id = ?
+			ORDER BY unixtime ASC LIMIT ? OFFSET ?`,
+			chatID, userID, limit, offset)
+	}
 	if err != nil {
 		log.Printf("Error retrieving chat history batch for user %d: %v", userID, err)
 		return nil

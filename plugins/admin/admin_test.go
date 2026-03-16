@@ -7,6 +7,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	selfpromptplugin "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	"github.com/focusshifter/muxgoob/plugins/spotify"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
@@ -210,6 +211,65 @@ func TestAdminPlugin_SpotifyModelCommand(t *testing.T) {
 	}
 	if got := registry.GetPluginSetting(&targetChatID, spotify.SpotifyPluginName, spotify.SpotifyReviewModelKey, ""); got != chatModel {
 		t.Fatalf("Expected chat spotify model %q, got %q", chatModel, got)
+	}
+}
+
+func TestAdminPlugin_SelfpromptCompressionModelCommand(t *testing.T) {
+	originalConfig := registry.Config
+	defer func() {
+		registry.Config = originalConfig
+	}()
+	registry.Config.OwnerUsername = "test_owner"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+
+	plugin := &AdminPlugin{}
+
+	globalModel := "openrouter/google/gemini-2.5-flash"
+	plugin.Process(&telebot.Message{
+		Text:   "!ai model selfprompt " + globalModel,
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for global selfprompt model command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Global selfprompt compression model set to") {
+		t.Fatalf("Unexpected global response: %v", mockBot.SendWhat)
+	}
+	if got := selfpromptplugin.GetCompressionModel(nil); got != globalModel {
+		t.Fatalf("Expected global selfprompt model %q, got %q", globalModel, got)
+	}
+
+	mockBot.SendCalled = false
+	mockBot.SendWhat = nil
+
+	chatModel := "gpt-4o-mini"
+	targetChatID := int64(777)
+	plugin.Process(&telebot.Message{
+		Text:   "!ai model selfprompt " + chatModel + " 777",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for chat selfprompt model command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Selfprompt compression model for chat 777 set to") {
+		t.Fatalf("Unexpected chat response: %v", mockBot.SendWhat)
+	}
+	if got := selfpromptplugin.GetCompressionModel(&targetChatID); got != chatModel {
+		t.Fatalf("Expected chat selfprompt model %q, got %q", chatModel, got)
 	}
 }
 

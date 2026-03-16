@@ -481,6 +481,7 @@ func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []t
 // Variable to hold the prompt/fact generation functions for testing.
 var generateNewPromptFunc func(p *SelfPromptPlugin, history string, currentPrompt string) string
 var generateUserFactsFunc func(p *SelfPromptPlugin, chatID int64, user activeChatUser, history string, currentFacts string) string
+var consolidatePersonFactsFunc func(chatID int64, userName string, currentFacts string) string
 
 func (p *SelfPromptPlugin) updatePrompt(chatID int64) {
 	log.Printf("[selfprompt] Updating prompt for chat %d", chatID)
@@ -724,6 +725,10 @@ func (p *SelfPromptPlugin) updatePersonFacts(chatID int64, messages []telebot.Me
 }
 
 func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
+	return buildOpenAIClientForModel(chatID, "")
+}
+
+func buildOpenAIClientForModel(chatID *int64, requestedModel string) (*openai.Client, string) {
 	var config openai.ClientConfig
 	var model string
 
@@ -736,8 +741,82 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"
 	}
+	if strings.TrimSpace(requestedModel) != "" {
+		model = strings.TrimSpace(requestedModel)
+	}
 
 	return openai.NewClientWithConfig(config), model
+}
+
+func shouldConsolidateFacts(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	bulletCount := strings.Count(trimmed, "\n- ")
+	return len(trimmed) >= defaultCompactChars || bulletCount >= defaultCompactBullets
+}
+
+func consolidatePersonFacts(chatID int64, userName string, currentFacts string) string {
+	modelOverride := GetCompressionModel(&chatID)
+	client, model := buildOpenAIClientForModel(&chatID, modelOverride)
+	systemMsg := `You consolidate a person's profile by merging overlapping bullets while preserving all durable meaning.`
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		userMsg := fmt.Sprintf(`
+Consolidate this person's stored profile into a tighter version.
+
+Rules:
+1. Preserve durable meaning from the current profile. Do not invent facts.
+2. Merge overlapping bullets when they describe the same broader interest or trait.
+3. Prefer compact grouped bullets over many one-title bullets when that summary is faithful.
+4. Remove redundant repetition.
+5. Do not start bullets with the person's name, username, or phrases like '%s has' or '%s is'.
+6. Output exactly these English headings in this order:
+Identity:
+Interests:
+7. Under each heading, use only '- ' bullets.
+8. Keep only concise factual bullets that help future replies.
+9. Do not add commentary or text outside the dossier.
+
+Current profile:
+%s
+`, userName, userName, currentFacts)
+		if attempt == 2 {
+			userMsg += "\nYour previous answer was invalid. Retry once and return only the exact dossier structure.\n"
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+			Model: model,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: "system", Content: systemMsg},
+				{Role: "user", Content: userMsg},
+			},
+		})
+		cancel()
+		if err != nil {
+			log.Printf("[selfprompt] Error consolidating facts for chat %d: %v", chatID, err)
+			return currentFacts
+		}
+		if len(resp.Choices) == 0 {
+			return currentFacts
+		}
+
+		evaluation := facts.EvaluatePersonFacts(currentFacts, resp.Choices[0].Message.Content)
+		if evaluation.Accepted {
+			if len(strings.TrimSpace(evaluation.Value)) >= len(strings.TrimSpace(currentFacts)) {
+				return currentFacts
+			}
+			return evaluation.Value
+		}
+		if evaluation.Retryable && attempt == 1 {
+			continue
+		}
+		return currentFacts
+	}
+
+	return currentFacts
 }
 
 func (p *SelfPromptPlugin) generateNewPrompt(chatID int64, history string, currentPrompt string) string {
@@ -897,6 +976,13 @@ Recent messages from %s:
 			}
 			merged := facts.ApplyDelta(current, delta)
 			candidate := facts.RenderDossier(merged)
+			if shouldConsolidateFacts(candidate) {
+				consolidator := consolidatePersonFacts
+				if consolidatePersonFactsFunc != nil {
+					consolidator = consolidatePersonFactsFunc
+				}
+				candidate = consolidator(chatID, user.Name, candidate)
+			}
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {
 				return evaluation.Value

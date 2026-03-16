@@ -19,6 +19,7 @@ import (
 
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
+	selfpromptplugin "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/facts"
 )
@@ -917,6 +918,10 @@ func filterMessagesByUser(messages []telebot.Message, userID int64) []telebot.Me
 }
 
 func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
+	return buildOpenAIClientForModel(chatID, "")
+}
+
+func buildOpenAIClientForModel(chatID *int64, requestedModel string) (*openai.Client, string) {
 	var config openai.ClientConfig
 	var model string
 
@@ -929,11 +934,85 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"
 	}
+	if strings.TrimSpace(requestedModel) != "" {
+		model = strings.TrimSpace(requestedModel)
+	}
 	if modelOverride != "" {
 		model = modelOverride
 	}
 
 	return openai.NewClientWithConfig(config), model
+}
+
+func shouldConsolidateFacts(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	bulletCount := strings.Count(trimmed, "\n- ")
+	return len(trimmed) >= selfpromptplugin.DefaultCompactChars() || bulletCount >= selfpromptplugin.DefaultCompactBullets()
+}
+
+func consolidatePersonFacts(chatID int64, userName string, currentFacts string) string {
+	compressionModel := selfpromptplugin.GetCompressionModel(&chatID)
+	client, model := buildOpenAIClientForModel(&chatID, compressionModel)
+	systemMsg := `You consolidate a person's profile by merging overlapping bullets while preserving all durable meaning.`
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		userMsg := fmt.Sprintf(`
+Consolidate this person's stored profile into a tighter version.
+
+Rules:
+1. Preserve durable meaning from the current profile. Do not invent facts.
+2. Merge overlapping bullets when they describe the same broader interest or trait.
+3. Prefer compact grouped bullets over many one-title bullets when that summary is faithful.
+4. Remove redundant repetition.
+5. Do not start bullets with the person's name, username, or phrases like '%s has' or '%s is'.
+6. Output exactly these English headings in this order:
+Identity:
+Interests:
+7. Under each heading, use only '- ' bullets.
+8. Keep only concise factual bullets that help future replies.
+9. Do not add commentary or text outside the dossier.
+
+Current profile:
+%s
+`, userName, userName, currentFacts)
+		if attempt == 2 {
+			userMsg += "\nYour previous answer was invalid. Retry once and return only the exact dossier structure.\n"
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+			Model: model,
+			Messages: []openai.ChatCompletionMessage{
+				{Role: "system", Content: systemMsg},
+				{Role: "user", Content: userMsg},
+			},
+		})
+		cancel()
+		if err != nil {
+			log.Printf("Error consolidating facts for user %s: %v", userName, err)
+			return currentFacts
+		}
+		if len(resp.Choices) == 0 {
+			return currentFacts
+		}
+
+		evaluation := facts.EvaluatePersonFacts(currentFacts, resp.Choices[0].Message.Content)
+		if evaluation.Accepted {
+			if len(strings.TrimSpace(evaluation.Value)) >= len(strings.TrimSpace(currentFacts)) {
+				return currentFacts
+			}
+			return evaluation.Value
+		}
+		if evaluation.Retryable && attempt == 1 {
+			continue
+		}
+		return currentFacts
+	}
+
+	return currentFacts
 }
 
 func updatePersonFacts(chatID int64, messages []telebot.Message, _ string, selectedUser *activeChatUser) {
@@ -1127,6 +1206,9 @@ Recent messages from %s:
 			}
 			merged := facts.ApplyDelta(current, delta)
 			candidate := facts.RenderDossier(merged)
+			if shouldConsolidateFacts(candidate) {
+				candidate = consolidatePersonFacts(chatID, user.Name, candidate)
+			}
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {
 				return evaluation.Value, nil

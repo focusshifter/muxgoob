@@ -320,7 +320,7 @@ func parseSinceDate(value string) (time.Time, error) {
 func resetStoredState(chatID int64, selectedUser *activeChatUser) error {
 	if selectedUser != nil {
 		fmt.Printf("Resetting stored facts for %s (%d) in chat %d\n", selectedUser.Name, selectedUser.ID, chatID)
-		return promptmgr.SavePersonFacts(chatID, selectedUser.ID, "")
+		return insertEmptyPersonFactsVersion(chatID, selectedUser.ID)
 	}
 
 	fmt.Printf("Resetting chat prompt and all stored person facts for chat %d\n", chatID)
@@ -340,7 +340,7 @@ func resetStoredState(chatID int64, selectedUser *activeChatUser) error {
 		if err := rows.Scan(&userID); err != nil {
 			return err
 		}
-		if err := promptmgr.SavePersonFacts(chatID, userID, ""); err != nil {
+		if err := insertEmptyPersonFactsVersion(chatID, userID); err != nil {
 			return err
 		}
 		resetCount++
@@ -351,6 +351,27 @@ func resetStoredState(chatID int64, selectedUser *activeChatUser) error {
 
 	fmt.Printf("Reset prompt and %d stored fact profiles\n", resetCount)
 	return nil
+}
+
+func insertEmptyPersonFactsVersion(chatID int64, userID int64) error {
+	return database.RetryWithBackoff(func() error {
+		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			var nextVersion int
+			err := tx.QueryRow(`
+				SELECT COALESCE(MAX(version) + 1, 1)
+				FROM person_facts
+				WHERE chat_id = ? AND user_id = ?`, chatID, userID).Scan(&nextVersion)
+			if err != nil {
+				return err
+			}
+
+			_, err = tx.Exec(`
+				INSERT INTO person_facts (chat_id, user_id, facts, version, created_at)
+				VALUES (?, ?, '', ?, ?)`,
+				chatID, userID, nextVersion, time.Now().Unix())
+			return err
+		})
+	})
 }
 
 // retrieveHistoryBatch gets a batch of chat history from the database

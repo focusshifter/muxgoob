@@ -22,9 +22,8 @@ func TestParseDeltaRejectsInvalidLine(t *testing.T) {
 
 func TestApplyDeltaAddsAndUpdates(t *testing.T) {
 	current := &Dossier{
-		Identity:      []string{"works in IT"},
-		Interests:     []string{"likes games"},
-		Relationships: []string{"knows friends from the chat"},
+		Identity:  []string{"works in IT"},
+		Interests: []string{"likes games"},
 	}
 	delta := &Delta{
 		Identity:  []DeltaOp{{Action: '+', NewText: "lives in Berlin"}},
@@ -59,18 +58,16 @@ func TestIsNoChanges(t *testing.T) {
 
 func TestFilterDeltaForDossierRejectsWeakBullets(t *testing.T) {
 	current := &Dossier{
-		Identity:      []string{"Works in IT"},
-		Interests:     []string{"Plays Diablo III"},
-		Relationships: []string{"Has a friend named Kaz"},
+		Identity:  []string{"Works in IT"},
+		Interests: []string{"Plays Diablo III"},
 	}
 	delta := &Delta{
-		Identity:      []DeltaOp{{Action: '+', NewText: "Tetra5 appears to have a light-hearted approach to conversations"}},
-		Interests:     []DeltaOp{{Action: '+', NewText: "likes games"}},
-		Relationships: []DeltaOp{{Action: '+', NewText: "interacts with Dima in chat"}},
+		Identity:  []DeltaOp{{Action: '+', NewText: "Tetra5 appears to have a light-hearted approach to conversations"}},
+		Interests: []DeltaOp{{Action: '+', NewText: "likes games"}},
 	}
 
 	filtered := FilterDeltaForDossier(current, delta)
-	if len(filtered.Identity) != 0 || len(filtered.Interests) != 0 || len(filtered.Relationships) != 0 {
+	if len(filtered.Identity) != 0 || len(filtered.Interests) != 0 {
 		t.Fatalf("expected all weak bullets to be filtered, got %#v", filtered)
 	}
 }
@@ -100,5 +97,16 @@ func TestFilterDeltaForDossierAllowsMoreSpecificUpdate(t *testing.T) {
 	filtered := FilterDeltaForDossier(current, delta)
 	if len(filtered.Identity) != 1 {
 		t.Fatalf("expected specific update to survive filtering, got %#v", filtered.Identity)
+	}
+}
+
+func TestSanitizeDeltaForPersonRemovesRepeatedSubjectPrefix(t *testing.T) {
+	delta := &Delta{
+		Identity: []DeltaOp{{Action: '+', NewText: "tetra5 has an iPhone XS"}},
+	}
+
+	cleaned := SanitizeDeltaForPerson(delta, "tetra5")
+	if cleaned.Identity[0].NewText != "Has an iPhone XS" {
+		t.Fatalf("unexpected sanitized bullet: %#v", cleaned.Identity[0])
 	}
 }

@@ -12,7 +12,6 @@ type Evaluation struct {
 var dossierHeadings = []string{
 	"Identity:",
 	"Interests:",
-	"Relationships:",
 }
 
 var chatPromptHeadings = []string{

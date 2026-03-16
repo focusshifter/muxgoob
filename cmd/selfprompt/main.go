@@ -1074,23 +1074,23 @@ Rules:
 2. Use '+ ' for new facts not already in the current profile.
 3. Use '~ old fact -> new fact' when a current fact should be refined.
 4. Use only what this person says in their own messages below. Do not infer facts from what other people say about them.
-5. Focus on durable traits, interests, preferences, and self-stated relationships.
+5. Focus on durable traits, interests, preferences, habits, and self-stated facts.
 6. Ignore one-off jokes or fleeting topics unless they look stable.
 7. Prefer the main language of the chat.
 8. Absence of a topic in recent messages does not mean it should be removed.
-9. Output headings only when they have changes, using these exact English headings:
+9. Write bullets as concise facts or preferences about the person. Do not start bullets with the person's name, username, or phrases like '%s has' or '%s is'.
+10. Output headings only when they have changes, using these exact English headings:
 Identity:
 Interests:
-Relationships:
-10. If the recent messages add nothing durable, output exactly: NO_CHANGES
-11. Do not add commentary, explanations, markdown emphasis, update notes, or any text outside the delta format.
+11. If the recent messages add nothing durable, output exactly: NO_CHANGES
+12. Do not add commentary, explanations, markdown emphasis, update notes, or any text outside the delta format.
 
 Current profile for context (do not reproduce it):
 %s
 
 Recent messages from %s:
 %s
-`, user.Name, currentFacts, user.Name, history)
+`, user.Name, user.Name, user.Name, currentFacts, user.Name, history)
 		if attempt == 2 {
 			userMsg += "\nYour previous answer was invalid. Retry once and return only a valid delta or NO_CHANGES.\n"
 		}
@@ -1120,8 +1120,9 @@ Recent messages from %s:
 		delta, accepted, retryable, reason := facts.EvaluateDelta(raw)
 		if accepted {
 			current := facts.ParseDossier(currentFacts)
+			delta = facts.SanitizeDeltaForPerson(delta, user.Name)
 			delta = facts.FilterDeltaForDossier(current, delta)
-			if delta == nil || len(delta.Identity)+len(delta.Interests)+len(delta.Relationships) == 0 {
+			if delta == nil || len(delta.Identity)+len(delta.Interests) == 0 {
 				return currentFacts, nil
 			}
 			merged := facts.ApplyDelta(current, delta)

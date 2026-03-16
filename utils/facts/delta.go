@@ -3,12 +3,13 @@ package facts
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	sectionIdentity = iota
 	sectionInterests
-	sectionRelationships
 )
 
 type DeltaOp struct {
@@ -19,9 +20,8 @@ type DeltaOp struct {
 }
 
 type Delta struct {
-	Identity      []DeltaOp
-	Interests     []DeltaOp
-	Relationships []DeltaOp
+	Identity  []DeltaOp
+	Interests []DeltaOp
 }
 
 func IsNoChanges(raw string) bool {
@@ -40,7 +40,7 @@ func EvaluateDelta(raw string) (*Delta, bool, bool, string) {
 	if err != nil {
 		return nil, false, true, err.Error()
 	}
-	if totalDeltaOps(delta.Identity, delta.Interests, delta.Relationships) == 0 {
+	if totalDeltaOps(delta.Identity, delta.Interests) == 0 {
 		return nil, false, true, "no delta ops"
 	}
 	return delta, true, false, ""
@@ -62,9 +62,6 @@ func ParseDelta(text string) (*Delta, error) {
 			continue
 		case "Interests:":
 			section = &delta.Interests
-			continue
-		case "Relationships:":
-			section = &delta.Relationships
 			continue
 		}
 
@@ -93,7 +90,6 @@ func ApplyDelta(current *Dossier, delta *Delta) *Dossier {
 	merged := cloneDossier(current)
 	merged.Identity = applyDeltaSection(merged.Identity, delta.Identity)
 	merged.Interests = applyDeltaSection(merged.Interests, delta.Interests)
-	merged.Relationships = applyDeltaSection(merged.Relationships, delta.Relationships)
 	return merged
 }
 
@@ -106,17 +102,25 @@ func FilterDeltaForDossier(current *Dossier, delta *Delta) *Delta {
 	}
 
 	return &Delta{
-		Identity:      filterDeltaSection(current.Identity, delta.Identity, sectionIdentity),
-		Interests:     filterDeltaSection(current.Interests, delta.Interests, sectionInterests),
-		Relationships: filterDeltaSection(current.Relationships, delta.Relationships, sectionRelationships),
+		Identity:  filterDeltaSection(current.Identity, delta.Identity, sectionIdentity),
+		Interests: filterDeltaSection(current.Interests, delta.Interests, sectionInterests),
+	}
+}
+
+func SanitizeDeltaForPerson(delta *Delta, userName string) *Delta {
+	if delta == nil {
+		return nil
+	}
+	return &Delta{
+		Identity:  sanitizeDeltaSection(delta.Identity, userName),
+		Interests: sanitizeDeltaSection(delta.Interests, userName),
 	}
 }
 
 func cloneDossier(current *Dossier) *Dossier {
 	return &Dossier{
-		Identity:      append([]string(nil), current.Identity...),
-		Interests:     append([]string(nil), current.Interests...),
-		Relationships: append([]string(nil), current.Relationships...),
+		Identity:  append([]string(nil), current.Identity...),
+		Interests: append([]string(nil), current.Interests...),
 	}
 }
 
@@ -245,8 +249,6 @@ func isWeakBullet(section int, text string) bool {
 		return isWeakIdentityBullet(text)
 	case sectionInterests:
 		return isWeakInterestBullet(text)
-	case sectionRelationships:
-		return isWeakRelationshipBullet(text)
 	default:
 		return false
 	}
@@ -297,29 +299,6 @@ func isWeakInterestBullet(text string) bool {
 		}
 	}
 	if !containsConcreteSignal(text) && containsAny(lower, []string{"games", "anime", "music", "movies", "streams"}) {
-		return true
-	}
-	return false
-}
-
-func isWeakRelationshipBullet(text string) bool {
-	lower := strings.ToLower(strings.TrimSpace(text))
-	weakPrefixes := []string{
-		"interacts with",
-		"talks to",
-		"mentions",
-		"addresses",
-		"seems to have a friend named",
-		"has a playful rapport with",
-		"has a history of interacting positively",
-		"refers to",
-	}
-	for _, prefix := range weakPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	if !containsConcreteSignal(text) && containsAny(lower, []string{"friend named", "chat community", "the chat", "someone named"}) {
 		return true
 	}
 	return false
@@ -404,6 +383,48 @@ func normalizeListItem(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+func sanitizeDeltaSection(ops []DeltaOp, userName string) []DeltaOp {
+	if len(ops) == 0 {
+		return nil
+	}
+	cleaned := make([]DeltaOp, 0, len(ops))
+	for _, op := range ops {
+		op.NewText = sanitizePersonBullet(op.NewText, userName)
+		if op.Action == '+' {
+			op.Text = op.NewText
+		} else if op.Action == '~' {
+			op.Text = strings.TrimSpace(op.OldText) + " -> " + op.NewText
+		}
+		cleaned = append(cleaned, op)
+	}
+	return cleaned
+}
+
+func sanitizePersonBullet(text, userName string) string {
+	text = strings.TrimSpace(text)
+	if text == "" || strings.TrimSpace(userName) == "" {
+		return text
+	}
+	prefixes := []string{
+		userName + " ",
+		strings.ToLower(userName) + " ",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) {
+			text = strings.TrimSpace(text[len(prefix):])
+			break
+		}
+	}
+	if text == "" {
+		return text
+	}
+	r, size := utf8.DecodeRuneInString(text)
+	if r == utf8.RuneError && size == 0 {
+		return text
+	}
+	return string(unicode.ToUpper(r)) + text[size:]
+}
+
 func containsConcreteSignal(text string) bool {
 	for _, token := range strings.Fields(text) {
 		trimmed := strings.Trim(token, ",.;:!?()[]{}\"'")
@@ -433,7 +454,7 @@ func containsAny(value string, needles []string) bool {
 }
 
 func sharesGenericTopic(existing, candidate string) bool {
-	topics := []string{"game", "games", "anime", "music", "movie", "movies", "stream", "streams", "friend", "friends"}
+	topics := []string{"game", "games", "anime", "music", "movie", "movies", "stream", "streams"}
 	for _, topic := range topics {
 		if strings.Contains(existing, topic) && strings.Contains(candidate, topic) {
 			return true

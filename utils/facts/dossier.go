@@ -3,9 +3,8 @@ package facts
 import "strings"
 
 type Dossier struct {
-	Identity      []string
-	Interests     []string
-	Relationships []string
+	Identity  []string
+	Interests []string
 }
 
 func ParseDossier(text string) *Dossier {
@@ -24,9 +23,6 @@ func ParseDossier(text string) *Dossier {
 			continue
 		case "Interests:":
 			section = &d.Interests
-			continue
-		case "Relationships:":
-			section = &d.Relationships
 			continue
 		}
 
@@ -59,8 +55,6 @@ func RenderDossier(d *Dossier) string {
 	writeSection(&out, "Identity:", d.Identity)
 	out.WriteString("\n\n")
 	writeSection(&out, "Interests:", d.Interests)
-	out.WriteString("\n\n")
-	writeSection(&out, "Relationships:", d.Relationships)
 	return strings.TrimSpace(out.String())
 }
 

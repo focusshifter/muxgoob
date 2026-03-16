@@ -5,6 +5,12 @@ import (
 	"strings"
 )
 
+const (
+	sectionIdentity = iota
+	sectionInterests
+	sectionRelationships
+)
+
 type DeltaOp struct {
 	Action  byte
 	Text    string
@@ -91,6 +97,21 @@ func ApplyDelta(current *Dossier, delta *Delta) *Dossier {
 	return merged
 }
 
+func FilterDeltaForDossier(current *Dossier, delta *Delta) *Delta {
+	if delta == nil {
+		return nil
+	}
+	if current == nil {
+		current = &Dossier{}
+	}
+
+	return &Delta{
+		Identity:      filterDeltaSection(current.Identity, delta.Identity, sectionIdentity),
+		Interests:     filterDeltaSection(current.Interests, delta.Interests, sectionInterests),
+		Relationships: filterDeltaSection(current.Relationships, delta.Relationships, sectionRelationships),
+	}
+}
+
 func cloneDossier(current *Dossier) *Dossier {
 	return &Dossier{
 		Identity:      append([]string(nil), current.Identity...),
@@ -154,6 +175,45 @@ func applyDeltaSection(current []string, ops []DeltaOp) []string {
 	return merged
 }
 
+func filterDeltaSection(current []string, ops []DeltaOp, section int) []DeltaOp {
+	filtered := make([]DeltaOp, 0, len(ops))
+	projected := append([]string(nil), current...)
+	for _, op := range ops {
+		candidate := strings.TrimSpace(op.NewText)
+		if candidate == "" {
+			continue
+		}
+		if isWeakBullet(section, candidate) {
+			continue
+		}
+
+		switch op.Action {
+		case '+':
+			if isWeakerThanExisting(projected, candidate) {
+				continue
+			}
+			filtered = append(filtered, op)
+			projected = appendUniqueString(projected, candidate)
+		case '~':
+			idx := findMatchingItem(projected, op.OldText)
+			if idx < 0 {
+				if isWeakerThanExisting(projected, candidate) {
+					continue
+				}
+				filtered = append(filtered, DeltaOp{Action: '+', Text: candidate, NewText: candidate})
+				projected = appendUniqueString(projected, candidate)
+				continue
+			}
+			if !isBetterThanExisting(projected[idx], candidate) {
+				continue
+			}
+			filtered = append(filtered, op)
+			projected[idx] = candidate
+		}
+	}
+	return filtered
+}
+
 func appendUniqueString(items []string, item string) []string {
 	item = strings.TrimSpace(item)
 	if item == "" {
@@ -166,6 +226,164 @@ func appendUniqueString(items []string, item string) []string {
 		}
 	}
 	return append(items, item)
+}
+
+func isWeakBullet(section int, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	if looksLikeStyleInference(text) {
+		return true
+	}
+	if len(strings.Fields(text)) < 3 && !containsConcreteSignal(text) {
+		return true
+	}
+
+	switch section {
+	case sectionIdentity:
+		return isWeakIdentityBullet(text)
+	case sectionInterests:
+		return isWeakInterestBullet(text)
+	case sectionRelationships:
+		return isWeakRelationshipBullet(text)
+	default:
+		return false
+	}
+}
+
+func isWeakIdentityBullet(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	weakPrefixes := []string{
+		"seems to ",
+		"appears to ",
+		"likely ",
+		"probably ",
+		"uses humor",
+		"has a light-hearted approach",
+		"has a playful",
+		"is light-hearted",
+	}
+	for _, prefix := range weakPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWeakInterestBullet(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	weakPrefixes := []string{
+		"is interested in various",
+		"has an interest in",
+		"enjoys various",
+		"likes games",
+		"plays games",
+		"interested in games",
+		"interested in anime",
+		"likes anime",
+		"likes music",
+	}
+	for _, prefix := range weakPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	genericTerms := []string{"various genres", "various games", "different games"}
+	for _, term := range genericTerms {
+		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	if !containsConcreteSignal(text) && containsAny(lower, []string{"games", "anime", "music", "movies", "streams"}) {
+		return true
+	}
+	return false
+}
+
+func isWeakRelationshipBullet(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	weakPrefixes := []string{
+		"interacts with",
+		"talks to",
+		"mentions",
+		"addresses",
+		"seems to have a friend named",
+		"has a playful rapport with",
+		"has a history of interacting positively",
+		"refers to",
+	}
+	for _, prefix := range weakPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	if !containsConcreteSignal(text) && containsAny(lower, []string{"friend named", "chat community", "the chat", "someone named"}) {
+		return true
+	}
+	return false
+}
+
+func looksLikeStyleInference(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	markers := []string{
+		"humor",
+		"humorous",
+		"sarcast",
+		"playful",
+		"light-hearted",
+		"banter",
+		"approach to conversations",
+		"tone",
+		"conversational",
+		"uses slang",
+	}
+	return containsAny(lower, markers)
+}
+
+func isBetterThanExisting(oldText, newText string) bool {
+	oldNorm := normalizeListItem(oldText)
+	newNorm := normalizeListItem(newText)
+	if oldNorm == "" || newNorm == "" {
+		return false
+	}
+	if oldNorm == newNorm {
+		return false
+	}
+	if strings.Contains(oldNorm, newNorm) && len(newNorm) < len(oldNorm) {
+		return false
+	}
+	if looksLikeStyleInference(newText) {
+		return false
+	}
+	if containsConcreteSignal(oldText) && !containsConcreteSignal(newText) {
+		return false
+	}
+	if len(strings.Fields(newText)) < len(strings.Fields(oldText))/2 {
+		return false
+	}
+	return true
+}
+
+func isWeakerThanExisting(existing []string, candidate string) bool {
+	candidateNorm := normalizeListItem(candidate)
+	if candidateNorm == "" {
+		return true
+	}
+	for _, item := range existing {
+		norm := normalizeListItem(item)
+		if norm == candidateNorm {
+			return true
+		}
+		if strings.Contains(norm, candidateNorm) && len(norm) > len(candidateNorm) {
+			return true
+		}
+		if containsConcreteSignal(item) && !containsConcreteSignal(candidate) && sharesGenericTopic(norm, candidateNorm) {
+			return true
+		}
+	}
+	return false
 }
 
 func findMatchingItem(items []string, query string) int {
@@ -184,4 +402,42 @@ func findMatchingItem(items []string, query string) int {
 
 func normalizeListItem(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func containsConcreteSignal(text string) bool {
+	for _, token := range strings.Fields(text) {
+		trimmed := strings.Trim(token, ",.;:!?()[]{}\"'")
+		if trimmed == "" {
+			continue
+		}
+		if strings.ContainsAny(trimmed, "0123456789") {
+			return true
+		}
+		if strings.Contains(trimmed, ":") || strings.Contains(trimmed, "/") || strings.Contains(trimmed, "-") {
+			return true
+		}
+		if len(trimmed) >= 3 && trimmed != strings.ToLower(trimmed) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(value string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func sharesGenericTopic(existing, candidate string) bool {
+	topics := []string{"game", "games", "anime", "music", "movie", "movies", "stream", "streams", "friend", "friends"}
+	for _, topic := range topics {
+		if strings.Contains(existing, topic) && strings.Contains(candidate, topic) {
+			return true
+		}
+	}
+	return false
 }

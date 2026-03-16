@@ -16,9 +16,9 @@ var dossierHeadings = []string{
 }
 
 var chatPromptHeadings = []string{
-	"Recurring topics:",
-	"Group dynamics:",
-	"Communication norms:",
+	"Reply style:",
+	"Stable context:",
+	"Avoid:",
 }
 
 var suspiciousMetaMarkers = []string{

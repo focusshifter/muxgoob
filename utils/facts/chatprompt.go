@@ -6,15 +6,15 @@ import (
 )
 
 type ChatPrompt struct {
-	Topics   []string
-	Dynamics []string
-	Norms    []string
+	ReplyStyle    []string
+	StableContext []string
+	Avoid         []string
 }
 
 type ChatDelta struct {
-	Topics   []DeltaOp
-	Dynamics []DeltaOp
-	Norms    []DeltaOp
+	ReplyStyle    []DeltaOp
+	StableContext []DeltaOp
+	Avoid         []DeltaOp
 }
 
 func ParseChatPrompt(text string) *ChatPrompt {
@@ -33,16 +33,16 @@ func ParseChatPrompt(text string) *ChatPrompt {
 		}
 
 		switch line {
-		case "Recurring topics:":
-			section = &prompt.Topics
+		case "Reply style:", "Communication norms:":
+			section = &prompt.ReplyStyle
 			foundHeading = true
 			continue
-		case "Group dynamics:":
-			section = &prompt.Dynamics
+		case "Stable context:", "Recurring topics:", "Group dynamics:":
+			section = &prompt.StableContext
 			foundHeading = true
 			continue
-		case "Communication norms:":
-			section = &prompt.Norms
+		case "Avoid:":
+			section = &prompt.Avoid
 			foundHeading = true
 			continue
 		}
@@ -56,7 +56,7 @@ func ParseChatPrompt(text string) *ChatPrompt {
 		}
 
 		if !foundHeading {
-			prompt.Topics = append(prompt.Topics, strings.TrimSpace(strings.TrimPrefix(line, "- ")))
+			prompt.StableContext = append(prompt.StableContext, strings.TrimSpace(strings.TrimPrefix(line, "- ")))
 			continue
 		}
 
@@ -71,8 +71,8 @@ func ParseChatPrompt(text string) *ChatPrompt {
 		}
 	}
 
-	if !foundHeading && len(prompt.Topics) == 0 {
-		prompt.Topics = append(prompt.Topics, normalized)
+	if !foundHeading && len(prompt.StableContext) == 0 {
+		prompt.StableContext = append(prompt.StableContext, normalized)
 	}
 
 	return prompt
@@ -84,11 +84,11 @@ func RenderChatPrompt(prompt *ChatPrompt) string {
 	}
 
 	var out strings.Builder
-	writeSection(&out, "Recurring topics:", prompt.Topics)
+	writeSection(&out, "Reply style:", prompt.ReplyStyle)
 	out.WriteString("\n\n")
-	writeSection(&out, "Group dynamics:", prompt.Dynamics)
+	writeSection(&out, "Stable context:", prompt.StableContext)
 	out.WriteString("\n\n")
-	writeSection(&out, "Communication norms:", prompt.Norms)
+	writeSection(&out, "Avoid:", prompt.Avoid)
 	return strings.TrimSpace(out.String())
 }
 
@@ -104,7 +104,7 @@ func EvaluateChatDelta(raw string) (*ChatDelta, bool, bool, string) {
 	if err != nil {
 		return nil, false, true, err.Error()
 	}
-	if totalDeltaOps(delta.Topics, delta.Dynamics, delta.Norms) == 0 {
+	if totalDeltaOps(delta.ReplyStyle, delta.StableContext, delta.Avoid) == 0 {
 		return nil, false, true, "no delta ops"
 	}
 	return delta, true, false, ""
@@ -121,14 +121,14 @@ func ParseChatDelta(text string) (*ChatDelta, error) {
 		}
 
 		switch line {
-		case "Recurring topics:":
-			section = &delta.Topics
+		case "Reply style:", "Communication norms:":
+			section = &delta.ReplyStyle
 			continue
-		case "Group dynamics:":
-			section = &delta.Dynamics
+		case "Stable context:", "Recurring topics:", "Group dynamics:":
+			section = &delta.StableContext
 			continue
-		case "Communication norms:":
-			section = &delta.Norms
+		case "Avoid:":
+			section = &delta.Avoid
 			continue
 		}
 
@@ -155,16 +155,16 @@ func ApplyChatDelta(current *ChatPrompt, delta *ChatDelta) *ChatPrompt {
 	}
 
 	merged := cloneChatPrompt(current)
-	merged.Topics = applyDeltaSection(merged.Topics, delta.Topics)
-	merged.Dynamics = applyDeltaSection(merged.Dynamics, delta.Dynamics)
-	merged.Norms = applyDeltaSection(merged.Norms, delta.Norms)
+	merged.ReplyStyle = applyDeltaSection(merged.ReplyStyle, delta.ReplyStyle)
+	merged.StableContext = applyDeltaSection(merged.StableContext, delta.StableContext)
+	merged.Avoid = applyDeltaSection(merged.Avoid, delta.Avoid)
 	return merged
 }
 
 func cloneChatPrompt(current *ChatPrompt) *ChatPrompt {
 	return &ChatPrompt{
-		Topics:   append([]string(nil), current.Topics...),
-		Dynamics: append([]string(nil), current.Dynamics...),
-		Norms:    append([]string(nil), current.Norms...),
+		ReplyStyle:    append([]string(nil), current.ReplyStyle...),
+		StableContext: append([]string(nil), current.StableContext...),
+		Avoid:         append([]string(nil), current.Avoid...),
 	}
 }

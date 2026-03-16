@@ -56,3 +56,49 @@ func TestIsNoChanges(t *testing.T) {
 		t.Fatal("did not expect delta to count as no changes")
 	}
 }
+
+func TestFilterDeltaForDossierRejectsWeakBullets(t *testing.T) {
+	current := &Dossier{
+		Identity:      []string{"Works in IT"},
+		Interests:     []string{"Plays Diablo III"},
+		Relationships: []string{"Has a friend named Kaz"},
+	}
+	delta := &Delta{
+		Identity:      []DeltaOp{{Action: '+', NewText: "Tetra5 appears to have a light-hearted approach to conversations"}},
+		Interests:     []DeltaOp{{Action: '+', NewText: "likes games"}},
+		Relationships: []DeltaOp{{Action: '+', NewText: "interacts with Dima in chat"}},
+	}
+
+	filtered := FilterDeltaForDossier(current, delta)
+	if len(filtered.Identity) != 0 || len(filtered.Interests) != 0 || len(filtered.Relationships) != 0 {
+		t.Fatalf("expected all weak bullets to be filtered, got %#v", filtered)
+	}
+}
+
+func TestFilterDeltaForDossierRejectsWeakerUpdate(t *testing.T) {
+	current := &Dossier{
+		Interests: []string{"Plays Wordle regularly"},
+	}
+	delta := &Delta{
+		Interests: []DeltaOp{{Action: '~', OldText: "Plays Wordle regularly", NewText: "enjoys puzzles"}},
+	}
+
+	filtered := FilterDeltaForDossier(current, delta)
+	if len(filtered.Interests) != 0 {
+		t.Fatalf("expected weaker update to be filtered, got %#v", filtered.Interests)
+	}
+}
+
+func TestFilterDeltaForDossierAllowsMoreSpecificUpdate(t *testing.T) {
+	current := &Dossier{
+		Identity: []string{"likes keyboards"},
+	}
+	delta := &Delta{
+		Identity: []DeltaOp{{Action: '~', OldText: "likes keyboards", NewText: "Prefers Cherry MX blue switches"}},
+	}
+
+	filtered := FilterDeltaForDossier(current, delta)
+	if len(filtered.Identity) != 1 {
+		t.Fatalf("expected specific update to survive filtering, got %#v", filtered.Identity)
+	}
+}

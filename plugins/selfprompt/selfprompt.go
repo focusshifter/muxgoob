@@ -743,27 +743,30 @@ func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
 func (p *SelfPromptPlugin) generateNewPrompt(chatID int64, history string, currentPrompt string) string {
 	client, model := buildOpenAIClient(&chatID)
 
-	systemMsg := `You identify new stable patterns in chat discussions.`
+	systemMsg := `You refine durable chat-specific reply guidance.`
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		userMsg := fmt.Sprintf(`
-Analyze the provided chat history and identify new or updated patterns for this chat profile.
+Analyze the provided chat history and identify new or updated reply guidance for this chat.
 
 Rules:
-1. Output ONLY new or updated observations. Do not reproduce the full chat profile.
-2. Use '+ ' for new recurring topics, group dynamics, or communication norms.
-3. Use '~ old observation -> new observation' when a current observation should be refined.
+1. Output ONLY new or updated guidance. Do not reproduce the full chat profile.
+2. Use '+ ' for new reply guidance, durable context, or things the bot should avoid.
+3. Use '~ old guidance -> new guidance' when a current instruction should be refined.
 4. Output under these exact English headings when needed:
-Recurring topics:
-Group dynamics:
-Communication norms:
+Reply style:
+Stable context:
+Avoid:
 5. Omit headings that have no changes.
 6. Do not include per-person profiles or headings for specific users.
 7. Prefer the main language of the chat.
-8. Focus on durable group patterns, not a single short-lived tangent.
-9. Absence of a topic in recent messages does not mean it should be removed.
-10. If nothing new or durable emerged, output exactly: NO_CHANGES
-11. Do not add commentary, explanations, or text outside the delta format.
+8. Focus on durable guidance that improves future replies, not generic topic summaries.
+9. Stable context should capture recurring lore, games, rituals, memes, or running situations only when they matter for replies.
+10. Reply style should describe how the bot should respond here, not list discussion subjects.
+11. Avoid should capture failure modes, misreads, or tones the bot should avoid.
+12. Absence of a topic in recent messages does not mean it should be removed.
+13. If nothing new or durable emerged, output exactly: NO_CHANGES
+14. Do not add commentary, explanations, or text outside the delta format.
 
 Current chat profile for context (do not reproduce it):
 %s
@@ -886,7 +889,12 @@ Recent messages from %s:
 
 		delta, accepted, retryable, reason := facts.EvaluateDelta(raw)
 		if accepted {
-			merged := facts.ApplyDelta(facts.ParseDossier(currentFacts), delta)
+			current := facts.ParseDossier(currentFacts)
+			delta = facts.FilterDeltaForDossier(current, delta)
+			if delta == nil || len(delta.Identity)+len(delta.Interests)+len(delta.Relationships) == 0 {
+				return currentFacts
+			}
+			merged := facts.ApplyDelta(current, delta)
 			candidate := facts.RenderDossier(merged)
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {

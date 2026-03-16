@@ -78,7 +78,7 @@ func init() {
 	// Initialize all regexp patterns
 	techExp = regexp.MustCompile(`(?i)^\!ттх$`)
 	questionExp = regexp.MustCompile(`(?i)^.*(gooby|губи|губ(я)+н)[\s\S]*\?$`)
-	commandExp = regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н),\s*([\s\S]*)$`)
+	commandExp = regexp.MustCompile(`(?i)^(gooby|губи|губ(я)+н)(?:,\s*|\s+)([\s\S]*)$`)
 	dotkaExp = regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
 	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	replyCmdExp = regexp.MustCompile(`^!reply\s+(-?\d+)(?:\s+(.+))?$`)

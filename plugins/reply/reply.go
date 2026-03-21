@@ -936,10 +936,12 @@ var askChatGpt = func(message *telebot.Message) string {
 	toolRegistry := chattools.NewRegistry(
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
+		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
 	)
 	toolSystemMessage := strings.Join([]string{
 		"You can call tools when they are needed.",
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
+		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
 	}, " ")

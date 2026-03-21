@@ -622,6 +622,9 @@ func TestBuildPersonFactsContext_UsesHistoryUsersAndAsker(t *testing.T) {
 	if !strings.Contains(prefill, "alice: likes Go") || !strings.Contains(prefill, "bob: likes Rust") {
 		t.Fatalf("expected person facts in prefill, got: %s", prefill)
 	}
+	if !strings.Contains(prefill, "{{user}} (bob): question") {
+		t.Fatalf("expected current question in prefill, got: %s", prefill)
+	}
 }
 
 func TestBuildPersonFactsContext_IncludesMentionedUserFromSameChatOnly(t *testing.T) {

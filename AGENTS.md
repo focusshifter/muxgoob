@@ -1,6 +1,6 @@
 # Muxgoob Agent Guide
 
-Muxgoob is a Go 1.19 Telegram bot built on Telebot, with a plugin-first architecture, SQLite as the primary datastore, and a small layer of legacy StormDB support that still matters in a few paths.
+Muxgoob is a Go 1.24 Telegram bot built on Telebot, with a plugin-first architecture, SQLite as the primary datastore, and a small layer of legacy StormDB support that still matters in a few paths.
 
 ## At a Glance
 

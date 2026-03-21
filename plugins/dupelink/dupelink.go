@@ -82,7 +82,7 @@ func getURLs(message *telebot.Message) []string {
 // Handles special cases like YouTube URLs with different formats
 func normalizeURL(parsedURL *url.URL) string {
 	hostname := parsedURL.Hostname()
-	
+
 	// Normalize YouTube URLs
 	if isYouTubeDomain(hostname) {
 		videoID := extractYouTubeVideoID(parsedURL)
@@ -91,7 +91,7 @@ func normalizeURL(parsedURL *url.URL) string {
 			return "youtube.com/watch?v=" + videoID
 		}
 	}
-	
+
 	// Default: hostname + request URI
 	return hostname + parsedURL.RequestURI()
 }
@@ -108,7 +108,7 @@ func isYouTubeDomain(hostname string) bool {
 // extractYouTubeVideoID extracts the video ID from various YouTube URL formats
 func extractYouTubeVideoID(parsedURL *url.URL) string {
 	hostname := strings.ToLower(parsedURL.Hostname())
-	
+
 	// Handle youtu.be/VIDEO_ID format
 	if hostname == "youtu.be" {
 		path := strings.TrimPrefix(parsedURL.Path, "/")
@@ -120,7 +120,7 @@ func extractYouTubeVideoID(parsedURL *url.URL) string {
 			return path
 		}
 	}
-	
+
 	// Handle youtube.com/watch?v=VIDEO_ID format
 	if hostname == "youtube.com" || hostname == "www.youtube.com" || hostname == "m.youtube.com" {
 		videoID := parsedURL.Query().Get("v")
@@ -136,7 +136,7 @@ func extractYouTubeVideoID(parsedURL *url.URL) string {
 			return strings.TrimPrefix(path, "v/")
 		}
 	}
-	
+
 	return ""
 }
 

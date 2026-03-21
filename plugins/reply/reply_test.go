@@ -612,9 +612,12 @@ func TestBuildPersonFactsContext_UsesHistoryUsersAndAsker(t *testing.T) {
 		t.Fatalf("did not expect bot facts in context, got: %s", context)
 	}
 
-	prefill := buildNoAssPrefill(history, "question", "system prompt", context, 99, currentMessage, nil)
+	prefill := buildNoAssPrefill(history, "question", "system prompt", context, 99, currentMessage, []string{"alice", "bob"})
 	if !strings.Contains(prefill, "Chat member profiles:") {
 		t.Fatalf("expected profiles section in prefill, got: %s", prefill)
+	}
+	if !strings.Contains(prefill, "Chat members: alice, bob") {
+		t.Fatalf("expected members section in prefill, got: %s", prefill)
 	}
 	if !strings.Contains(prefill, "alice: likes Go") || !strings.Contains(prefill, "bob: likes Rust") {
 		t.Fatalf("expected person facts in prefill, got: %s", prefill)

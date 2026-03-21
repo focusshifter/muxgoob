@@ -19,6 +19,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
+	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
 )
@@ -864,6 +865,25 @@ func truncateText(text string, maxChars int) string {
 	return text[:maxChars] + "…"
 }
 
+func fetchPrefillMembers(chatID int64) []string {
+	tool := chattools.NewFetchUsersTool(sqliteDb, chatID)
+	result, err := tool.Execute(context.Background(), `{"limit":50}`)
+	if err != nil {
+		log.Printf("[reply] Error fetching prefill members: %v", err)
+		return nil
+	}
+
+	var payload struct {
+		Users []string `json:"users"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		log.Printf("[reply] Error decoding prefill members: %v", err)
+		return nil
+	}
+
+	return payload.Users
+}
+
 // askChatGpt is a variable function that can be replaced in tests
 var askChatGpt = func(message *telebot.Message) string {
 	// Safety check for test environment
@@ -913,22 +933,27 @@ var askChatGpt = func(message *telebot.Message) string {
 		return ""
 	}
 
+	toolRegistry := chattools.NewRegistry(
+		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
+		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
+	)
+	toolSystemMessage := strings.Join([]string{
+		"You can call tools when they are needed.",
+		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
+		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",
+		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
+	}, " ")
+
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 
-	log.Printf("ChatGPT request: model %v", model)
-	log.Printf("ChatGPT request: chat_id %v", message.Chat.ID)
-	log.Printf("ChatGPT request: system %v", systemMessage)
-	log.Printf("ChatGPT request: user %v", userMessage)
+	log.Printf("[reply] ChatGPT request model=%s chat_id=%d question_len=%d tools=%d", model, message.Chat.ID, len(question), len(toolRegistry.Definitions()))
 
 	botID := 0
 	if registry.Bot != nil && registry.Bot.Bot != nil {
 		botID = registry.Bot.Bot.Me.ID
 	}
 
-	var members []string
-	if message.Chat != nil {
-		members = retrieveChatMembers(message.Chat.ID, 50)
-	}
+	members := fetchPrefillMembers(message.Chat.ID)
 
 	if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference
@@ -940,29 +965,35 @@ var askChatGpt = func(message *telebot.Message) string {
 			personFacts := buildPersonFactsContext(message.Chat.ID, historyMessages, message, botID)
 			userMessage = buildNoAssPrefill(historyMessages, userMessage, systemMessage, personFacts, botID, message, members)
 
-			log.Printf("[reply] ChatGPT request: noass prefill %v", userMessage)
 		}
 	} else {
 		personFacts := buildPersonFactsContext(message.Chat.ID, nil, message, botID)
 		userMessage = buildNoAssPrefill(nil, question, systemMessage, personFacts, botID, message, members)
 	}
 
-	resp, err := client.CreateChatCompletion(
+	resp, err := chattools.RunLoop(
 		context.Background(),
+		client,
 		openai.ChatCompletionRequest{
 			Model:            model,
 			Temperature:      0.3,
 			TopP:             1.0,
 			FrequencyPenalty: 0.2,
 			PresencePenalty:  0.1,
-
+			Tools:            toolRegistry.Definitions(),
 			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: toolSystemMessage,
+				},
 				{
 					Role:    openai.ChatMessageRoleUser,
 					Content: userMessage,
 				},
 			},
 		},
+		toolRegistry,
+		5,
 	)
 
 	if err != nil {
@@ -970,5 +1001,5 @@ var askChatGpt = func(message *telebot.Message) string {
 		return ""
 	}
 
-	return resp.Choices[0].Message.Content
+	return resp
 }

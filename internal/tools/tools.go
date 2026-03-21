@@ -59,18 +59,26 @@ func (r *Registry) Definitions() []openai.Tool {
 
 func (r *Registry) Execute(ctx context.Context, toolCall openai.ToolCall) string {
 	if r == nil {
-		return toolError(toolCall.Function.Name, "tool registry is nil")
+		result := toolError(toolCall.Function.Name, "tool registry is nil")
+		log.Printf("[tools] %s failed %s", toolCall.Function.Name, summarizeToolResult(result))
+		return result
 	}
 
 	tool, ok := r.tools[toolCall.Function.Name]
 	if !ok {
-		return toolError(toolCall.Function.Name, "unknown tool")
+		result := toolError(toolCall.Function.Name, "unknown tool")
+		log.Printf("[tools] %s failed %s", toolCall.Function.Name, summarizeToolResult(result))
+		return result
 	}
 
 	result, err := tool.Execute(ctx, toolCall.Function.Arguments)
 	if err != nil {
-		return toolError(toolCall.Function.Name, err.Error())
+		toolResult := toolError(toolCall.Function.Name, err.Error())
+		log.Printf("[tools] %s failed %s", toolCall.Function.Name, summarizeToolResult(toolResult))
+		return toolResult
 	}
+
+	log.Printf("[tools] %s returned %s", toolCall.Function.Name, summarizeToolResult(result))
 
 	return result
 }
@@ -102,6 +110,11 @@ func RunLoop(
 
 		choice := resp.Choices[0]
 		if choice.FinishReason != openai.FinishReasonToolCalls {
+			if choice.Message.Content == "" {
+				log.Printf("[tools] completion finished reason=%s with empty content", choice.FinishReason)
+			} else {
+				log.Printf("[tools] completion finished reason=%s content_len=%d", choice.FinishReason, len(choice.Message.Content))
+			}
 			return choice.Message.Content, nil
 		}
 

@@ -43,7 +43,7 @@ func (t *GetUserFactsTool) Definition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name:        "getUserFacts",
-			Description: "Get chat-scoped facts for one or more users in this Telegram chat. Pass usernames or display names from this chat.",
+			Description: "Get chat-scoped facts for one or more users in this Telegram chat. Pass @usernames, usernames, or display names from this chat.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -52,7 +52,7 @@ func (t *GetUserFactsTool) Definition() openai.Tool {
 						"items": map[string]any{
 							"type": "string",
 						},
-						"description": "Usernames or display names to look up in this chat. You can request multiple users in one call.",
+						"description": "@usernames, usernames, or display names to look up in this chat. You can request multiple users in one call.",
 					},
 				},
 				"required": []string{"users"},

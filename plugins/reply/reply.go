@@ -245,14 +245,14 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			}
 		}
 
-		bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown})
+		sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
 	case commandExp.MatchString(message.Text):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
 		if replyText != "" {
-			bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown})
+			sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 		}
 
 	case dotkaExp.MatchString(message.Text):
@@ -278,8 +278,41 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			replyText := p.chatClient.Ask(message)
 
 			if replyText != "" {
-				bot.Send(message.Chat, replyText, &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown})
+				sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 			}
+		}
+	}
+}
+
+func sendReplyWithLog(bot *registry.BotWrapper, chat *telebot.Chat, text string, opts *telebot.SendOptions) {
+	if bot == nil || chat == nil {
+		log.Printf("[reply] Cannot send reply: bot or chat is nil")
+		return
+	}
+
+	_, err := bot.Send(chat, text, opts)
+	if err == nil {
+		log.Printf("[reply] Sent reply len=%d", len(text))
+		return
+	}
+
+	preview := strings.TrimSpace(text)
+	if len(preview) > 160 {
+		preview = preview[:160] + "..."
+	}
+	parseMode := telebot.ParseMode("")
+	if opts != nil {
+		parseMode = opts.ParseMode
+	}
+	log.Printf("[reply] Error sending reply parse_mode=%q len=%d preview=%q err=%v", parseMode, len(text), preview, err)
+
+	if opts != nil && opts.ParseMode != "" {
+		fallbackOpts := *opts
+		fallbackOpts.ParseMode = ""
+		if _, fallbackErr := bot.Send(chat, text, &fallbackOpts); fallbackErr != nil {
+			log.Printf("[reply] Fallback send without parse mode failed: %v", fallbackErr)
+		} else {
+			log.Printf("[reply] Fallback send without parse mode succeeded len=%d", len(text))
 		}
 	}
 }
@@ -940,8 +973,12 @@ var askChatGpt = func(message *telebot.Message) string {
 	)
 	toolSystemMessage := strings.Join([]string{
 		"You can call tools when they are needed.",
+		"Avoid markdown. If formatting is needed, use Telegram markdown only.",
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
+		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
+		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
+		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
 		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
 	}, " ")

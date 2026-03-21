@@ -97,6 +97,13 @@ Also run these when relevant:
 
 - When creating a new release tag, increment the patch version by default unless explicitly asked to bump minor or major.
 
+## Release Process
+
+- For normal releases, commit the intended changes first, then push `master`, then create and push the tag.
+- Use release tags for version bumps; do not retag or move existing tags.
+- When deploying manually, build the appropriate linux/amd64 binary first, then copy it to the target host, install it in the app directory, and restart the running process.
+- For long-running rebuilds or maintenance jobs, launch them in the background and write logs to a named file so progress can be monitored.
+
 ## Change Checklist
 
 Before wrapping up, verify the following:

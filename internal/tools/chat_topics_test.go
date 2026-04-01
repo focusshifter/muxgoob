@@ -100,6 +100,47 @@ func TestForgetTopicToolRemovesMatchedBullet(t *testing.T) {
 	}
 }
 
+func TestForgetTopicToolRemovesMatchedReplyStyleBullet(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	insertPrompt(t, db, 100, 1, facts.RenderChatPrompt(&facts.ChatPrompt{
+		ReplyStyle:    []string{"Deploy the established lexicon (эхочемберы, рейды)"},
+		StableContext: []string{"slay the spire 2"},
+	}))
+
+	tool := NewForgetTopicTool(db, 100)
+	tool.matcher = func(ctx context.Context, chatID int64, bullets []string, topic string) ([]string, error) {
+		return []string{"Deploy the established lexicon (эхочемберы, рейды)"}, nil
+	}
+
+	result, err := tool.Execute(context.Background(), `{"topic":"эхочембер"}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	var payload chatTopicResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if !payload.Changed {
+		t.Fatalf("expected changed payload, got %+v", payload)
+	}
+	if len(payload.Removed) != 1 || payload.Removed[0] != "Deploy the established lexicon (эхочемберы, рейды)" {
+		t.Fatalf("unexpected removed payload: %+v", payload)
+	}
+	currentPrompt, _, err := getLatestChatPrompt(db, 100)
+	if err != nil {
+		t.Fatalf("failed to load saved prompt: %v", err)
+	}
+	parsed := facts.ParseChatPrompt(currentPrompt)
+	if len(parsed.ReplyStyle) != 0 {
+		t.Fatalf("expected reply style bullet removed, got %+v", parsed.ReplyStyle)
+	}
+}
+
 func TestForgetTopicToolNoopWhenMatcherFindsNothing(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()

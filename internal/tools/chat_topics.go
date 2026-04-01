@@ -25,7 +25,7 @@ type ForgetTopicTool struct {
 	matcher topicMatcher
 }
 
-type topicMatcher func(ctx context.Context, chatID int64, stableContext []string, topic string) ([]string, error)
+type topicMatcher func(ctx context.Context, chatID int64, bullets []string, topic string) ([]string, error)
 
 var defaultTopicMatcher topicMatcher = aiTopicMatcher
 
@@ -80,13 +80,13 @@ func (t *ForgetTopicTool) Definition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name:        "forgetTopic",
-			Description: "Remove a remembered chat topic or stable-context bullet when the user explicitly asks the bot to forget it.",
+			Description: "Remove remembered chat-topic lines from the chat prompt when the user explicitly asks the bot to forget them.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"topic": map[string]any{
 						"type":        "string",
-						"description": "The topic to forget. The tool will match it against the current stable-context bullets and remove the relevant line or lines.",
+						"description": "The topic to forget. The tool will match it against the current chat-prompt bullets and remove the relevant line or lines.",
 					},
 				},
 				"required": []string{"topic"},
@@ -165,15 +165,16 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 	}
 
 	parsed := facts.ParseChatPrompt(currentPrompt)
-	if len(parsed.StableContext) == 0 {
-		return marshalJSON(chatTopicResult{Action: "forget", Topic: topic, Changed: false, StableContext: nil}), nil
+	allBullets := promptBullets(parsed)
+	if len(allBullets) == 0 {
+		return marshalJSON(chatTopicResult{Action: "forget", Topic: topic, Changed: false, StableContext: parsed.StableContext}), nil
 	}
 
 	matcher := t.matcher
 	if matcher == nil {
 		matcher = defaultTopicMatcher
 	}
-	toRemove, err := matcher(ctx, t.chatID, parsed.StableContext, topic)
+	toRemove, err := matcher(ctx, t.chatID, allBullets, topic)
 	if err != nil {
 		return "", err
 	}
@@ -190,21 +191,15 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 		return marshalJSON(chatTopicResult{Action: "forget", Topic: topic, Changed: false, StableContext: parsed.StableContext}), nil
 	}
 
-	remaining := make([]string, 0, len(parsed.StableContext))
-	removed := make([]string, 0, len(parsed.StableContext))
-	for _, item := range parsed.StableContext {
-		if _, ok := removeSet[normalizeSearchText(item)]; ok {
-			removed = append(removed, item)
-			continue
-		}
-		remaining = append(remaining, item)
-	}
+	var removed []string
+	parsed.ReplyStyle, removed = filterPromptSection(parsed.ReplyStyle, removeSet)
+	parsed.StableContext, removed = filterPromptSection(parsed.StableContext, removeSet, removed...)
+	parsed.Avoid, removed = filterPromptSection(parsed.Avoid, removeSet, removed...)
 
 	if len(removed) == 0 {
 		return marshalJSON(chatTopicResult{Action: "forget", Topic: topic, Changed: false, StableContext: parsed.StableContext}), nil
 	}
 
-	parsed.StableContext = remaining
 	updatedPrompt := facts.RenderChatPrompt(parsed)
 	version, err := saveChatPrompt(t.db, t.chatID, updatedPrompt)
 	if err != nil {
@@ -216,9 +211,33 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 		Topic:         topic,
 		Changed:       true,
 		Removed:       removed,
-		StableContext: remaining,
+		StableContext: parsed.StableContext,
 		Version:       version,
 	}), nil
+}
+
+func promptBullets(prompt *facts.ChatPrompt) []string {
+	if prompt == nil {
+		return nil
+	}
+	b := make([]string, 0, len(prompt.ReplyStyle)+len(prompt.StableContext)+len(prompt.Avoid))
+	b = append(b, prompt.ReplyStyle...)
+	b = append(b, prompt.StableContext...)
+	b = append(b, prompt.Avoid...)
+	return b
+}
+
+func filterPromptSection(items []string, removeSet map[string]struct{}, removed ...string) ([]string, []string) {
+	remaining := make([]string, 0, len(items))
+	resultRemoved := append([]string(nil), removed...)
+	for _, item := range items {
+		if _, ok := removeSet[normalizeSearchText(item)]; ok {
+			resultRemoved = append(resultRemoved, item)
+			continue
+		}
+		remaining = append(remaining, item)
+	}
+	return remaining, resultRemoved
 }
 
 func sanitizeStableContextTopic(topic string) string {
@@ -259,13 +278,13 @@ func saveChatPrompt(db *sql.DB, chatID int64, prompt string) (int, error) {
 	return nextVersion, nil
 }
 
-func aiTopicMatcher(ctx context.Context, chatID int64, stableContext []string, topic string) ([]string, error) {
+func aiTopicMatcher(ctx context.Context, chatID int64, bullets []string, topic string) ([]string, error) {
 	client, model := buildLightweightClient(chatID)
 	if client == nil {
 		return nil, fmt.Errorf("lightweight client is not configured")
 	}
 
-	b, err := json.Marshal(stableContext)
+	b, err := json.Marshal(bullets)
 	if err != nil {
 		return nil, fmt.Errorf("encoding stable context: %w", err)
 	}
@@ -273,8 +292,8 @@ func aiTopicMatcher(ctx context.Context, chatID int64, stableContext []string, t
 	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleSystem, Content: "You match a forget request to exact stable-context bullets. Return JSON only: {\"remove\":[\"exact bullet\"]}. Remove only bullets that clearly match the topic. If nothing matches, return {\"remove\":[]}."},
-			{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("Topic to forget: %s\nStable context bullets JSON: %s", topic, string(b))},
+			{Role: openai.ChatMessageRoleSystem, Content: "You match a forget request to exact chat-prompt bullets. Return JSON only: {\"remove\":[\"exact bullet\"]}. Remove only bullets that clearly match the topic. If nothing matches, return {\"remove\":[]}."},
+			{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("Topic to forget: %s\nChat prompt bullets JSON: %s", topic, string(b))},
 		},
 	})
 	if err != nil {

@@ -47,11 +47,11 @@ func TestSanitizeChatDeltaRemovesArrowLeakage(t *testing.T) {
 func TestEnforceChatPromptBudgets(t *testing.T) {
 	prompt := &ChatPrompt{
 		ReplyStyle:    []string{"1", "2", "3", "4", "5", "6"},
-		StableContext: []string{"1", "2", "3", "4", "5", "6", "7"},
+		StableContext: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16"},
 		Avoid:         []string{"1", "2", "3", "4", "5"},
 	}
 	limited := EnforceChatPromptBudgets(prompt)
-	if len(limited.ReplyStyle) != 5 || len(limited.StableContext) != 6 || len(limited.Avoid) != 4 {
+	if len(limited.ReplyStyle) != 5 || len(limited.StableContext) != 15 || len(limited.Avoid) != 4 {
 		t.Fatalf("unexpected prompt budgets: %#v", limited)
 	}
 }

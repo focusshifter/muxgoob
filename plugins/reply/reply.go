@@ -970,6 +970,8 @@ var askChatGpt = func(message *telebot.Message) string {
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
 		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
+		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
+		chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
 	)
 	toolSystemMessage := strings.Join([]string{
 		"You can call tools when they are needed.",
@@ -977,6 +979,8 @@ var askChatGpt = func(message *telebot.Message) string {
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
+		"Use rememberTopic when the user directly asks you to remember or keep some durable chat lore, topic, preference, or instruction for later.",
+		"Use forgetTopic when the user directly asks you to forget, remove, or stop remembering a durable chat topic or lore item.",
 		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
 		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
 		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",

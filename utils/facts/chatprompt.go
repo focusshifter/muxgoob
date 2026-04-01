@@ -19,7 +19,7 @@ type ChatDelta struct {
 
 const (
 	maxReplyStyleBullets    = 5
-	maxStableContextBullets = 6
+	maxStableContextBullets = 15
 	maxAvoidBullets         = 4
 )
 

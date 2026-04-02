@@ -79,7 +79,7 @@ func fetchPerplexityGrounding(artist, title, year string) string {
 	config.BaseURL = "https://openrouter.ai/api/v1"
 	client := openai.NewClientWithConfig(config)
 
-	query := fmt.Sprintf("Give me short summary of reviews for %s - %s (%s)", artist, title, year)
+	query := fmt.Sprintf("Give me a short consensus summary of reviews for %s - %s (%s). Include what critics and listeners most often praise, what they most often criticize, and any notable split in opinion. Keep it concise and factual.", artist, title, year)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -105,7 +105,7 @@ func buildSpotifyReviewPrompt(typ, artist, title, year, grounding string) string
 	base := registry.Config.SpotifyReviewPrompt
 	if strings.TrimSpace(base) == "" {
 		// Default prompt for fallback if not configured
-		base = "Write rude and sarcastic review about the {type} \"{title}\" ({year}) by {artist} IN RUSSIAN. No Markdown, use plain text ONLY, without '*', '«', '»' or '—'. Use the facts below for context without quoting them:\n\n{grounding}"
+		base = "Write a witty review in RUSSIAN about the {type} \"{title}\" ({year}) by {artist}. Semi-follow the overall consensus from the facts below: if reception is mixed, sound mixed; if it is positive or negative, lean that way without becoming bland. Do not be automatically harsh. Be sharp, observant, and occasionally funny, but avoid repetitive insults and generic takedowns. Mention both what works and what does not, focusing on concrete musical qualities such as songwriting, pacing, arrangements, melodies, atmosphere, or structure. Do not quote or cite the facts verbatim. No Markdown, use plain text ONLY, without '*', '«', '»' or '—'.\n\n{grounding}"
 	}
 
 	repl := func(s, k, v string) string { return strings.ReplaceAll(s, k, v) }

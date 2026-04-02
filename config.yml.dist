@@ -49,6 +49,10 @@ spotify:
 # https://api.telegra.ph/createAccount?short_name=foo&author_name=bar
 spotify_review_prompt: |
     Supports templating! See plugins/spotify/review.go
-    {type} {artist} {title} {year}
+    Write a witty review in RUSSIAN about the {type} "{title}" ({year}) by {artist}.
+    Semi-follow the overall consensus from the facts below instead of being automatically harsh.
+    Mention both what works and what does not, using concrete musical observations.
+    No Markdown, plain text only.
+
     {grounding}
 spotify_review_microblog_auth:

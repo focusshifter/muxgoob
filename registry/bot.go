@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 
 	"github.com/focusshifter/muxgoob/database"
@@ -18,8 +19,29 @@ type BotWrapper struct {
 	NotifyFunc func(to telebot.Recipient, action telebot.ChatAction) error
 }
 
-// Send sends a message and saves it to the database
+const telegramMessageChunkSize = 4000
+
+// Send sends a message and saves it to the database.
+// String payloads longer than Telegram's limit are split into multiple messages.
 func (b *BotWrapper) Send(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error) {
+	chunks := splitOutgoingMessage(what)
+	if len(chunks) == 0 {
+		chunks = []interface{}{what}
+	}
+
+	var lastMsg *telebot.Message
+	for _, chunk := range chunks {
+		msg, err := b.sendSingle(to, chunk, options...)
+		if err != nil {
+			return msg, err
+		}
+		lastMsg = msg
+	}
+
+	return lastMsg, nil
+}
+
+func (b *BotWrapper) sendSingle(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error) {
 	// If we have a custom SendFunc (for testing), use it
 	if b.SendFunc != nil {
 		return b.SendFunc(to, what, options...)
@@ -95,21 +117,84 @@ func (b *BotWrapper) Send(to telebot.Recipient, what interface{}, options ...int
 	return msg, err
 }
 
+func splitOutgoingMessage(what interface{}) []interface{} {
+	text, ok := what.(string)
+	if !ok {
+		return []interface{}{what}
+	}
+
+	chunks := splitMessage(text, telegramMessageChunkSize)
+	result := make([]interface{}, 0, len(chunks))
+	for _, chunk := range chunks {
+		result = append(result, chunk)
+	}
+	return result
+}
+
+func splitMessage(text string, limit int) []string {
+	if text == "" {
+		return []string{""}
+	}
+
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+
+	var chunks []string
+	for len(runes) > limit {
+		splitAt := limit
+		for i := limit; i > limit-200 && i > 0; i-- {
+			if runes[i-1] == '\n' || runes[i-1] == ' ' {
+				splitAt = i
+				break
+			}
+		}
+
+		chunks = append(chunks, string(runes[:splitAt]))
+		runes = runes[splitAt:]
+	}
+
+	if len(runes) > 0 {
+		chunks = append(chunks, string(runes))
+	}
+
+	return chunks
+}
+
 // Helper functions copied from main.go
-// Reply sends a reply to a message and saves it to the database
+// Reply sends a reply to a message and saves it to the database.
+// String payloads are split through Send so long replies also respect Telegram limits.
 func (b *BotWrapper) Reply(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error) {
 	// If we have a custom ReplyFunc (for testing), use it
 	if b.ReplyFunc != nil {
 		return b.ReplyFunc(message, what, options...)
 	}
 
-	// Otherwise use the real bot
-	if b.Bot != nil {
-		return b.Bot.Reply(message, what, options...)
+	if message == nil || message.Chat == nil {
+		return nil, errors.New("reply message and chat are required")
 	}
 
-	// If no bot is available, return a dummy message
-	return &telebot.Message{}, nil
+	forwardedOptions := make([]interface{}, len(options))
+	copy(forwardedOptions, options)
+
+	hasSendOptions := false
+	for i, option := range forwardedOptions {
+		if opt, ok := option.(*telebot.SendOptions); ok && opt != nil {
+			copied := *opt
+			if copied.ReplyTo == nil {
+				copied.ReplyTo = message
+			}
+			forwardedOptions[i] = &copied
+			hasSendOptions = true
+		}
+	}
+
+	if !hasSendOptions {
+		forwardedOptions = append(forwardedOptions, &telebot.SendOptions{ReplyTo: message})
+	}
+
+	return b.Send(message.Chat, what, forwardedOptions...)
 }
 
 func getMessageID(msg *telebot.Message) interface{} {

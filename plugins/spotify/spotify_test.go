@@ -1,6 +1,14 @@
 package spotify
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -298,5 +306,163 @@ func TestSpotifyPlugin_TokenManagement(t *testing.T) {
 	// Token should be considered expired
 	if time.Now().Before(plugin.tokenExpiry) {
 		t.Error("Token should be expired")
+	}
+}
+
+func TestSpotifyPlugin_FetchAlbum_RetriesAfterUnauthorized(t *testing.T) {
+	var tokenRequests atomic.Int32
+	var albumRequests atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token":
+			requestNo := tokenRequests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"access_token":"token-%d","expires_in":3600}`, requestNo)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/albums/test-album":
+			requestNo := albumRequests.Add(1)
+			auth := r.Header.Get("Authorization")
+			if requestNo == 1 {
+				if auth != "Bearer token-1" {
+					t.Fatalf("expected first album request to use token-1, got %q", auth)
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"status":401,"message":"The access token expired"}}`))
+				return
+			}
+			if auth != "Bearer token-2" {
+				t.Fatalf("expected retry album request to use token-2, got %q", auth)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(SpotifyAlbum{Name: "Recovered Album"})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	oldAuthURL := SpotifyAuthURL
+	oldAPIBaseURL := SpotifyAPIBaseURL
+	SpotifyAuthURL = server.URL + "/api/token"
+	SpotifyAPIBaseURL = server.URL + "/v1"
+	defer func() {
+		SpotifyAuthURL = oldAuthURL
+		SpotifyAPIBaseURL = oldAPIBaseURL
+	}()
+
+	registry.Config = registry.Configuration{
+		SpotifyConfig: registry.SpotifyConfig{
+			ClientID:     "test_client_id",
+			ClientSecret: "test_client_secret",
+		},
+	}
+
+	plugin := &SpotifyPlugin{}
+	if err := plugin.EnsureAccessToken(); err != nil {
+		t.Fatalf("EnsureAccessToken failed: %v", err)
+	}
+
+	album, err := plugin.FetchAlbum("test-album")
+	if err != nil {
+		t.Fatalf("FetchAlbum should retry on 401 and succeed, got error: %v", err)
+	}
+	if album == nil || album.Name != "Recovered Album" {
+		t.Fatalf("expected recovered album payload, got %#v", album)
+	}
+	if got := tokenRequests.Load(); got != 2 {
+		t.Fatalf("expected 2 token requests after 401 refresh, got %d", got)
+	}
+	if got := albumRequests.Load(); got != 2 {
+		t.Fatalf("expected 2 album requests after retry, got %d", got)
+	}
+	if plugin.accessToken != "token-2" {
+		t.Fatalf("expected plugin to store refreshed token, got %q", plugin.accessToken)
+	}
+}
+
+func TestSpotifyPlugin_EnsureAccessToken_SerializesConcurrentRefresh(t *testing.T) {
+	var tokenRequests atomic.Int32
+	var gate sync.WaitGroup
+	gate.Add(1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/token" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		tokenRequests.Add(1)
+		gate.Wait()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"shared-token","expires_in":3600}`))
+	}))
+	defer server.Close()
+
+	oldAuthURL := SpotifyAuthURL
+	SpotifyAuthURL = server.URL + "/api/token"
+	defer func() { SpotifyAuthURL = oldAuthURL }()
+
+	registry.Config = registry.Configuration{
+		SpotifyConfig: registry.SpotifyConfig{
+			ClientID:     "test_client_id",
+			ClientSecret: "test_client_secret",
+		},
+	}
+
+	plugin := &SpotifyPlugin{}
+	plugin.tokenExpiry = time.Now().Add(-time.Hour)
+
+	errCh := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			errCh <- plugin.EnsureAccessToken()
+		}()
+	}
+
+	deadline := time.After(2 * time.Second)
+	for tokenRequests.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for token request")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	gate.Done()
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("EnsureAccessToken returned error: %v", err)
+		}
+	}
+
+	if got := tokenRequests.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 token request for concurrent refresh, got %d", got)
+	}
+	if plugin.accessToken != "shared-token" {
+		t.Fatalf("expected shared token to be stored, got %q", plugin.accessToken)
+	}
+}
+
+func TestSpotifyPlugin_BuildAuthRequestUsesEncodedClientCredentials(t *testing.T) {
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	body := strings.NewReader(form.Encode())
+
+	registry.Config = registry.Configuration{
+		SpotifyConfig: registry.SpotifyConfig{
+			ClientID:     "test_client_id",
+			ClientSecret: "test_client_secret",
+		},
+	}
+
+	req, err := buildSpotifyAuthRequest(SpotifyAuthURL, body)
+	if err != nil {
+		t.Fatalf("buildSpotifyAuthRequest failed: %v", err)
+	}
+
+	if got := req.Header.Get("Authorization"); got == "" || !strings.HasPrefix(got, "Basic ") {
+		t.Fatalf("expected Basic authorization header, got %q", got)
+	}
+	if got := req.Header.Get("Content-Type"); got != "application/x-www-form-urlencoded" {
+		t.Fatalf("expected form content type, got %q", got)
 	}
 }

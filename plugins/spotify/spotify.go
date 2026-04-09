@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tucnak/telebot"
@@ -24,8 +25,11 @@ const (
 	SpotifyEnabledKey       = "enabled"
 	SpotifyReviewEnabledKey = "review_enabled"
 	SpotifyReviewModelKey   = "review_model"
-	SpotifyAuthURL          = "https://accounts.spotify.com/api/token"
-	SpotifyAPIBaseURL       = "https://api.spotify.com/v1"
+)
+
+var (
+	SpotifyAuthURL    = "https://accounts.spotify.com/api/token"
+	SpotifyAPIBaseURL = "https://api.spotify.com/v1"
 )
 
 type SpotifyPlugin struct {
@@ -33,6 +37,7 @@ type SpotifyPlugin struct {
 	trackRegex  *regexp.Regexp
 	accessToken string
 	tokenExpiry time.Time
+	mu          sync.RWMutex
 }
 
 type SpotifyAlbum struct {
@@ -312,27 +317,28 @@ func (p *SpotifyPlugin) processTrack(message *telebot.Message, trackID string) {
 }
 
 func (p *SpotifyPlugin) EnsureAccessToken() error {
-	// Check if token is still valid
+	p.mu.RLock()
+	if time.Now().Before(p.tokenExpiry) && p.accessToken != "" {
+		p.mu.RUnlock()
+		return nil
+	}
+	p.mu.RUnlock()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if time.Now().Before(p.tokenExpiry) && p.accessToken != "" {
 		return nil
 	}
 
-	// Get new access token
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
 
-	req, err := http.NewRequest("POST", SpotifyAuthURL, strings.NewReader(data.Encode()))
+	req, err := buildSpotifyAuthRequest(SpotifyAuthURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return err
 	}
 
-	// Set headers
-	auth := base64.StdEncoding.EncodeToString([]byte(
-		registry.Config.SpotifyConfig.ClientID + ":" + registry.Config.SpotifyConfig.ClientSecret))
-	req.Header.Set("Authorization", "Basic "+auth)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	// Make request
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -345,7 +351,6 @@ func (p *SpotifyPlugin) EnsureAccessToken() error {
 		return fmt.Errorf("authentication failed: %s - %s", resp.Status, string(body))
 	}
 
-	// Parse response
 	var tokenResp struct {
 		AccessToken string `json:"access_token"`
 		ExpiresIn   int    `json:"expires_in"`
@@ -354,6 +359,9 @@ func (p *SpotifyPlugin) EnsureAccessToken() error {
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
 		return err
 	}
+	if tokenResp.AccessToken == "" {
+		return fmt.Errorf("authentication failed: empty access token in response")
+	}
 
 	p.accessToken = tokenResp.AccessToken
 	p.tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn-60) * time.Second)
@@ -361,64 +369,135 @@ func (p *SpotifyPlugin) EnsureAccessToken() error {
 	return nil
 }
 
+func buildSpotifyAuthRequest(authURL string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequest("POST", authURL, body)
+	if err != nil {
+		return nil, err
+	}
+
+	auth := base64.StdEncoding.EncodeToString([]byte(
+		registry.Config.SpotifyConfig.ClientID + ":" + registry.Config.SpotifyConfig.ClientSecret))
+	req.Header.Set("Authorization", "Basic "+auth)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	return req, nil
+}
+
 func (p *SpotifyPlugin) FetchAlbum(albumID string) (*SpotifyAlbum, error) {
 	url := fmt.Sprintf("%s/albums/%s", SpotifyAPIBaseURL, albumID)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
+	album, statusCode, body, err := p.fetchAlbumWithToken(url)
+	if err == nil {
+		return album, nil
+	}
+	if statusCode == http.StatusUnauthorized {
+		p.invalidateAccessToken()
+		if tokenErr := p.EnsureAccessToken(); tokenErr != nil {
+			return nil, fmt.Errorf("API request failed: %s - %s; token refresh failed: %w", http.StatusText(statusCode), strings.TrimSpace(string(body)), tokenErr)
+		}
+		album, _, _, err = p.fetchAlbumWithToken(url)
+		if err == nil {
+			return album, nil
+		}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+p.accessToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API request failed: %s - %s", resp.Status, string(body))
-	}
-
-	var album SpotifyAlbum
-	if err := json.NewDecoder(resp.Body).Decode(&album); err != nil {
-		return nil, err
-	}
-
-	return &album, nil
+	return nil, err
 }
 
 func (p *SpotifyPlugin) FetchTrack(trackID string) (*SpotifyTrack, error) {
 	url := fmt.Sprintf("%s/tracks/%s", SpotifyAPIBaseURL, trackID)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
+	track, statusCode, body, err := p.fetchTrackWithToken(url)
+	if err == nil {
+		return track, nil
+	}
+	if statusCode == http.StatusUnauthorized {
+		p.invalidateAccessToken()
+		if tokenErr := p.EnsureAccessToken(); tokenErr != nil {
+			return nil, fmt.Errorf("API request failed: %s - %s; token refresh failed: %w", http.StatusText(statusCode), strings.TrimSpace(string(body)), tokenErr)
+		}
+		track, _, _, err = p.fetchTrackWithToken(url)
+		if err == nil {
+			return track, nil
+		}
 	}
 
-	req.Header.Set("Authorization", "Bearer "+p.accessToken)
+	return nil, err
+}
+
+func (p *SpotifyPlugin) fetchAlbumWithToken(requestURL string) (*SpotifyAlbum, int, []byte, error) {
+	req, err := http.NewRequest("GET", requestURL, nil)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.getAccessToken())
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API request failed: %s - %s", resp.Status, string(body))
+		return nil, resp.StatusCode, body, fmt.Errorf("API request failed: %s - %s", resp.Status, string(body))
+	}
+
+	var album SpotifyAlbum
+	if err := json.Unmarshal(body, &album); err != nil {
+		return nil, resp.StatusCode, body, err
+	}
+
+	return &album, resp.StatusCode, body, nil
+}
+
+func (p *SpotifyPlugin) fetchTrackWithToken(requestURL string) (*SpotifyTrack, int, []byte, error) {
+	req, err := http.NewRequest("GET", requestURL, nil)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+p.getAccessToken())
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode, body, fmt.Errorf("API request failed: %s - %s", resp.Status, string(body))
 	}
 
 	var track SpotifyTrack
-	if err := json.NewDecoder(resp.Body).Decode(&track); err != nil {
-		return nil, err
+	if err := json.Unmarshal(body, &track); err != nil {
+		return nil, resp.StatusCode, body, err
 	}
 
-	return &track, nil
+	return &track, resp.StatusCode, body, nil
+}
+
+func (p *SpotifyPlugin) getAccessToken() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.accessToken
+}
+
+func (p *SpotifyPlugin) invalidateAccessToken() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.accessToken = ""
+	p.tokenExpiry = time.Time{}
 }
 
 func (p *SpotifyPlugin) downloadImage(url string) ([]byte, error) {

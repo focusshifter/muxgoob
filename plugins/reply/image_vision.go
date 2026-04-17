@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	defaultImageAiModel      = "google/gemini-3.1-flash-lite-preview"
-	maxVisionImageDimension  = 768
-	defaultVisionMaxTokens   = 180
-	visionFallbackNoImageMsg = "Не вижу рядом картинки — реплайнись на неё или закинь ещё раз."
+	defaultImageAiModel         = "google/gemini-3.1-flash-lite-preview"
+	maxVisionImageDimension     = 768
+	defaultVisionMaxTokens      = 180
+	visionFallbackNoImageMsg    = "Не вижу рядом картинки — реплайнись на неё или закинь ещё раз."
+	imageInspectionContextIntro = "Контекст по картинке:"
 )
 
 var inspectRecentImageQuestion = func(message *telebot.Message, target *ResolvedImageTarget) (string, error) {
@@ -130,31 +131,39 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 	return answer, nil
 }
 
-func maybeAnswerImageQuestion(message *telebot.Message, question string) (string, bool) {
+func maybeBuildImageInspectionContext(message *telebot.Message, question string) (string, string, bool) {
+	question = strings.TrimSpace(question)
 	if !shouldForceInspectRecentImage(question) {
-		return "", false
+		return "", "", false
 	}
 
 	target, err := resolveImageTarget(sqliteDb, message)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	if target == nil {
-		return visionFallbackNoImageMsg, true
+		return "", visionFallbackNoImageMsg, true
 	}
 	if !shouldUseImageInspection(question, target) {
-		return "", false
+		return "", "", false
 	}
 
 	answer, err := inspectRecentImageQuestion(message, target)
 	if err != nil {
-		return visionFallbackNoImageMsg, true
+		return "", visionFallbackNoImageMsg, true
 	}
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		return visionFallbackNoImageMsg, true
+		return "", visionFallbackNoImageMsg, true
 	}
-	return answer, true
+
+	context := strings.TrimSpace(strings.Join([]string{
+		imageInspectionContextIntro,
+		"- Вопрос пользователя: " + question,
+		"- Краткое описание/разбор изображения: " + answer,
+		"Используй это только как входной факт-контекст про изображение. Сформулируй финальный ответ сам, в стиле gooby.",
+	}, "\n"))
+	return context, "", true
 }
 
 func preprocessVisionImage(srcPath string) (string, error) {

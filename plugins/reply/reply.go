@@ -131,8 +131,9 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	}
 
 	// Check for !reply command
-	if message.Text != "" {
-		if matches := replyCmdExp.FindStringSubmatch(message.Text); matches != nil {
+	messageText := messagePromptText(message)
+	if messageText != "" {
+		if matches := replyCmdExp.FindStringSubmatch(messageText); matches != nil {
 			// Only process private messages from the owner
 			if message.Chat.Type != telebot.ChatPrivate ||
 				message.Sender.Username != registry.Config.OwnerUsername {
@@ -227,12 +228,12 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	// Regex patterns are now initialized in the init() function
 
 	switch {
-	case techExp.MatchString(message.Text):
+	case techExp.MatchString(messageText):
 		bot.Send(message.Chat,
 			"ТТХ: "+registry.Config.ReplyTechLink,
 			&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
-	case questionExp.MatchString(message.Text):
+	case questionExp.MatchString(messageText):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 		if isActionOnlyReply(replyText) {
@@ -252,7 +253,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 		sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 
-	case commandExp.MatchString(message.Text):
+	case commandExp.MatchString(messageText):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
@@ -260,13 +261,13 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 		}
 
-	case dotkaExp.MatchString(message.Text):
+	case dotkaExp.MatchString(messageText):
 		// Use the injected random generator for consistent behavior in tests
 		if p.random.Intn(50) == 0 {
 			bot.Send(message.Chat, "Щяб в дотку!", &telebot.SendOptions{})
 		}
 
-	case majorExp.MatchString(message.Text):
+	case majorExp.MatchString(messageText):
 		// Use the injected random generator for consistent behavior in tests
 		if p.random.Intn(2) == 0 {
 			bot.Send(message.Chat, "Так точно!", &telebot.SendOptions{ReplyTo: message})
@@ -278,7 +279,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		// 	bot.Send(message.Chat, "herp derp", nil)
 
 	default:
-		if p.random.Intn(100) == 0 && len(message.Text) > 150 {
+		if p.random.Intn(100) == 0 && len(messageText) > 150 {
 			bot.Notify(message.Chat, telebot.Typing)
 			replyText := p.chatClient.Ask(message)
 
@@ -291,6 +292,17 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 func isActionOnlyReply(replyText string) bool {
 	return replyText == actionOnlyReplyToken
+}
+
+func messagePromptText(message *telebot.Message) string {
+	if message == nil {
+		return ""
+	}
+	text := strings.TrimSpace(message.Text)
+	if text != "" {
+		return text
+	}
+	return strings.TrimSpace(message.Caption)
 }
 
 var retrospectiveQuestionPatterns = []*regexp.Regexp{
@@ -962,9 +974,12 @@ var askChatGpt = func(message *telebot.Message) string {
 		return ""
 	}
 
-	question := message.Text
-	if answer, handled := maybeAnswerImageQuestion(message, question); handled {
-		return answer
+	question := messagePromptText(message)
+	if imageContext, imageFallback, handled := maybeBuildImageInspectionContext(message, question); handled {
+		if imageFallback != "" {
+			return imageFallback
+		}
+		question = strings.TrimSpace(strings.Join([]string{question, "", imageContext}, "\n"))
 	}
 
 	// No need to check if registry.Config is initialized as it's not a pointer type

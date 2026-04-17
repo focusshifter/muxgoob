@@ -63,23 +63,30 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 		return ""
 	}
 
+	text := strings.TrimSpace(message.Text)
+	if text == "" {
+		text = strings.TrimSpace(message.Caption)
+	}
+
 	// Handle specific test cases
-	if message.Text == "gooby, give me a mock response" {
+	if text == "gooby, give me a mock response" {
 		return "This is a mock ChatGPT response"
-	} else if message.Text == "gooby give me a mock response" {
+	} else if text == "gooby give me a mock response" {
 		return "This is a mock ChatGPT response"
-	} else if message.Text == "gooby,\n\ngive me a mock response" {
+	} else if text == "gooby,\n\ngive me a mock response" {
 		return "This is a mock ChatGPT response"
-	} else if message.Text == "gooby, are you sure?" {
+	} else if text == "gooby, are you sure?" {
 		return "Да"
-	} else if message.Text == "gooby, is this true?" {
+	} else if text == "gooby, is this true?" {
 		return "Нет"
-	} else if message.Text == "This is a reply to the bot" {
+	} else if text == "This is a reply to the bot" {
 		return "Mock reply to bot message"
-	} else if message.Text == "gooby, is this a test?" {
+	} else if text == "gooby, is this a test?" {
 		return "Да" // Return "Да" for this test case
-	} else if message.Text == "gooby, сделай опрос?" {
+	} else if text == "gooby, сделай опрос?" {
 		return actionOnlyReplyToken
+	} else if text == "губи, смотри, мем" {
+		return "This is a mock ChatGPT response"
 	}
 
 	return ""
@@ -230,6 +237,24 @@ func TestReplyPlugin_Process(t *testing.T) {
 			rngValue:      0,
 		},
 		{
+			name: "Command with caption mention",
+			message: &telebot.Message{
+				Caption: "губи, смотри, мем",
+				Photo: &telebot.Photo{
+					File: telebot.File{FileID: "photo-file-id"},
+				},
+				Sender: &telebot.User{
+					Username: "test_user",
+				},
+				Chat: &telebot.Chat{
+					ID: 123,
+				},
+			},
+			expectedCalls: true,
+			expectedReply: "This is a mock ChatGPT response",
+			rngValue:      0,
+		},
+		{
 			name: "Message with 'dota' - triggered",
 			message: &telebot.Message{
 				Text: "Let's play some dota!",
@@ -356,6 +381,7 @@ func TestReplyPlugin_Process(t *testing.T) {
 				tc.name == "Command with 'gooby,'" || // Direct command
 				tc.name == "Command with 'gooby' and space" || // Direct command with space
 				tc.name == "Command with 'gooby,' and line break" || // Command with line break
+				tc.name == "Command with caption mention" || // Caption-based direct command
 				tc.name == "Question with 'gooby' - Yes response" || tc.name == "Question with 'gooby' - No response" || tc.name == "Question with 'gooby' - action-only poll" // Questions
 
 			// Verify typing notification
@@ -935,7 +961,73 @@ func TestShouldUseImageInspection(t *testing.T) {
 	}
 }
 
-func TestAskChatGptUsesImageInspectionBeforeTextFlow(t *testing.T) {
+func TestMaybeBuildImageInspectionContextUsesCaption(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	chatID := int64(123)
+	photoMessage := telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "alice"}, Unixtime: 100}
+	photoData, err := json.Marshal(photoMessage)
+	if err != nil {
+		t.Fatalf("marshal photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, unixtime, data) VALUES (?, ?, ?, ?)`, 10, chatID, 100, string(photoData))
+	if err != nil {
+		t.Fatalf("insert photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO media_items (message_id, chat_id, type, file_id, width, height, file_size, data) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, 10, chatID, "photo", "file-reply", 1024, 768, 12345)
+	if err != nil {
+		t.Fatalf("insert photo item: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	originalInspect := inspectRecentImageQuestion
+	defer func() { inspectRecentImageQuestion = originalInspect }()
+	inspectRecentImageQuestion = func(message *telebot.Message, target *ResolvedImageTarget) (string, error) {
+		if strings.TrimSpace(message.Caption) != "губи, смотри, мем" {
+			t.Fatalf("expected caption to reach image inspection, got text=%q caption=%q", message.Text, message.Caption)
+		}
+		return "на картинке вежливый кот и подпись с просьбой поздороваться", nil
+	}
+
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Caption: "губи, смотри, мем", Photo: &telebot.Photo{File: telebot.File{FileID: "photo-file-id"}}}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Caption)
+	if !handled || fallback != "" {
+		t.Fatalf("maybeBuildImageInspectionContext returned handled=%v fallback=%q context=%q", handled, fallback, context)
+	}
+	if !strings.Contains(context, imageInspectionContextIntro) || !strings.Contains(context, "вежливый кот") {
+		t.Fatalf("expected structured image context, got %q", context)
+	}
+}
+
+func TestMaybeBuildImageInspectionContextUsesQuestionText(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -992,12 +1084,16 @@ func TestAskChatGptUsesImageInspectionBeforeTextFlow(t *testing.T) {
 	}
 
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?"}
-	if got := askChatGpt(message); got != "это мем про тесты" {
-		t.Fatalf("askChatGpt returned %q, want image inspection answer", got)
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if !handled || fallback != "" {
+		t.Fatalf("maybeBuildImageInspectionContext returned handled=%v fallback=%q context=%q", handled, fallback, context)
+	}
+	if !strings.Contains(context, "это мем про тесты") || !strings.Contains(context, message.Text) {
+		t.Fatalf("expected image context to include summary and original question, got %q", context)
 	}
 }
 
-func TestAskChatGptReturnsFallbackWhenImageQuestionHasNoTarget(t *testing.T) {
+func TestMaybeBuildImageInspectionContextReturnsFallbackWhenNoTarget(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1030,9 +1126,12 @@ func TestAskChatGptReturnsFallbackWhenImageQuestionHasNoTarget(t *testing.T) {
 	defer func() { sqliteDb = originalSQLiteDB }()
 
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?"}
-	got := askChatGpt(message)
-	if !strings.Contains(got, "Не вижу рядом картинки") {
-		t.Fatalf("expected no-image fallback, got %q", got)
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if !handled {
+		t.Fatal("expected image question to be handled")
+	}
+	if context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
+		t.Fatalf("expected no-image fallback, got context=%q fallback=%q", context, fallback)
 	}
 }
 

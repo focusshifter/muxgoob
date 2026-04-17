@@ -963,6 +963,9 @@ var askChatGpt = func(message *telebot.Message) string {
 	}
 
 	question := message.Text
+	if answer, handled := maybeAnswerImageQuestion(message, question); handled {
+		return answer
+	}
 
 	// No need to check if registry.Config is initialized as it's not a pointer type
 

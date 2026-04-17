@@ -727,6 +727,315 @@ func TestBuildPersonFactsContext_IncludesMentionedUserFromSameChatOnly(t *testin
 	}
 }
 
+func TestResolveImageTargetPrefersReplyPhoto(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	chatID := int64(123)
+	photoMessage := telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "alice"}, Unixtime: 100}
+	photoData, err := json.Marshal(photoMessage)
+	if err != nil {
+		t.Fatalf("marshal photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, unixtime, data) VALUES (?, ?, ?, ?)`, 10, chatID, 100, string(photoData))
+	if err != nil {
+		t.Fatalf("insert photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO media_items (message_id, chat_id, type, file_id, width, height, file_size, data) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, 10, chatID, "photo", "file-reply", 1024, 768, 12345)
+	if err != nil {
+		t.Fatalf("insert photo item: %v", err)
+	}
+
+	question := &telebot.Message{
+		ID:      11,
+		Chat:    &telebot.Chat{ID: chatID},
+		Sender:  &telebot.User{Username: "bob"},
+		Text:    "губи, что на картинке?",
+		ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}},
+	}
+
+	got, err := resolveImageTarget(mockDB, question)
+	if err != nil {
+		t.Fatalf("resolveImageTarget returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected image target, got nil")
+	}
+	if got.FileID != "file-reply" || got.MessageID != 10 || got.Source != imageSourceReply {
+		t.Fatalf("unexpected target: %+v", got)
+	}
+}
+
+func TestResolveImageTargetFallsBackToLatestRecentPhoto(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	chatID := int64(123)
+	otherChatID := int64(999)
+	for _, item := range []struct {
+		messageID int
+		chatID    int64
+		unixtime  int64
+		fileID    string
+		typ       string
+	}{
+		{messageID: 10, chatID: chatID, unixtime: 100, fileID: "old-photo", typ: "photo"},
+		{messageID: 11, chatID: chatID, unixtime: 110, fileID: "not-photo", typ: "document"},
+		{messageID: 12, chatID: chatID, unixtime: 120, fileID: "latest-photo", typ: "photo"},
+		{messageID: 13, chatID: otherChatID, unixtime: 130, fileID: "other-chat-photo", typ: "photo"},
+	} {
+		msg := telebot.Message{ID: item.messageID, Chat: &telebot.Chat{ID: item.chatID}, Unixtime: item.unixtime}
+		data, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatalf("marshal message %d: %v", item.messageID, err)
+		}
+		_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, unixtime, data) VALUES (?, ?, ?, ?)`, item.messageID, item.chatID, item.unixtime, string(data))
+		if err != nil {
+			t.Fatalf("insert message %d: %v", item.messageID, err)
+		}
+		_, err = mockDB.Exec(`INSERT INTO media_items (message_id, chat_id, type, file_id, width, height, file_size, data) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, item.messageID, item.chatID, item.typ, item.fileID, 1024, 768, 12345)
+		if err != nil {
+			t.Fatalf("insert media item %d: %v", item.messageID, err)
+		}
+	}
+
+	question := &telebot.Message{ID: 14, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, explain meme"}
+	got, err := resolveImageTarget(mockDB, question)
+	if err != nil {
+		t.Fatalf("resolveImageTarget returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected image target, got nil")
+	}
+	if got.FileID != "latest-photo" || got.MessageID != 12 || got.Source != imageSourceLatest {
+		t.Fatalf("unexpected target: %+v", got)
+	}
+}
+
+func TestResolveImageTargetReturnsNilWhenNoPhotoFound(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	chatID := int64(123)
+	question := &telebot.Message{ID: 1, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что там вообще?"}
+	got, err := resolveImageTarget(mockDB, question)
+	if err != nil {
+		t.Fatalf("resolveImageTarget returned error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil target, got %+v", got)
+	}
+}
+
+func TestShouldForceInspectRecentImage(t *testing.T) {
+	testCases := []struct {
+		name     string
+		question string
+		want     bool
+	}{
+		{name: "russian image question", question: "губи, что на картинке?", want: true},
+		{name: "meme question", question: "gooby, explain meme", want: true},
+		{name: "casual what there", question: "губи, что там вообще?", want: true},
+		{name: "non-image retrospective", question: "обсуждали ли мы spotify раньше?", want: false},
+		{name: "generic prompt", question: "gooby, придумай шутку", want: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldForceInspectRecentImage(tc.question)
+			if got != tc.want {
+				t.Fatalf("shouldForceInspectRecentImage(%q) = %v, want %v", tc.question, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestShouldUseImageInspection(t *testing.T) {
+	imageTarget := &ResolvedImageTarget{ChatID: 123, MessageID: 10, FileID: "photo-1", Source: imageSourceLatest}
+	if !shouldUseImageInspection("губи, найс картинка?", imageTarget) {
+		t.Fatal("expected image inspection when question is image-related and target exists")
+	}
+	if shouldUseImageInspection("губи, найди сообщения про мем", imageTarget) {
+		t.Fatal("did not expect image inspection for history search question")
+	}
+	if shouldUseImageInspection("губи, что на картинке?", nil) {
+		t.Fatal("did not expect image inspection without image target")
+	}
+}
+
+func TestAskChatGptUsesImageInspectionBeforeTextFlow(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	chatID := int64(123)
+	photoMessage := telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "alice"}, Unixtime: 100}
+	photoData, err := json.Marshal(photoMessage)
+	if err != nil {
+		t.Fatalf("marshal photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, unixtime, data) VALUES (?, ?, ?, ?)`, 10, chatID, 100, string(photoData))
+	if err != nil {
+		t.Fatalf("insert photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO media_items (message_id, chat_id, type, file_id, width, height, file_size, data) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, 10, chatID, "photo", "file-reply", 1024, 768, 12345)
+	if err != nil {
+		t.Fatalf("insert photo item: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	originalInspect := inspectRecentImageQuestion
+	defer func() { inspectRecentImageQuestion = originalInspect }()
+	inspectRecentImageQuestion = func(message *telebot.Message, target *ResolvedImageTarget) (string, error) {
+		if target == nil || target.FileID != "file-reply" {
+			t.Fatalf("unexpected target passed to inspectRecentImageQuestion: %+v", target)
+		}
+		return "это мем про тесты", nil
+	}
+
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?"}
+	if got := askChatGpt(message); got != "это мем про тесты" {
+		t.Fatalf("askChatGpt returned %q, want image inspection answer", got)
+	}
+}
+
+func TestAskChatGptReturnsFallbackWhenImageQuestionHasNoTarget(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?"}
+	got := askChatGpt(message)
+	if !strings.Contains(got, "Не вижу рядом картинки") {
+		t.Fatalf("expected no-image fallback, got %q", got)
+	}
+}
+
 func TestShouldForceSearchMessages(t *testing.T) {
 	testCases := []struct {
 		name     string

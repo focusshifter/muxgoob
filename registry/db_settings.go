@@ -12,8 +12,9 @@ const (
 	ConfigPluginName = "config"
 
 	// AI provider and model keys
-	AiProviderKey = "ai_provider"
-	AiModelKey    = "ai_model"
+	AiProviderKey   = "ai_provider"
+	AiModelKey      = "ai_model"
+	ImageAiModelKey = "image_ai_model"
 )
 
 // init is called after database initialization
@@ -152,6 +153,11 @@ func GetAiModel(chatID *int64) string {
 	return GetPluginSetting(chatID, ConfigPluginName, AiModelKey, Config.AiModel)
 }
 
+// GetImageAiModel returns the image AI model from database or falls back to config.yml
+func GetImageAiModel(chatID *int64) string {
+	return GetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, Config.ImageAiModel)
+}
+
 // SetAiProvider sets the AI provider in the database
 func SetAiProvider(chatID *int64, provider string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, AiProviderKey, provider)
@@ -160,4 +166,9 @@ func SetAiProvider(chatID *int64, provider string) error {
 // SetAiModel sets the AI model in the database
 func SetAiModel(chatID *int64, model string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, AiModelKey, model)
+}
+
+// SetImageAiModel sets the image AI model in the database
+func SetImageAiModel(chatID *int64, model string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, model)
 }

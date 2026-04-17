@@ -98,7 +98,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai] [chat_id]\n!ai model <model_name> [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai] [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai get [chat_id]")
 		return
 	}
 
@@ -164,6 +164,31 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			}
 			return
 		}
+		if parts[2] == "image" {
+			if len(parts) < 4 {
+				bot.Send(message.Chat, "Please specify an image model name")
+				return
+			}
+			var chatID *int64
+			if len(parts) >= 5 {
+				parsedID, err := strconv.ParseInt(parts[4], 10, 64)
+				if err == nil {
+					chatID = &parsedID
+				}
+			}
+			model := parts[3]
+			err := registry.SetImageAiModel(chatID, model)
+			if err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error setting image model: %v", err))
+				return
+			}
+			if chatID != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Image model for chat %d set to: %s", *chatID, model))
+			} else {
+				bot.Send(message.Chat, fmt.Sprintf("Global image model set to: %s", model))
+			}
+			return
+		}
 
 		var chatID *int64
 		if len(parts) >= 4 {
@@ -196,6 +221,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		}
 		provider := registry.GetAiProvider(chatID)
 		model := registry.GetAiModel(chatID)
+		imageModel := registry.GetImageAiModel(chatID)
 		selfpromptModel := selfpromptplugin.GetModel(chatID)
 		if selfpromptModel == "" {
 			selfpromptModel = "(default AI model)"
@@ -203,9 +229,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 
 		var response string
 		if chatID != nil {
-			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nSelfprompt model: %s", *chatID, provider, model, selfpromptModel)
+			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage model: %s\nSelfprompt model: %s", *chatID, provider, model, imageModel, selfpromptModel)
 		} else {
-			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nSelfprompt model: %s", provider, model, selfpromptModel)
+			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage model: %s\nSelfprompt model: %s", provider, model, imageModel, selfpromptModel)
 		}
 
 		bot.Send(message.Chat, response)

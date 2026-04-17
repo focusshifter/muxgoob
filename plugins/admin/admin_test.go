@@ -214,6 +214,85 @@ func TestAdminPlugin_SpotifyModelCommand(t *testing.T) {
 	}
 }
 
+func TestAdminPlugin_ImageModelCommand(t *testing.T) {
+	originalConfig := registry.Config
+	defer func() {
+		registry.Config = originalConfig
+	}()
+	registry.Config.OwnerUsername = "test_owner"
+	registry.Config.ImageAiModel = "google/gemini-3.1-flash-lite-preview"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+
+	plugin := &AdminPlugin{}
+
+	globalModel := "google/gemini-3.1-flash-lite-preview"
+	plugin.Process(&telebot.Message{
+		Text:   "!ai model image " + globalModel,
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for global image model command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Global image model set to") {
+		t.Fatalf("Unexpected global response: %v", mockBot.SendWhat)
+	}
+	if got := registry.GetImageAiModel(nil); got != globalModel {
+		t.Fatalf("Expected global image model %q, got %q", globalModel, got)
+	}
+
+	mockBot.SendCalled = false
+	mockBot.SendWhat = nil
+
+	targetChatID := int64(777)
+	chatModel := "google/gemini-3.1-flash-lite-preview"
+	plugin.Process(&telebot.Message{
+		Text:   "!ai model image " + chatModel + " 777",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for chat image model command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Image model for chat 777 set to") {
+		t.Fatalf("Unexpected chat response: %v", mockBot.SendWhat)
+	}
+	if got := registry.GetImageAiModel(&targetChatID); got != chatModel {
+		t.Fatalf("Expected chat image model %q, got %q", chatModel, got)
+	}
+
+	mockBot.SendCalled = false
+	mockBot.SendWhat = nil
+	plugin.Process(&telebot.Message{
+		Text:   "!ai get 777",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for !ai get")
+	}
+	response, ok := mockBot.SendWhat.(string)
+	if !ok {
+		t.Fatalf("Expected string response for !ai get, got %T", mockBot.SendWhat)
+	}
+	if !strings.Contains(response, "Image model: "+chatModel) {
+		t.Fatalf("Expected !ai get response to include image model, got: %s", response)
+	}
+}
+
 func TestAdminPlugin_SelfpromptCompressionModelCommand(t *testing.T) {
 	originalConfig := registry.Config
 	defer func() {

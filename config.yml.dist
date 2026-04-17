@@ -21,6 +21,7 @@ twitch_streams:
       - username2
 ai_provider: openrouter
 ai_model: deepseek/deepseek-chat
+image_ai_model: google/gemini-3.1-flash-lite-preview
 openai_api_key: no_key
 openrouter_api_key: no_key
 chat_gpt_use_history: true

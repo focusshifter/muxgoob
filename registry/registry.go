@@ -83,6 +83,7 @@ type Configuration struct {
 	OwnerUsername              string                 `yaml:"owner_username"`
 	AiProvider                 string                 `yaml:"ai_provider"`
 	AiModel                    string                 `yaml:"ai_model"`
+	ImageAiModel               string                 `yaml:"image_ai_model"`
 	SelfPromptConfig           SelfPromptConfig       `yaml:"selfprompt"`
 	SpotifyConfig              SpotifyConfig          `yaml:"spotify"`
 	SpotifyReviewPrompt        string                 `yaml:"spotify_review_prompt"`

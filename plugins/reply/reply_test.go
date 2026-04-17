@@ -78,6 +78,8 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 		return "Mock reply to bot message"
 	} else if message.Text == "gooby, is this a test?" {
 		return "Да" // Return "Да" for this test case
+	} else if message.Text == "gooby, сделай опрос?" {
+		return actionOnlyReplyToken
 	}
 
 	return ""
@@ -166,6 +168,21 @@ func TestReplyPlugin_Process(t *testing.T) {
 			expectedCalls: true,
 			expectedReply: "Нет",
 			rngValue:      0, // In test mode, this will always return "Нет" for this specific question
+		},
+		{
+			name: "Question with 'gooby' - action-only poll",
+			message: &telebot.Message{
+				Text: "gooby, сделай опрос?",
+				Sender: &telebot.User{
+					Username: "test_user",
+				},
+				Chat: &telebot.Chat{
+					ID: 123,
+				},
+			},
+			expectedCalls: false,
+			expectedReply: "",
+			rngValue:      0,
 		},
 		{
 			name: "Command with 'gooby,'",
@@ -339,7 +356,7 @@ func TestReplyPlugin_Process(t *testing.T) {
 				tc.name == "Command with 'gooby,'" || // Direct command
 				tc.name == "Command with 'gooby' and space" || // Direct command with space
 				tc.name == "Command with 'gooby,' and line break" || // Command with line break
-				tc.name == "Question with 'gooby' - Yes response" || tc.name == "Question with 'gooby' - No response" // Questions
+				tc.name == "Question with 'gooby' - Yes response" || tc.name == "Question with 'gooby' - No response" || tc.name == "Question with 'gooby' - action-only poll" // Questions
 
 			// Verify typing notification
 			if shouldType && !mockBot.NotifyCalled {

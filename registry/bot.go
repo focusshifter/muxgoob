@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"strconv"
 
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/tucnak/telebot"
@@ -14,9 +16,10 @@ import (
 // BotWrapper wraps telebot.Bot to add message saving functionality
 type BotWrapper struct {
 	*telebot.Bot
-	SendFunc   func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
-	ReplyFunc  func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
-	NotifyFunc func(to telebot.Recipient, action telebot.ChatAction) error
+	SendFunc     func(to telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error)
+	ReplyFunc    func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
+	NotifyFunc   func(to telebot.Recipient, action telebot.ChatAction) error
+	SendPollFunc func(to telebot.Recipient, question string, options []string, isAnonymous bool, allowsMultipleAnswers bool) (*telebot.Message, error)
 }
 
 const telegramMessageChunkSize = 4000
@@ -232,4 +235,46 @@ func (b *BotWrapper) Notify(to telebot.Recipient, action telebot.ChatAction) err
 
 	// If no bot is available, return nil
 	return nil
+}
+
+func (b *BotWrapper) SendPoll(to telebot.Recipient, question string, options []string, isAnonymous bool, allowsMultipleAnswers bool) (*telebot.Message, error) {
+	if b.SendPollFunc != nil {
+		return b.SendPollFunc(to, question, options, isAnonymous, allowsMultipleAnswers)
+	}
+
+	if b.Bot == nil {
+		return nil, errors.New("bot is not initialized")
+	}
+
+	encodedOptions, err := json.Marshal(options)
+	if err != nil {
+		return nil, fmt.Errorf("marshal poll options: %w", err)
+	}
+
+	params := map[string]string{
+		"chat_id":                 to.Recipient(),
+		"question":                question,
+		"options":                 string(encodedOptions),
+		"is_anonymous":            strconv.FormatBool(isAnonymous),
+		"allows_multiple_answers": strconv.FormatBool(allowsMultipleAnswers),
+	}
+
+	respJSON, err := b.Bot.Raw("sendPoll", params)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Ok          bool             `json:"ok"`
+		Result      *telebot.Message `json:"result"`
+		Description string           `json:"description"`
+	}
+	if err := json.Unmarshal(respJSON, &resp); err != nil {
+		return nil, fmt.Errorf("bad response json: %w", err)
+	}
+	if !resp.Ok {
+		return nil, fmt.Errorf("api error: %s", resp.Description)
+	}
+
+	return resp.Result, nil
 }

@@ -53,6 +53,8 @@ type ChatGptClient interface {
 // RealChatGptClient implements ChatGptClient using the actual OpenAI API
 type RealChatGptClient struct{}
 
+const actionOnlyReplyToken = "__GOOBY_ACTION_ONLY__"
+
 func (c *RealChatGptClient) Ask(message *telebot.Message) string {
 	// The actual implementation will be moved from askChatGpt
 	return askChatGpt(message)
@@ -233,6 +235,9 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	case questionExp.MatchString(message.Text):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
+		if isActionOnlyReply(replyText) {
+			return
+		}
 
 		if replyText == "" {
 			// Use the injected random generator for consistent behavior in tests
@@ -251,7 +256,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
-		if replyText != "" {
+		if replyText != "" && !isActionOnlyReply(replyText) {
 			sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 		}
 
@@ -277,11 +282,15 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			bot.Notify(message.Chat, telebot.Typing)
 			replyText := p.chatClient.Ask(message)
 
-			if replyText != "" {
+			if replyText != "" && !isActionOnlyReply(replyText) {
 				sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
 			}
 		}
 	}
+}
+
+func isActionOnlyReply(replyText string) bool {
+	return replyText == actionOnlyReplyToken
 }
 
 func sendReplyWithLog(bot *registry.BotWrapper, chat *telebot.Chat, text string, opts *telebot.SendOptions) {
@@ -966,16 +975,20 @@ var askChatGpt = func(message *telebot.Message) string {
 		return ""
 	}
 
+	pollTool := chattools.NewSendPollTool(message.Chat.ID)
 	toolRegistry := chattools.NewRegistry(
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
 		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
 		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
 		chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
+		pollTool,
 	)
 	toolSystemMessage := strings.Join([]string{
 		"You can call tools when they are needed.",
 		"Avoid markdown. If formatting is needed, use Telegram markdown only.",
+		"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
+		"After sendPoll succeeds, do not send any follow-up confirmation text.",
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
@@ -1042,6 +1055,9 @@ var askChatGpt = func(message *telebot.Message) string {
 	if err != nil {
 		log.Printf("ChatCompletion error: %v", err)
 		return ""
+	}
+	if pollTool.WasSent() {
+		return actionOnlyReplyToken
 	}
 
 	return resp

@@ -125,3 +125,35 @@ func TestSearchMessagesToolExcludesTriggeringMessage(t *testing.T) {
 		t.Fatalf("expected triggering message to be excluded, got %q", payload.Results[0].Text)
 	}
 }
+
+func TestSearchMessagesToolFTSFindsOlderExactPhraseBeyondRecentCandidateWindow(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	insertUser(t, db, 1, "alice", "Alice", "One")
+
+	now := time.Now().Unix()
+	insertMessage(t, db, 1, 100, 1, now-1000, "we should migrate this chat search to fts5 soon")
+	for i := int64(0); i < 300; i++ {
+		insertMessage(t, db, 1000+i, 100, 1, now-i, "chat search is noisy again")
+	}
+
+	tool := NewSearchMessagesTool(db, 100, 0)
+	result, err := tool.Execute(context.Background(), `{"query":"migrate chat search to fts5","limit":3}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	var payload searchMessagesResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if payload.Count == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if !strings.Contains(strings.ToLower(payload.Results[0].Text), "migrate this chat search to fts5") {
+		t.Fatalf("expected older exact phrase match first, got %q", payload.Results[0].Text)
+	}
+}

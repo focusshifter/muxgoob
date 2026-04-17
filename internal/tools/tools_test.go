@@ -168,3 +168,66 @@ func TestRunLoopReturnsToolErrorsToModel(t *testing.T) {
 		t.Fatalf("unexpected tool error content: %s", toolMessage.Content)
 	}
 }
+
+func TestRunLoopClearsSpecificToolChoiceAfterForcedToolCall(t *testing.T) {
+	client := &mockCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{
+				Choices: []openai.ChatCompletionChoice{{
+					FinishReason: openai.FinishReasonToolCalls,
+					Message: openai.ChatCompletionMessage{
+						Role: openai.ChatMessageRoleAssistant,
+						ToolCalls: []openai.ToolCall{{
+							ID:   "call_1",
+							Type: openai.ToolTypeFunction,
+							Function: openai.FunctionCall{
+								Name:      "searchMessages",
+								Arguments: `{"query":"spotify"}`,
+							},
+						}},
+					},
+				}},
+			},
+			{
+				Choices: []openai.ChatCompletionChoice{{
+					FinishReason: openai.FinishReasonStop,
+					Message:      openai.ChatCompletionMessage{Content: "done"},
+				}},
+			},
+		},
+	}
+
+	registry := NewRegistry(stubTool{
+		definition: openai.Tool{
+			Type:     openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{Name: "searchMessages"},
+		},
+		result: `{"results":[{"text":"spotify mention"}],"count":1}`,
+	})
+
+	_, err := RunLoop(context.Background(), client, openai.ChatCompletionRequest{
+		Model: "gpt-4o-mini",
+		Messages: []openai.ChatCompletionMessage{{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "what did we say about spotify?",
+		}},
+		Tools: registry.Definitions(),
+		ToolChoice: openai.ToolChoice{
+			Type:     openai.ToolTypeFunction,
+			Function: openai.ToolFunction{Name: "searchMessages"},
+		},
+	}, registry, 5)
+	if err != nil {
+		t.Fatalf("RunLoop returned error: %v", err)
+	}
+
+	if len(client.requests) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(client.requests))
+	}
+	if client.requests[0].ToolChoice == nil {
+		t.Fatal("expected forced tool choice on first request")
+	}
+	if client.requests[1].ToolChoice != nil {
+		t.Fatalf("expected tool choice to be cleared after forced tool call, got %#v", client.requests[1].ToolChoice)
+	}
+}

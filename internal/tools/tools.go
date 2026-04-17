@@ -133,6 +133,9 @@ func RunLoop(
 				Name:       toolCall.Function.Name,
 			})
 		}
+		if forcedChoice, ok := req.ToolChoice.(openai.ToolChoice); ok && forcedChoice.Type == openai.ToolTypeFunction {
+			req.ToolChoice = nil
+		}
 	}
 
 	return "", fmt.Errorf("tool loop exceeded maximum iterations (%d)", maxIterations)

@@ -293,6 +293,34 @@ func isActionOnlyReply(replyText string) bool {
 	return replyText == actionOnlyReplyToken
 }
 
+var retrospectiveQuestionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(обсуждал[аио]?|вспомни|в истории|раньше|когда[- ]?то|кто говорил|найди|искал[аи]?|что мы говорили|what did we|did we|who said|find messages|search the chat)`),
+	regexp.MustCompile(`(?i)(сообщени|чат|истори|discussion|history|messages?).*(про|about)`),
+}
+
+func shouldForceSearchMessages(question string) bool {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return false
+	}
+	for _, pattern := range retrospectiveQuestionPatterns {
+		if pattern.MatchString(question) {
+			return true
+		}
+	}
+	return false
+}
+
+func initialToolChoice(forceSearch bool) any {
+	if !forceSearch {
+		return nil
+	}
+	return openai.ToolChoice{
+		Type:     openai.ToolTypeFunction,
+		Function: openai.ToolFunction{Name: "searchMessages"},
+	}
+}
+
 func sendReplyWithLog(bot *registry.BotWrapper, chat *telebot.Chat, text string, opts *telebot.SendOptions) {
 	if bot == nil || chat == nil {
 		log.Printf("[reply] Cannot send reply: bot or chat is nil")
@@ -976,6 +1004,7 @@ var askChatGpt = func(message *telebot.Message) string {
 	}
 
 	pollTool := chattools.NewSendPollTool(message.Chat.ID)
+	forceSearch := shouldForceSearchMessages(question)
 	toolRegistry := chattools.NewRegistry(
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
@@ -997,6 +1026,8 @@ var askChatGpt = func(message *telebot.Message) string {
 		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
 		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
 		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",
+		"For any question about prior chat discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering.",
+		"Treat the prefill as recent context only, not authoritative chat history.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
 	}, " ")
 
@@ -1037,6 +1068,7 @@ var askChatGpt = func(message *telebot.Message) string {
 			FrequencyPenalty: 0.2,
 			PresencePenalty:  0.1,
 			Tools:            toolRegistry.Definitions(),
+			ToolChoice:       initialToolChoice(forceSearch),
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,

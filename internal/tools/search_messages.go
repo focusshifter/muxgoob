@@ -11,6 +11,8 @@ import (
 	"unicode"
 
 	openai "github.com/sashabaranov/go-openai"
+
+	"github.com/focusshifter/muxgoob/database"
 )
 
 const (
@@ -144,6 +146,59 @@ func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string
 		return nil, nil
 	}
 
+	results, err := searchMessagesWithFTS(db, chatID, excludeMessageID, query, variants, patterns, limit)
+	if err == nil {
+		return results, nil
+	}
+
+	fallbackResults, fallbackErr := searchMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, limit)
+	if fallbackErr != nil {
+		return nil, err
+	}
+	return fallbackResults, nil
+}
+
+func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
+	if err := database.EnsureMessageSearchIndex(db); err != nil {
+		return nil, err
+	}
+
+	matchQuery := buildFTSQuery(query, variants)
+	if strings.TrimSpace(matchQuery) == "" {
+		return nil, nil
+	}
+
+	args := make([]any, 0, 4)
+	args = append(args, matchQuery, chatID)
+	queryFilter := "WHERE messages_fts MATCH ? AND m.chat_id = ?"
+	if excludeMessageID > 0 {
+		queryFilter += " AND m.id != ?"
+		args = append(args, excludeMessageID)
+	}
+	candidateLimit := max(searchCandidateLimit, limit*5)
+	args = append(args, candidateLimit)
+
+	rows, err := db.Query(`
+		SELECT u.username, u.first_name, u.last_name, m.sender_id, m.unixtime, COALESCE(NULLIF(m.text, ''), m.caption, ''), bm25(messages_fts)
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		LEFT JOIN users u ON u.id = m.sender_id
+		`+queryFilter+`
+		ORDER BY bm25(messages_fts), m.unixtime DESC
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("searching messages with fts: %w", err)
+	}
+	defer rows.Close()
+
+	ranked, err := collectRankedSearchResults(rows, query, variants, patterns)
+	if err != nil {
+		return nil, err
+	}
+	return finalizeRankedSearchResults(ranked, limit), nil
+}
+
+func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
 	whereParts := make([]string, 0, len(patterns))
 	args := make([]any, 0, len(patterns)+3)
 	args = append(args, chatID)
@@ -174,18 +229,42 @@ func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string
 	}
 	defer rows.Close()
 
-	ranked := make([]rankedSearchMessageResult, 0, limit)
+	ranked, err := collectRankedSearchResults(rows, query, variants, patterns)
+	if err != nil {
+		return nil, err
+	}
+	return finalizeRankedSearchResults(ranked, limit), nil
+}
+
+func collectRankedSearchResults(rows *sql.Rows, query string, variants, patterns []string) ([]rankedSearchMessageResult, error) {
+	ranked := make([]rankedSearchMessageResult, 0)
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("reading search result columns: %w", err)
+	}
+	includeBM25 := len(columns) >= 7
+
 	for rows.Next() {
 		var username, firstName, lastName sql.NullString
 		var senderID int64
 		var unixtime int64
 		var text string
-		if err := rows.Scan(&username, &firstName, &lastName, &senderID, &unixtime, &text); err != nil {
-			return nil, fmt.Errorf("scanning search result: %w", err)
+		var bm25Score float64
+		if includeBM25 {
+			if err := rows.Scan(&username, &firstName, &lastName, &senderID, &unixtime, &text, &bm25Score); err != nil {
+				return nil, fmt.Errorf("scanning search result: %w", err)
+			}
+		} else {
+			if err := rows.Scan(&username, &firstName, &lastName, &senderID, &unixtime, &text); err != nil {
+				return nil, fmt.Errorf("scanning search result: %w", err)
+			}
 		}
 
 		sender := resolveSenderName(username, firstName, lastName, senderID)
 		score := scoreSearchResult(text, query, variants, patterns)
+		if includeBM25 {
+			score += convertBM25ToBoost(bm25Score)
+		}
 		if score <= 0 {
 			continue
 		}
@@ -203,7 +282,10 @@ func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating search results: %w", err)
 	}
+	return ranked, nil
+}
 
+func finalizeRankedSearchResults(ranked []rankedSearchMessageResult, limit int) []searchMessageResult {
 	sort.SliceStable(ranked, func(i, j int) bool {
 		if ranked[i].score == ranked[j].score {
 			return ranked[i].Timestamp > ranked[j].Timestamp
@@ -219,8 +301,75 @@ func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string
 	for _, item := range ranked {
 		results = append(results, item.searchMessageResult)
 	}
+	return results
+}
 
-	return results, nil
+func buildFTSQuery(query string, variants []string) string {
+	terms := append([]string{query}, variants...)
+	seen := make(map[string]struct{})
+	clauses := make([]string, 0, len(terms)*3)
+	appendClause := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		clauses = append(clauses, value)
+	}
+
+	for _, term := range terms {
+		normalized := normalizeSearchText(term)
+		if normalized == "" {
+			continue
+		}
+
+		tokens := make([]string, 0, 4)
+		for _, token := range querySplitPattern.FindAllString(normalized, -1) {
+			if _, skip := searchStopWords[token]; skip {
+				continue
+			}
+			if len([]rune(token)) < 2 {
+				continue
+			}
+			tokens = append(tokens, token)
+		}
+		if len(tokens) == 0 {
+			continue
+		}
+
+		if len(tokens) > 1 {
+			appendClause(`"` + strings.Join(tokens, " ") + `"`)
+			appendClause(strings.Join(tokens, " AND "))
+			continue
+		}
+
+		appendClause(tokens[0])
+		if len([]rune(tokens[0])) >= 4 {
+			appendClause(tokens[0] + "*")
+		}
+	}
+
+	return strings.Join(clauses, " OR ")
+}
+
+func convertBM25ToBoost(score float64) int {
+	switch {
+	case score <= -20:
+		return 220
+	case score <= -10:
+		return 180
+	case score <= -5:
+		return 140
+	case score <= -2:
+		return 100
+	case score < 0:
+		return 60
+	default:
+		return 25
+	}
 }
 
 func buildSearchPatterns(query string, variants []string) []string {

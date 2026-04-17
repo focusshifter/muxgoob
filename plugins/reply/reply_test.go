@@ -726,3 +726,26 @@ func TestBuildPersonFactsContext_IncludesMentionedUserFromSameChatOnly(t *testin
 		t.Fatalf("did not expect cross-chat mentioned user facts in context, got: %s", context)
 	}
 }
+
+func TestShouldForceSearchMessages(t *testing.T) {
+	testCases := []struct {
+		name     string
+		question string
+		want     bool
+	}{
+		{name: "retrospective discussion", question: "обсуждали ли мы spotify раньше?", want: true},
+		{name: "who said something", question: "кто говорил про factorio?", want: true},
+		{name: "find in history", question: "найди сообщения про мехворриор", want: true},
+		{name: "present tense casual", question: "gooby, что думаешь про spotify?", want: false},
+		{name: "simple direct prompt", question: "gooby, придумай шутку", want: false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldForceSearchMessages(tc.question)
+			if got != tc.want {
+				t.Fatalf("shouldForceSearchMessages(%q) = %v, want %v", tc.question, got, tc.want)
+			}
+		})
+	}
+}

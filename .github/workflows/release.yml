@@ -29,4 +29,5 @@ jobs:
           version: latest
           args: release --clean
         env:
+          GOFLAGS: -tags=sqlite_fts5
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

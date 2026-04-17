@@ -1,0 +1,2 @@
+[env]
+GOFLAGS = "-tags=sqlite_fts5"

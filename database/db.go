@@ -232,6 +232,10 @@ func Initialize() {
 			log.Printf("[database] Failed to add review_text column: %v", err)
 		}
 	}
+
+	if err := EnsureMessageSearchIndex(DB); err != nil {
+		log.Fatal("[database] Failed to initialize message search index:", err)
+	}
 }
 
 func Close() {

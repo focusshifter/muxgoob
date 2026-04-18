@@ -133,18 +133,26 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 
 func maybeBuildImageInspectionContext(message *telebot.Message, question string) (string, string, bool) {
 	question = strings.TrimSpace(question)
-	if !shouldForceInspectRecentImage(question) {
-		return "", "", false
-	}
+	forceInspect := shouldForceInspectRecentImage(question)
+	forceFallback := shouldReturnMissingImageFallback(question, message)
 
 	target, err := resolveImageTarget(sqliteDb, message)
 	if err != nil {
 		return "", "", false
 	}
 	if target == nil {
+		if forceInspect || forceFallback {
+			return "", visionFallbackNoImageMsg, true
+		}
+		return "", "", false
+	}
+	if forceInspect && (message == nil || (message.ReplyTo == nil && message.Photo == nil)) && target.Source != imageSourceReply {
 		return "", visionFallbackNoImageMsg, true
 	}
-	if !shouldUseImageInspection(question, target) {
+	if message != nil && message.ReplyTo != nil && shouldInspectReplyToPhoto(question) && target.Source != imageSourceReply {
+		return "", visionFallbackNoImageMsg, true
+	}
+	if !shouldUseImageInspection(question, message, target) {
 		return "", "", false
 	}
 

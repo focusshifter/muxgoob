@@ -1234,6 +1234,70 @@ func TestMaybeBuildImageInspectionContextUsesReplyToPhotoGenericPrompt(t *testin
 	}
 }
 
+func TestMaybeBuildImageInspectionContextIgnoresReplyToNonPhotoMessage(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	latestPhotoMessage := telebot.Message{ID: 20, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Unixtime: 200}
+	latestPhotoData, err := json.Marshal(latestPhotoMessage)
+	if err != nil {
+		t.Fatalf("marshal latest photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, unixtime, data) VALUES (?, ?, ?, ?)`, 20, 123, 200, string(latestPhotoData))
+	if err != nil {
+		t.Fatalf("insert latest photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO media_items (message_id, chat_id, type, file_id, width, height, file_size, data) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, 20, 123, "photo", "latest-photo", 1024, 768, 12345)
+	if err != nil {
+		t.Fatalf("insert latest photo item: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	originalInspect := inspectRecentImageQuestion
+	defer func() { inspectRecentImageQuestion = originalInspect }()
+	called := false
+	inspectRecentImageQuestion = func(message *telebot.Message, target *ResolvedImageTarget) (string, error) {
+		called = true
+		return "не должно вызываться", nil
+	}
+
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "*были бы", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}}}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected non-photo reply to skip image inspection, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	}
+	if called {
+		t.Fatal("did not expect inspectRecentImageQuestion to run for non-photo reply")
+	}
+}
+
 func TestMaybeBuildImageInspectionContextReturnsFallbackWhenReplyToPhotoMissing(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
@@ -1280,7 +1344,7 @@ func TestMaybeBuildImageInspectionContextReturnsFallbackWhenReplyToPhotoMissing(
 	sqliteDb = mockDB
 	defer func() { sqliteDb = originalSQLiteDB }()
 
-	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, я именно про бадейку, чтоб поварешка тонула", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}}}
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, я именно про бадейку, чтоб поварешка тонула", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Photo: &telebot.Photo{}}}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
 	if !handled {
 		t.Fatal("expected reply-to-photo follow-up to be handled even when replied photo is missing")

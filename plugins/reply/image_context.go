@@ -44,11 +44,25 @@ func shouldForceInspectRecentImage(question string) bool {
 	return false
 }
 
-func shouldReturnMissingImageFallback(question string, message *telebot.Message) bool {
+func shouldReturnMissingImageFallback(question string, message *telebot.Message, replyToPhoto bool) bool {
 	if shouldForceInspectRecentImage(question) {
 		return true
 	}
-	return message != nil && message.ReplyTo != nil
+	return replyToPhoto
+}
+
+func replyReferencesPhoto(db *sql.DB, message *telebot.Message) bool {
+	if message == nil || message.Chat == nil || message.ReplyTo == nil {
+		return false
+	}
+	if message.ReplyTo.Photo != nil {
+		return true
+	}
+	if message.ReplyTo.Chat == nil || message.ReplyTo.Chat.ID != message.Chat.ID || db == nil {
+		return false
+	}
+	target, err := lookupImageTargetByMessageID(db, message.Chat.ID, message.ReplyTo.ID, imageSourceReply)
+	return err == nil && target != nil
 }
 
 func shouldUseImageInspection(question string, message *telebot.Message, target *ResolvedImageTarget) bool {

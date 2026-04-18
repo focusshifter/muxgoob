@@ -149,7 +149,7 @@ func maybeBuildImageInspectionContext(message *telebot.Message, question string)
 	if forceInspect && (message == nil || (message.ReplyTo == nil && message.Photo == nil)) && target.Source != imageSourceReply {
 		return "", visionFallbackNoImageMsg, true
 	}
-	if message != nil && message.ReplyTo != nil && shouldInspectReplyToPhoto(question) && target.Source != imageSourceReply {
+	if message != nil && message.ReplyTo != nil && target.Source != imageSourceReply {
 		return "", visionFallbackNoImageMsg, true
 	}
 	if !shouldUseImageInspection(question, message, target) {

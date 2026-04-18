@@ -958,14 +958,17 @@ func TestShouldUseImageInspection(t *testing.T) {
 	if !shouldUseImageInspection("губи, я именно про бадейку, чтоб поварешка тонула", &telebot.Message{ReplyTo: &telebot.Message{ID: 10}}, replyTarget) {
 		t.Fatal("expected image inspection for reply-to-photo follow-up without explicit image keywords")
 	}
+	if !shouldUseImageInspection("губи, зарейтингуй хавку", &telebot.Message{ReplyTo: &telebot.Message{ID: 10}}, replyTarget) {
+		t.Fatal("expected image inspection for reply-to-photo food rating request")
+	}
 	if !shouldUseImageInspection("губи, найс картинка?", &telebot.Message{Photo: &telebot.Photo{}}, latestTarget) {
 		t.Fatal("expected image inspection when the current message itself contains a photo")
 	}
 	if shouldUseImageInspection("губи, что за еда на фото?", &telebot.Message{}, latestTarget) {
 		t.Fatal("did not expect image inspection for a standalone text question that only matches the latest photo")
 	}
-	if shouldUseImageInspection("губи, придумай шутку", &telebot.Message{ReplyTo: &telebot.Message{ID: 10}}, replyTarget) {
-		t.Fatal("did not expect image inspection for unrelated reply-to-photo prompt")
+	if !shouldUseImageInspection("губи, придумай шутку", &telebot.Message{ReplyTo: &telebot.Message{ID: 10}}, replyTarget) {
+		t.Fatal("expected image inspection for any direct reply-to-photo prompt")
 	}
 	if shouldUseImageInspection("губи, найди сообщения про мем", &telebot.Message{ReplyTo: &telebot.Message{ID: 10}}, replyTarget) {
 		t.Fatal("did not expect image inspection for history search question")
@@ -1041,7 +1044,7 @@ func TestMaybeBuildImageInspectionContextUsesCaption(t *testing.T) {
 	}
 }
 
-func TestMaybeBuildImageInspectionContextUsesReplyToPhotoWithoutImageKeywords(t *testing.T) {
+func TestMaybeBuildImageInspectionContextUsesReplyToPhotoFoodRatingPrompt(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1097,13 +1100,13 @@ func TestMaybeBuildImageInspectionContextUsesReplyToPhotoWithoutImageKeywords(t 
 		return "это мем про тесты", nil
 	}
 
-	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, я именно про бадейку, чтоб поварешка тонула", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}}}
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, зарейтингуй хавку", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}}}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
 	if !handled || fallback != "" {
 		t.Fatalf("maybeBuildImageInspectionContext returned handled=%v fallback=%q context=%q", handled, fallback, context)
 	}
 	if !strings.Contains(context, "это мем про тесты") || !strings.Contains(context, message.Text) {
-		t.Fatalf("expected image context to include summary and original question for reply-to-photo follow-up, got %q", context)
+		t.Fatalf("expected image context to include summary and original food-rating prompt, got %q", context)
 	}
 }
 
@@ -1163,7 +1166,7 @@ func TestMaybeBuildImageInspectionContextReturnsFallbackWhenNoTarget(t *testing.
 	}
 }
 
-func TestMaybeBuildImageInspectionContextSkipsUnrelatedReplyToPhotoPrompt(t *testing.T) {
+func TestMaybeBuildImageInspectionContextUsesReplyToPhotoGenericPrompt(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1215,16 +1218,19 @@ func TestMaybeBuildImageInspectionContextSkipsUnrelatedReplyToPhotoPrompt(t *tes
 	called := false
 	inspectRecentImageQuestion = func(message *telebot.Message, target *ResolvedImageTarget) (string, error) {
 		called = true
-		return "это не должно вызываться", nil
+		return "это еда на фото", nil
 	}
 
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "bob"}, Text: "губи, придумай шутку", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: chatID}}}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
-	if handled || context != "" || fallback != "" {
-		t.Fatalf("expected unrelated reply-to-photo prompt to skip image inspection, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	if !handled || fallback != "" {
+		t.Fatalf("expected reply-to-photo prompt to build image context, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
-	if called {
-		t.Fatal("did not expect inspectRecentImageQuestion to be called for unrelated reply-to-photo prompt")
+	if !called {
+		t.Fatal("expected inspectRecentImageQuestion to be called for reply-to-photo prompt")
+	}
+	if !strings.Contains(context, "это еда на фото") || !strings.Contains(context, message.Text) {
+		t.Fatalf("expected image context to include summary and original prompt, got %q", context)
 	}
 }
 

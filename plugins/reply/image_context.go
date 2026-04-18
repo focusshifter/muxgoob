@@ -31,11 +31,6 @@ var imageQuestionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(найс картинка|nice picture|nice image)`),
 }
 
-var replyImageFollowupPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(именно про|имею в виду|this one|that one|about this|what about this)`),
-	regexp.MustCompile(`(?i)(что это|это что|переведи это|вот это|вот тут|а это|а тут)`),
-}
-
 func shouldForceInspectRecentImage(question string) bool {
 	question = strings.TrimSpace(question)
 	if question == "" {
@@ -49,27 +44,11 @@ func shouldForceInspectRecentImage(question string) bool {
 	return false
 }
 
-func shouldInspectReplyToPhoto(question string) bool {
-	if shouldForceInspectRecentImage(question) {
-		return true
-	}
-	question = strings.TrimSpace(question)
-	if question == "" {
-		return false
-	}
-	for _, pattern := range replyImageFollowupPatterns {
-		if pattern.MatchString(question) {
-			return true
-		}
-	}
-	return false
-}
-
 func shouldReturnMissingImageFallback(question string, message *telebot.Message) bool {
 	if shouldForceInspectRecentImage(question) {
 		return true
 	}
-	return message != nil && message.ReplyTo != nil && shouldInspectReplyToPhoto(question)
+	return message != nil && message.ReplyTo != nil
 }
 
 func shouldUseImageInspection(question string, message *telebot.Message, target *ResolvedImageTarget) bool {
@@ -79,11 +58,8 @@ func shouldUseImageInspection(question string, message *telebot.Message, target 
 	if shouldForceSearchMessages(question) {
 		return false
 	}
-	if target.Source == imageSourceReply {
-		return shouldInspectReplyToPhoto(question)
-	}
-	if message != nil && message.ReplyTo != nil && shouldInspectReplyToPhoto(question) {
-		return false
+	if message != nil && message.ReplyTo != nil {
+		return target.Source == imageSourceReply
 	}
 	return message != nil && message.Photo != nil
 }

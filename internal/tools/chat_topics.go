@@ -328,7 +328,13 @@ func buildLightweightClient(chatID int64) (ChatCompletionCreator, string) {
 		if model == "" {
 			model = "gpt-5.4"
 		}
-		return openaicodex.NewClient(), model
+		modelInfo := openaicodex.NormalizeConfiguredModel(model)
+		if modelInfo.UseCodex {
+			return openaicodex.NewClient(), modelInfo.Model
+		}
+		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+		config.BaseURL = "https://openrouter.ai/api/v1"
+		return openai.NewClientWithConfig(config), modelInfo.Model
 	default:
 		if strings.TrimSpace(registry.Config.OpenaiApiKey) == "" {
 			return nil, ""

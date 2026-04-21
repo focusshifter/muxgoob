@@ -73,17 +73,17 @@ type codexAuthFile struct {
 }
 
 type codexRequest struct {
-	Model            string      `json:"model"`
-	Instructions     string      `json:"instructions"`
-	Store            bool        `json:"store"`
-	Stream           bool        `json:"stream"`
-	Input            []any       `json:"input"`
-	Tools            []codexTool `json:"tools,omitempty"`
-	Temperature      *float32    `json:"temperature,omitempty"`
-	TopP             *float32    `json:"top_p,omitempty"`
-	FrequencyPenalty *float32    `json:"frequency_penalty,omitempty"`
-	PresencePenalty  *float32    `json:"presence_penalty,omitempty"`
-	MaxOutputTokens  int         `json:"max_output_tokens,omitempty"`
+	Model            string   `json:"model"`
+	Instructions     string   `json:"instructions"`
+	Store            bool     `json:"store"`
+	Stream           bool     `json:"stream"`
+	Input            []any    `json:"input"`
+	Tools            []any    `json:"tools,omitempty"`
+	Temperature      *float32 `json:"temperature,omitempty"`
+	TopP             *float32 `json:"top_p,omitempty"`
+	FrequencyPenalty *float32 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float32 `json:"presence_penalty,omitempty"`
+	MaxOutputTokens  int      `json:"max_output_tokens,omitempty"`
 }
 
 type codexTextPart struct {
@@ -115,6 +115,57 @@ type codexTool struct {
 	Description string `json:"description,omitempty"`
 	Parameters  any    `json:"parameters"`
 	Strict      bool   `json:"strict"`
+}
+
+type codexNativeWebSearchTool struct {
+	Type              string `json:"type"`
+	ExternalWebAccess bool   `json:"external_web_access"`
+}
+
+type NormalizedConfiguredModel struct {
+	RawModel        string
+	Model           string
+	UseCodex        bool
+	NativeWebSearch bool
+}
+
+func NormalizeConfiguredModel(model string) NormalizedConfiguredModel {
+	raw := strings.TrimSpace(model)
+	normalized := NormalizedConfiguredModel{
+		RawModel: raw,
+		Model:    raw,
+		UseCodex: true,
+	}
+	if raw == "" {
+		return normalized
+	}
+
+	trimmed := raw
+	if strings.HasPrefix(trimmed, "openrouter/") {
+		trimmed = strings.TrimPrefix(trimmed, "openrouter/")
+	}
+	if strings.HasSuffix(trimmed, ":online") {
+		normalized.NativeWebSearch = true
+		trimmed = strings.TrimSuffix(trimmed, ":online")
+	}
+	if strings.HasPrefix(trimmed, "openai/") {
+		trimmed = strings.TrimPrefix(trimmed, "openai/")
+	} else if strings.Contains(trimmed, "/") {
+		normalized.UseCodex = false
+		normalized.Model = trimmed
+		normalized.NativeWebSearch = false
+		return normalized
+	}
+	trimmed = strings.TrimSpace(trimmed)
+	if trimmed == "" {
+		trimmed = raw
+	}
+	if !strings.HasPrefix(trimmed, "gpt-") {
+		normalized.UseCodex = false
+		normalized.NativeWebSearch = false
+	}
+	normalized.Model = trimmed
+	return normalized
 }
 
 type codexEvent struct {
@@ -187,6 +238,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 }
 
 func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexRequest, error) {
+	modelInfo := NormalizeConfiguredModel(request.Model)
 	instructions := defaultInstructions
 	inputs := make([]any, 0, len(request.Messages))
 	systemParts := make([]string, 0, 2)
@@ -234,12 +286,12 @@ func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexReques
 		instructions = strings.Join(systemParts, "\n\n")
 	}
 
-	tools := make([]codexTool, 0, len(request.Tools))
+	functionTools := make([]codexTool, 0, len(request.Tools))
 	for _, tool := range request.Tools {
 		if tool.Type != openai.ToolTypeFunction || tool.Function == nil {
 			continue
 		}
-		tools = append(tools, codexTool{
+		functionTools = append(functionTools, codexTool{
 			Type:        "function",
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
@@ -249,13 +301,24 @@ func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexReques
 	}
 
 	var err error
-	tools, instructions, err = applyToolChoice(tools, request.ToolChoice, instructions)
+	functionTools, instructions, err = applyToolChoice(functionTools, request.ToolChoice, instructions)
 	if err != nil {
 		return codexRequest{}, err
 	}
 
+	tools := make([]any, 0, len(functionTools)+1)
+	for _, tool := range functionTools {
+		tools = append(tools, tool)
+	}
+	if modelInfo.NativeWebSearch {
+		tools = append(tools, codexNativeWebSearchTool{
+			Type:              "web_search",
+			ExternalWebAccess: true,
+		})
+	}
+
 	payload := codexRequest{
-		Model:        request.Model,
+		Model:        modelInfo.Model,
 		Instructions: instructions,
 		Store:        false,
 		Stream:       true,

@@ -1004,11 +1004,19 @@ var askChatGpt = func(message *telebot.Message) string {
 		model = registry.GetAiModel(chatID)
 		client = openai.NewClientWithConfig(config)
 	case "openai-codex":
-		model = strings.TrimSpace(registry.GetAiModel(chatID))
-		if model == "" {
-			model = "gpt-5.4"
+		configuredModel := strings.TrimSpace(registry.GetAiModel(chatID))
+		if configuredModel == "" {
+			configuredModel = "gpt-5.4"
 		}
-		client = openaicodex.NewClient()
+		modelInfo := openaicodex.NormalizeConfiguredModel(configuredModel)
+		model = modelInfo.Model
+		if modelInfo.UseCodex {
+			client = openaicodex.NewClient()
+		} else {
+			config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+			config.BaseURL = "https://openrouter.ai/api/v1"
+			client = openai.NewClientWithConfig(config)
+		}
 	default:
 		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"

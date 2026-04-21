@@ -20,12 +20,12 @@ type capturedRequest struct {
 	Store        bool              `json:"store"`
 	Stream       bool              `json:"stream"`
 	Input        []json.RawMessage `json:"input"`
-	Tools        []struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Parameters  json.RawMessage `json:"parameters"`
-	} `json:"tools"`
+	Tools        []map[string]any  `json:"tools"`
+}
+
+func toolStringField(tool map[string]any, key string) string {
+	value, _ := tool[key].(string)
+	return value
 }
 
 func writeAuthFile(t *testing.T, dir string, token string) {
@@ -115,6 +115,81 @@ func TestClientCreateChatCompletionReturnsAssistantMessage(t *testing.T) {
 	}
 }
 
+func TestNormalizeConfiguredModel(t *testing.T) {
+	tests := []struct {
+		name             string
+		input            string
+		wantModel        string
+		wantNativeSearch bool
+		wantCodex        bool
+	}{
+		{name: "plain gpt name stays codex compatible", input: "gpt-5.4", wantModel: "gpt-5.4", wantNativeSearch: false, wantCodex: true},
+		{name: "openai prefix is stripped", input: "openai/gpt-5.4", wantModel: "gpt-5.4", wantNativeSearch: false, wantCodex: true},
+		{name: "online suffix enables native search", input: "openai/gpt-5.4:online", wantModel: "gpt-5.4", wantNativeSearch: true, wantCodex: true},
+		{name: "non-openai routed away from codex", input: "google/gemini-2.5-flash", wantModel: "google/gemini-2.5-flash", wantNativeSearch: false, wantCodex: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeConfiguredModel(tc.input)
+			if got.Model != tc.wantModel || got.NativeWebSearch != tc.wantNativeSearch || got.UseCodex != tc.wantCodex {
+				t.Fatalf("NormalizeConfiguredModel(%q) = %+v, want model=%q native=%v useCodex=%v", tc.input, got, tc.wantModel, tc.wantNativeSearch, tc.wantCodex)
+			}
+		})
+	}
+}
+
+func TestClientCreateChatCompletionAddsNativeWebSearchForOnlineModel(t *testing.T) {
+	var got capturedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_online\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+		_, _ = io.WriteString(w, "event: response.output_item.done\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"looked it up\"}]},\"output_index\":0,\"sequence_number\":1}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_online\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+	}))
+	defer server.Close()
+
+	codexHome := t.TempDir()
+	writeAuthFile(t, codexHome, "test-access-token")
+
+	client := NewClient(WithBaseURL(server.URL), WithCodexHome(codexHome))
+	_, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model: "openai/gpt-5.4:online",
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: "Use tools when needed."},
+			{Role: openai.ChatMessageRoleUser, Content: "Search the web and answer."},
+		},
+		Tools: []openai.Tool{
+			{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{Name: "searchMessages", Description: "search", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletion error: %v", err)
+	}
+	if got.Model != "gpt-5.4" {
+		t.Fatalf("expected normalized model gpt-5.4, got %q", got.Model)
+	}
+	if len(got.Tools) != 2 {
+		t.Fatalf("expected 2 tools including native web_search, got %d", len(got.Tools))
+	}
+	if toolStringField(got.Tools[0], "name") != "searchMessages" {
+		t.Fatalf("expected first tool to remain searchMessages, got %#v", got.Tools[0])
+	}
+	if toolStringField(got.Tools[1], "type") != "web_search" {
+		t.Fatalf("expected second tool to be native web_search, got %#v", got.Tools[1])
+	}
+	if value, ok := got.Tools[1]["external_web_access"].(bool); !ok || !value {
+		t.Fatalf("expected native web_search external_web_access=true, got %#v", got.Tools[1]["external_web_access"])
+	}
+}
+
 func TestClientCreateChatCompletionReturnsToolCallsAndForcedToolChoiceInstruction(t *testing.T) {
 	var got capturedRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -154,8 +229,8 @@ func TestClientCreateChatCompletionReturnsToolCallsAndForcedToolChoiceInstructio
 	if len(got.Tools) != 1 {
 		t.Fatalf("expected forced tool choice to narrow tools to 1, got %d", len(got.Tools))
 	}
-	if got.Tools[0].Name != "searchMessages" {
-		t.Fatalf("expected only searchMessages tool, got %q", got.Tools[0].Name)
+	if toolStringField(got.Tools[0], "name") != "searchMessages" {
+		t.Fatalf("expected only searchMessages tool, got %q", toolStringField(got.Tools[0], "name"))
 	}
 	if !strings.Contains(got.Instructions, "You must call the searchMessages tool before responding.") {
 		t.Fatalf("expected instructions to force searchMessages tool, got %q", got.Instructions)

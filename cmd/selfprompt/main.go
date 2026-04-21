@@ -1029,10 +1029,16 @@ func buildOpenAIClientForModel(chatID *int64, requestedModel string) (chattools.
 		if model == "" {
 			model = "gpt-5.4"
 		}
+		modelInfo := openaicodex.NormalizeConfiguredModel(model)
 		if modelOverride != "" {
-			model = modelOverride
+			modelInfo = openaicodex.NormalizeConfiguredModel(modelOverride)
 		}
-		return openaicodex.NewClient(), model
+		if modelInfo.UseCodex {
+			return openaicodex.NewClient(), modelInfo.Model
+		}
+		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+		config.BaseURL = "https://openrouter.ai/api/v1"
+		return openai.NewClientWithConfig(config), modelInfo.Model
 	default:
 		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		if model == "" {

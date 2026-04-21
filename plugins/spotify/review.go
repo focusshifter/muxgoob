@@ -142,10 +142,18 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 		}
 		client = openai.NewClientWithConfig(config)
 	case "openai-codex":
-		if model == "" {
-			model = "gpt-5.4"
+		modelInfo := openaicodex.NormalizeConfiguredModel(model)
+		if modelInfo.Model == "" {
+			modelInfo = openaicodex.NormalizeConfiguredModel("gpt-5.4")
 		}
-		client = openaicodex.NewClient()
+		model = modelInfo.Model
+		if modelInfo.UseCodex {
+			client = openaicodex.NewClient()
+		} else {
+			config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+			config.BaseURL = "https://openrouter.ai/api/v1"
+			client = openai.NewClientWithConfig(config)
+		}
 	default:
 		if registry.Config.OpenaiApiKey == "" {
 			return ""

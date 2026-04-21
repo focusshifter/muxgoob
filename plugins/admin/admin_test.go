@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -214,6 +216,43 @@ func TestAdminPlugin_SpotifyModelCommand(t *testing.T) {
 	}
 }
 
+func TestAdminPlugin_OpenAICodexProviderCommand(t *testing.T) {
+	originalConfig := registry.Config
+	defer func() {
+		registry.Config = originalConfig
+	}()
+	registry.Config.OwnerUsername = "test_owner"
+	registry.Config.AiProvider = "openrouter"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+
+	plugin := &AdminPlugin{}
+	plugin.Process(&telebot.Message{
+		Text:   "!ai provider openai-codex",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for openai-codex provider command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Global AI provider set to: openai-codex") {
+		t.Fatalf("Unexpected response: %v", mockBot.SendWhat)
+	}
+	if got := registry.GetAiProvider(nil); got != "openai-codex" {
+		t.Fatalf("Expected provider openai-codex, got %q", got)
+	}
+}
+
 func TestAdminPlugin_ImageModelCommand(t *testing.T) {
 	originalConfig := registry.Config
 	defer func() {
@@ -290,6 +329,59 @@ func TestAdminPlugin_ImageModelCommand(t *testing.T) {
 	}
 	if !strings.Contains(response, "Image model: "+chatModel) {
 		t.Fatalf("Expected !ai get response to include image model, got: %s", response)
+	}
+}
+
+func TestAdminPlugin_GetIncludesOpenAICodexStatus(t *testing.T) {
+	originalConfig := registry.Config
+	originalCodexHome := os.Getenv("CODEX_HOME")
+	defer func() {
+		registry.Config = originalConfig
+		_ = os.Setenv("CODEX_HOME", originalCodexHome)
+	}()
+	registry.Config.OwnerUsername = "test_owner"
+	registry.Config.AiProvider = "openai-codex"
+	registry.Config.AiModel = "gpt-5.4"
+	registry.Config.ImageAiModel = "google/gemini-3.1-flash-lite-preview"
+
+	codexHome := t.TempDir()
+	if err := os.Setenv("CODEX_HOME", codexHome); err != nil {
+		t.Fatalf("set CODEX_HOME: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"test-token","refresh_token":"refresh-token"}}`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+
+	plugin := &AdminPlugin{}
+	plugin.Process(&telebot.Message{
+		Text:   "!ai get",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for !ai get")
+	}
+	response, ok := mockBot.SendWhat.(string)
+	if !ok {
+		t.Fatalf("Expected string response for !ai get, got %T", mockBot.SendWhat)
+	}
+	if !strings.Contains(response, "Provider: openai-codex") {
+		t.Fatalf("Expected provider in !ai get response, got: %s", response)
+	}
+	if !strings.Contains(response, "Codex auth: available") {
+		t.Fatalf("Expected Codex auth status in !ai get response, got: %s", response)
 	}
 }
 

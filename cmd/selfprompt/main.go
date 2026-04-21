@@ -18,6 +18,8 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/internal/openaicodex"
+	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	selfpromptplugin "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	"github.com/focusshifter/muxgoob/registry"
@@ -995,17 +997,17 @@ func filterMessagesByUser(messages []telebot.Message, userID int64) []telebot.Me
 	return filtered
 }
 
-func buildOpenAIClient(chatID *int64) (*openai.Client, string) {
+func buildOpenAIClient(chatID *int64) (chattools.ChatCompletionCreator, string) {
 	return buildOpenAIClientForModel(chatID, "")
 }
 
-func buildOpenAIClientForModel(chatID *int64, requestedModel string) (*openai.Client, string) {
-	var config openai.ClientConfig
+func buildOpenAIClientForModel(chatID *int64, requestedModel string) (chattools.ChatCompletionCreator, string) {
 	model := strings.TrimSpace(requestedModel)
 
 	aiProvider := registry.GetAiProvider(chatID)
-	if aiProvider == "openrouter" {
-		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+	switch aiProvider {
+	case "openrouter":
+		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
 		if model == "" {
 			model = selfpromptplugin.GetModel(chatID)
@@ -1013,20 +1015,37 @@ func buildOpenAIClientForModel(chatID *int64, requestedModel string) (*openai.Cl
 		if model == "" {
 			model = registry.GetAiModel(chatID)
 		}
-	} else {
-		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
+		if modelOverride != "" {
+			model = modelOverride
+		}
+		return openai.NewClientWithConfig(config), model
+	case "openai-codex":
+		if model == "" {
+			model = selfpromptplugin.GetModel(chatID)
+		}
+		if model == "" {
+			model = strings.TrimSpace(registry.GetAiModel(chatID))
+		}
+		if model == "" {
+			model = "gpt-5.4"
+		}
+		if modelOverride != "" {
+			model = modelOverride
+		}
+		return openaicodex.NewClient(), model
+	default:
+		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		if model == "" {
 			model = selfpromptplugin.GetModel(chatID)
 		}
 		if model == "" {
 			model = "gpt-4o-mini"
 		}
+		if modelOverride != "" {
+			model = modelOverride
+		}
+		return openai.NewClientWithConfig(config), model
 	}
-	if modelOverride != "" {
-		model = modelOverride
-	}
-
-	return openai.NewClientWithConfig(config), model
 }
 
 func shouldConsolidateFacts(text string) bool {

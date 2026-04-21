@@ -8,6 +8,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	selfpromptplugin "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	"github.com/focusshifter/muxgoob/plugins/spotify"
 	"github.com/focusshifter/muxgoob/registry"
@@ -112,13 +113,13 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			}
 		}
 		if len(parts) < 3 {
-			bot.Send(message.Chat, "Please specify a provider (openrouter or openai)")
+			bot.Send(message.Chat, "Please specify a provider (openrouter, openai, or openai-codex)")
 			return
 		}
 
 		provider := parts[2]
-		if provider != "openrouter" && provider != "openai" {
-			bot.Send(message.Chat, "Invalid provider. Use 'openrouter' or 'openai'")
+		if provider != "openrouter" && provider != "openai" && provider != "openai-codex" {
+			bot.Send(message.Chat, "Invalid provider. Use 'openrouter', 'openai', or 'openai-codex'")
 			return
 		}
 
@@ -232,6 +233,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage model: %s\nSelfprompt model: %s", *chatID, provider, model, imageModel, selfpromptModel)
 		} else {
 			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage model: %s\nSelfprompt model: %s", provider, model, imageModel, selfpromptModel)
+		}
+		if provider == "openai-codex" {
+			response += "\nCodex auth: " + openaicodex.NewClient().AuthStatus()
 		}
 
 		bot.Send(message.Chat, response)

@@ -10,6 +10,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/facts"
 )
@@ -313,20 +314,27 @@ func aiTopicMatcher(ctx context.Context, chatID int64, bullets []string, topic s
 	return payload.Remove, nil
 }
 
-func buildLightweightClient(chatID int64) (*openai.Client, string) {
+func buildLightweightClient(chatID int64) (ChatCompletionCreator, string) {
 	chatIDPtr := &chatID
 	aiProvider := registry.GetAiProvider(chatIDPtr)
-	if aiProvider == "openrouter" {
+	switch aiProvider {
+	case "openrouter":
 		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
 		client := openai.NewClientWithConfig(config)
 		return client, "openai/gpt-4o-mini"
+	case "openai-codex":
+		model := strings.TrimSpace(registry.GetAiModel(chatIDPtr))
+		if model == "" {
+			model = "gpt-5.4"
+		}
+		return openaicodex.NewClient(), model
+	default:
+		if strings.TrimSpace(registry.Config.OpenaiApiKey) == "" {
+			return nil, ""
+		}
+		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
+		client := openai.NewClientWithConfig(config)
+		return client, "gpt-4o-mini"
 	}
-
-	if strings.TrimSpace(registry.Config.OpenaiApiKey) == "" {
-		return nil, ""
-	}
-	config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
-	client := openai.NewClientWithConfig(config)
-	return client, "gpt-4o-mini"
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
@@ -984,7 +985,7 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	// No need to check if registry.Config is initialized as it's not a pointer type
 
-	var config openai.ClientConfig
+	var client chattools.ChatCompletionCreator
 	var model string
 
 	// Get chat ID for chat-specific settings
@@ -996,17 +997,23 @@ var askChatGpt = func(message *telebot.Message) string {
 	// Get AI provider from database with fallback to config.yml
 	aiProvider := registry.GetAiProvider(chatID)
 
-	if aiProvider == "openrouter" {
-		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+	switch aiProvider {
+	case "openrouter":
+		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		// Get AI model from database with fallback to config.yml
 		model = registry.GetAiModel(chatID)
-	} else {
-		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
+		client = openai.NewClientWithConfig(config)
+	case "openai-codex":
+		model = strings.TrimSpace(registry.GetAiModel(chatID))
+		if model == "" {
+			model = "gpt-5.4"
+		}
+		client = openaicodex.NewClient()
+	default:
+		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		model = "gpt-4o-mini"
+		client = openai.NewClientWithConfig(config)
 	}
-
-	client := openai.NewClientWithConfig(config)
 
 	// Get prompt from promptmgr
 	// Check if message.Chat is nil to prevent nil pointer dereference

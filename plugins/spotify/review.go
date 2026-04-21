@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/internal/openaicodex"
+	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/registry"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
@@ -123,31 +125,37 @@ func buildSpotifyReviewPrompt(typ, artist, title, year, grounding string) string
 }
 
 func callChatModelForReview(chatID *int64, prompt string) string {
-	var config openai.ClientConfig
+	var client chattools.ChatCompletionCreator
 	model := resolveSpotifyReviewModel(chatID)
 
 	provider := registry.GetAiProvider(chatID)
-	if provider == "openrouter" {
+	switch provider {
+	case "openrouter":
 		if registry.Config.OpenrouterApiKey == "" {
 			return ""
 		}
-		config = openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
 		model = strings.TrimSuffix(model, ":online")
 		if model == "" {
 			model = "deepseek/deepseek-chat-v3.1"
 		}
-	} else {
+		client = openai.NewClientWithConfig(config)
+	case "openai-codex":
+		if model == "" {
+			model = "gpt-5.4"
+		}
+		client = openaicodex.NewClient()
+	default:
 		if registry.Config.OpenaiApiKey == "" {
 			return ""
 		}
-		config = openai.DefaultConfig(registry.Config.OpenaiApiKey)
+		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		if model == "" {
 			model = "gpt-4o-mini"
 		}
+		client = openai.NewClientWithConfig(config)
 	}
-
-	client := openai.NewClientWithConfig(config)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
@@ -174,8 +182,8 @@ func resolveSpotifyReviewModel(chatID *int64) string {
 		return model
 	}
 
-	// Fallback to the same defaults chat replies use.
-	if registry.GetAiProvider(chatID) == "openrouter" {
+	provider := registry.GetAiProvider(chatID)
+	if provider == "openrouter" || provider == "openai-codex" {
 		return strings.TrimSpace(registry.GetAiModel(chatID))
 	}
 	return "gpt-4o-mini"

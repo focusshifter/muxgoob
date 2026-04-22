@@ -15,6 +15,17 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
+type fallbackClientStub struct {
+	requests []openai.ChatCompletionRequest
+	resp     openai.ChatCompletionResponse
+	err      error
+}
+
+func (s *fallbackClientStub) CreateChatCompletion(_ context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	s.requests = append(s.requests, request)
+	return s.resp, s.err
+}
+
 type capturedRequest struct {
 	Model        string            `json:"model"`
 	Instructions string            `json:"instructions"`
@@ -118,25 +129,81 @@ func TestClientCreateChatCompletionReturnsAssistantMessage(t *testing.T) {
 
 func TestNormalizeConfiguredModel(t *testing.T) {
 	tests := []struct {
-		name             string
-		input            string
-		wantModel        string
-		wantNativeSearch bool
-		wantCodex        bool
+		name                string
+		input               string
+		wantModel           string
+		wantNativeSearch    bool
+		wantCodex           bool
+		wantOpenRouterModel string
 	}{
-		{name: "plain gpt name stays codex compatible", input: "gpt-5.4", wantModel: "gpt-5.4", wantNativeSearch: false, wantCodex: true},
-		{name: "openai prefix is stripped", input: "openai/gpt-5.4", wantModel: "gpt-5.4", wantNativeSearch: false, wantCodex: true},
-		{name: "online suffix enables native search", input: "openai/gpt-5.4:online", wantModel: "gpt-5.4", wantNativeSearch: true, wantCodex: true},
-		{name: "non-openai routed away from codex", input: "google/gemini-2.5-flash", wantModel: "google/gemini-2.5-flash", wantNativeSearch: false, wantCodex: false},
+		{name: "plain gpt name stays codex compatible", input: "gpt-5.4", wantModel: "gpt-5.4", wantNativeSearch: false, wantCodex: true, wantOpenRouterModel: "openai/gpt-5.4"},
+		{name: "openai prefix is stripped", input: "openai/gpt-5.4", wantModel: "gpt-5.4", wantNativeSearch: false, wantCodex: true, wantOpenRouterModel: "openai/gpt-5.4"},
+		{name: "online suffix enables native search", input: "openai/gpt-5.4:online", wantModel: "gpt-5.4", wantNativeSearch: true, wantCodex: true, wantOpenRouterModel: "openai/gpt-5.4:online"},
+		{name: "non-openai routed away from codex", input: "google/gemini-2.5-flash", wantModel: "google/gemini-2.5-flash", wantNativeSearch: false, wantCodex: false, wantOpenRouterModel: "google/gemini-2.5-flash"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := NormalizeConfiguredModel(tc.input)
-			if got.Model != tc.wantModel || got.NativeWebSearch != tc.wantNativeSearch || got.UseCodex != tc.wantCodex {
-				t.Fatalf("NormalizeConfiguredModel(%q) = %+v, want model=%q native=%v useCodex=%v", tc.input, got, tc.wantModel, tc.wantNativeSearch, tc.wantCodex)
+			if got.Model != tc.wantModel || got.NativeWebSearch != tc.wantNativeSearch || got.UseCodex != tc.wantCodex || got.OpenRouterModel != tc.wantOpenRouterModel {
+				t.Fatalf("NormalizeConfiguredModel(%q) = %+v, want model=%q native=%v useCodex=%v openrouter=%q", tc.input, got, tc.wantModel, tc.wantNativeSearch, tc.wantCodex, tc.wantOpenRouterModel)
 			}
 		})
+	}
+}
+
+func TestNormalizeSchemaForCodexAddsAdditionalPropertiesFalseRecursively(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"limit": map[string]any{"type": "integer"},
+			"filter": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+				},
+			},
+		},
+	}
+
+	normalized := normalizeSchemaForCodex(schema).(map[string]any)
+	if normalized["additionalProperties"] != false {
+		t.Fatalf("expected root additionalProperties=false, got %#v", normalized["additionalProperties"])
+	}
+	properties := normalized["properties"].(map[string]any)
+	filter := properties["filter"].(map[string]any)
+	if filter["additionalProperties"] != false {
+		t.Fatalf("expected nested additionalProperties=false, got %#v", filter["additionalProperties"])
+	}
+}
+
+func TestClientFallsBackToOpenRouterOnCodexError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"bad schema"}}`)
+	}))
+	defer server.Close()
+
+	codexHome := t.TempDir()
+	writeAuthFile(t, codexHome, "test-access-token")
+
+	fallback := &fallbackClientStub{resp: openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Message: openai.ChatCompletionMessage{Content: "fallback ok"}}}}}
+	client := NewClient(WithBaseURL(server.URL), WithCodexHome(codexHome), WithFallbackClient(fallback))
+	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model:    "openai/gpt-5.4:online",
+		Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletion error: %v", err)
+	}
+	if len(fallback.requests) != 1 {
+		t.Fatalf("expected fallback client to be called once, got %d", len(fallback.requests))
+	}
+	if fallback.requests[0].Model != "openai/gpt-5.4:online" {
+		t.Fatalf("expected fallback model openai/gpt-5.4:online, got %q", fallback.requests[0].Model)
+	}
+	if resp.Choices[0].Message.Content != "fallback ok" {
+		t.Fatalf("expected fallback response, got %#v", resp)
 	}
 }
 
@@ -199,15 +266,6 @@ func TestClientCreateChatCompletionOmitsUnsupportedSamplingParams(t *testing.T) 
 	if bytes.Contains(rawBody, []byte(`"presence_penalty"`)) {
 		t.Fatalf("expected codex payload to omit unsupported presence_penalty: %s", string(rawBody))
 	}
-}
-
-func mustJSONMarshal(t *testing.T, v any) []byte {
-	t.Helper()
-	body, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	return body
 }
 
 func TestClientCreateChatCompletionAddsNativeWebSearchForOnlineModel(t *testing.T) {

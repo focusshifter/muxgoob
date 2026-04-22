@@ -23,10 +23,15 @@ const (
 
 type Option func(*Client)
 
+type ChatCompletionCreator interface {
+	CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error)
+}
+
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
-	codexHome  string
+	baseURL        string
+	httpClient     *http.Client
+	codexHome      string
+	fallbackClient ChatCompletionCreator
 }
 
 func NewClient(opts ...Option) *Client {
@@ -61,6 +66,12 @@ func WithHTTPClient(httpClient *http.Client) Option {
 func WithCodexHome(codexHome string) Option {
 	return func(c *Client) {
 		c.codexHome = strings.TrimSpace(codexHome)
+	}
+}
+
+func WithFallbackClient(fallback ChatCompletionCreator) Option {
+	return func(c *Client) {
+		c.fallbackClient = fallback
 	}
 }
 
@@ -127,6 +138,7 @@ type NormalizedConfiguredModel struct {
 	Model           string
 	UseCodex        bool
 	NativeWebSearch bool
+	OpenRouterModel string
 }
 
 func NormalizeConfiguredModel(model string) NormalizedConfiguredModel {
@@ -140,10 +152,13 @@ func NormalizeConfiguredModel(model string) NormalizedConfiguredModel {
 		return normalized
 	}
 
-	trimmed := raw
-	if strings.HasPrefix(trimmed, "openrouter/") {
-		trimmed = strings.TrimPrefix(trimmed, "openrouter/")
+	rawForRouter := raw
+	if strings.HasPrefix(rawForRouter, "openrouter/") {
+		rawForRouter = strings.TrimPrefix(rawForRouter, "openrouter/")
 	}
+	normalized.OpenRouterModel = rawForRouter
+
+	trimmed := rawForRouter
 	if strings.HasSuffix(trimmed, ":online") {
 		normalized.NativeWebSearch = true
 		trimmed = strings.TrimSuffix(trimmed, ":online")
@@ -163,6 +178,8 @@ func NormalizeConfiguredModel(model string) NormalizedConfiguredModel {
 	if !strings.HasPrefix(trimmed, "gpt-") {
 		normalized.UseCodex = false
 		normalized.NativeWebSearch = false
+	} else if !strings.Contains(normalized.OpenRouterModel, "/") {
+		normalized.OpenRouterModel = "openai/" + normalized.OpenRouterModel
 	}
 	normalized.Model = trimmed
 	return normalized
@@ -206,6 +223,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 
 	accessToken, err := c.loadAccessToken()
 	if err != nil {
+		if c.fallbackClient != nil {
+			return c.fallbackClient.CreateChatCompletion(ctx, fallbackRequest(request))
+		}
 		return openai.ChatCompletionResponse{}, err
 	}
 
@@ -225,16 +245,31 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
+		if c.fallbackClient != nil {
+			return c.fallbackClient.CreateChatCompletion(ctx, fallbackRequest(request))
+		}
 		return openai.ChatCompletionResponse{}, fmt.Errorf("send codex request: %w", err)
 	}
 	defer httpResp.Body.Close()
 
 	if httpResp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(httpResp.Body)
+		if c.fallbackClient != nil {
+			return c.fallbackClient.CreateChatCompletion(ctx, fallbackRequest(request))
+		}
 		return openai.ChatCompletionResponse{}, fmt.Errorf("codex responses error: status=%d body=%s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	return parseSSE(httpResp.Body)
+}
+
+func fallbackRequest(request openai.ChatCompletionRequest) openai.ChatCompletionRequest {
+	clone := request
+	modelInfo := NormalizeConfiguredModel(request.Model)
+	if strings.TrimSpace(modelInfo.OpenRouterModel) != "" {
+		clone.Model = modelInfo.OpenRouterModel
+	}
+	return clone
 }
 
 func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexRequest, error) {
@@ -295,7 +330,7 @@ func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexReques
 			Type:        "function",
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
-			Parameters:  tool.Function.Parameters,
+			Parameters:  normalizeSchemaForCodex(tool.Function.Parameters),
 			Strict:      true,
 		})
 	}
@@ -382,6 +417,30 @@ func appendInstruction(instructions string, extra string) string {
 		return instructions
 	}
 	return instructions + "\n\n" + extra
+}
+
+func normalizeSchemaForCodex(schema any) any {
+	switch value := schema.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(value)+1)
+		for key, child := range value {
+			normalized[key] = normalizeSchemaForCodex(child)
+		}
+		if schemaType, _ := normalized["type"].(string); schemaType == "object" {
+			if _, exists := normalized["additionalProperties"]; !exists {
+				normalized["additionalProperties"] = false
+			}
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(value))
+		for i, child := range value {
+			normalized[i] = normalizeSchemaForCodex(child)
+		}
+		return normalized
+	default:
+		return schema
+	}
 }
 
 func extractMessageText(message openai.ChatCompletionMessage) string {

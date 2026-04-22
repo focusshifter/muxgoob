@@ -760,11 +760,13 @@ func buildOpenAIClientForModel(chatID *int64, requestedModel string) (chattools.
 			modelInfo = openaicodex.NormalizeConfiguredModel(requestedModel)
 		}
 		if modelInfo.UseCodex {
-			return openaicodex.NewClient(), modelInfo.Model
+			fallbackConfig := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+			fallbackConfig.BaseURL = "https://openrouter.ai/api/v1"
+			return openaicodex.NewClient(openaicodex.WithFallbackClient(openai.NewClientWithConfig(fallbackConfig))), modelInfo.RawModel
 		}
 		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		return openai.NewClientWithConfig(config), modelInfo.Model
+		return openai.NewClientWithConfig(config), modelInfo.OpenRouterModel
 	default:
 		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		if model == "" {

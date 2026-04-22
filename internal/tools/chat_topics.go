@@ -330,11 +330,13 @@ func buildLightweightClient(chatID int64) (ChatCompletionCreator, string) {
 		}
 		modelInfo := openaicodex.NormalizeConfiguredModel(model)
 		if modelInfo.UseCodex {
-			return openaicodex.NewClient(), modelInfo.Model
+			fallbackConfig := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+			fallbackConfig.BaseURL = "https://openrouter.ai/api/v1"
+			return openaicodex.NewClient(openaicodex.WithFallbackClient(openai.NewClientWithConfig(fallbackConfig))), modelInfo.RawModel
 		}
 		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
-		return openai.NewClientWithConfig(config), modelInfo.Model
+		return openai.NewClientWithConfig(config), modelInfo.OpenRouterModel
 	default:
 		if strings.TrimSpace(registry.Config.OpenaiApiKey) == "" {
 			return nil, ""

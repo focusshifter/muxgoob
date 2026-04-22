@@ -148,11 +148,15 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 		}
 		model = modelInfo.Model
 		if modelInfo.UseCodex {
-			client = openaicodex.NewClient()
+			fallbackConfig := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+			fallbackConfig.BaseURL = "https://openrouter.ai/api/v1"
+			client = openaicodex.NewClient(openaicodex.WithFallbackClient(openai.NewClientWithConfig(fallbackConfig)))
+			model = modelInfo.RawModel
 		} else {
 			config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 			config.BaseURL = "https://openrouter.ai/api/v1"
 			client = openai.NewClientWithConfig(config)
+			model = modelInfo.OpenRouterModel
 		}
 	default:
 		if registry.Config.OpenaiApiKey == "" {

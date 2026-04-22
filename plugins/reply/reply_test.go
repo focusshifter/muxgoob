@@ -1376,3 +1376,16 @@ func TestShouldForceSearchMessages(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatChatGPTRequestLogIncludesProvider(t *testing.T) {
+	got := formatChatGPTRequestLog("openrouter", "openai/gpt-5.4:online", 686563, 26, 6)
+	if !strings.Contains(got, "provider=openrouter") {
+		t.Fatalf("expected provider in log line, got %q", got)
+	}
+	if !strings.Contains(got, "model=openai/gpt-5.4:online") {
+		t.Fatalf("expected model in log line, got %q", got)
+	}
+	if !strings.Contains(got, "chat_id=686563") || !strings.Contains(got, "question_len=26") || !strings.Contains(got, "tools=6") {
+		t.Fatalf("expected remaining fields in log line, got %q", got)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -83,6 +84,21 @@ func (r *Registry) Execute(ctx context.Context, toolCall openai.ToolCall) string
 	return result
 }
 
+func formatToolCallNames(toolCalls []openai.ToolCall) string {
+	if len(toolCalls) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(toolCalls))
+	for _, toolCall := range toolCalls {
+		name := toolCall.Function.Name
+		if name == "" {
+			name = "<unnamed>"
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, ",")
+}
+
 func RunLoop(
 	ctx context.Context,
 	client ChatCompletionCreator,
@@ -99,6 +115,7 @@ func RunLoop(
 	}
 
 	for i := 0; i < maxIterations; i++ {
+		log.Printf("[tools] completion request iteration=%d model=%s messages=%d tools=%d", i+1, req.Model, len(req.Messages), len(req.Tools))
 		resp, err := client.CreateChatCompletion(ctx, req)
 		if err != nil {
 			return "", err
@@ -121,6 +138,7 @@ func RunLoop(
 		if len(choice.Message.ToolCalls) == 0 {
 			return "", fmt.Errorf("chat completion finished with tool calls but returned none")
 		}
+		log.Printf("[tools] completion returned tool_calls count=%d names=%s", len(choice.Message.ToolCalls), formatToolCallNames(choice.Message.ToolCalls))
 
 		req.Messages = append(req.Messages, choice.Message)
 		for _, toolCall := range choice.Message.ToolCalls {

@@ -334,6 +334,10 @@ func initialToolChoice(forceSearch bool) any {
 	}
 }
 
+func formatChatGPTRequestLog(provider string, model string, chatID int64, questionLen int, toolCount int) string {
+	return fmt.Sprintf("[reply] ChatGPT request provider=%s model=%s chat_id=%d question_len=%d tools=%d", provider, model, chatID, questionLen, toolCount)
+}
+
 func sendReplyWithLog(bot *registry.BotWrapper, chat *telebot.Chat, text string, opts *telebot.SendOptions) {
 	if bot == nil || chat == nil {
 		log.Printf("[reply] Cannot send reply: bot or chat is nil")
@@ -996,6 +1000,7 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	// Get AI provider from database with fallback to config.yml
 	aiProvider := registry.GetAiProvider(chatID)
+	effectiveProvider := aiProvider
 
 	switch aiProvider {
 	case "openrouter":
@@ -1014,11 +1019,13 @@ var askChatGpt = func(message *telebot.Message) string {
 			fallbackConfig.BaseURL = "https://openrouter.ai/api/v1"
 			client = openaicodex.NewClient(openaicodex.WithFallbackClient(openai.NewClientWithConfig(fallbackConfig)))
 			model = configuredModel
+			effectiveProvider = "openai-codex"
 		} else {
 			config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 			config.BaseURL = "https://openrouter.ai/api/v1"
 			client = openai.NewClientWithConfig(config)
 			model = modelInfo.OpenRouterModel
+			effectiveProvider = "openrouter"
 		}
 	default:
 		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
@@ -1069,7 +1076,7 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 
-	log.Printf("[reply] ChatGPT request model=%s chat_id=%d question_len=%d tools=%d", model, message.Chat.ID, len(question), len(toolRegistry.Definitions()))
+	log.Print(formatChatGPTRequestLog(effectiveProvider, model, message.Chat.ID, len(question), len(toolRegistry.Definitions())))
 
 	botID := 0
 	if registry.Bot != nil && registry.Bot.Bot != nil {

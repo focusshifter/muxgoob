@@ -119,6 +119,16 @@ func TestRunLoopExecutesToolsAndReturnsFinalContent(t *testing.T) {
 	}
 }
 
+func TestFormatToolCallNames(t *testing.T) {
+	toolCalls := []openai.ToolCall{
+		{Function: openai.FunctionCall{Name: "fetchUsers"}},
+		{Function: openai.FunctionCall{Name: "searchMessages"}},
+	}
+	if got := formatToolCallNames(toolCalls); got != "fetchUsers,searchMessages" {
+		t.Fatalf("formatToolCallNames() = %q", got)
+	}
+}
+
 func TestRunLoopReturnsToolErrorsToModel(t *testing.T) {
 	client := &mockCompletionClient{
 		responses: []openai.ChatCompletionResponse{

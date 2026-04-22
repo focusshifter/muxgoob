@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -224,7 +225,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 	accessToken, err := c.loadAccessToken()
 	if err != nil {
 		if c.fallbackClient != nil {
-			return c.fallbackClient.CreateChatCompletion(ctx, fallbackRequest(request))
+			fallback := fallbackRequest(request)
+			log.Printf("[openaicodex] auth unavailable, falling back to openrouter model=%s", fallback.Model)
+			return c.fallbackClient.CreateChatCompletion(ctx, fallback)
 		}
 		return openai.ChatCompletionResponse{}, err
 	}
@@ -233,6 +236,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 	if err != nil {
 		return openai.ChatCompletionResponse{}, fmt.Errorf("marshal codex request: %w", err)
 	}
+	log.Printf("[openaicodex] request configured_model=%s payload_model=%s input_items=%d tools=%d fallback=%t", request.Model, payload.Model, len(payload.Input), len(payload.Tools), c.fallbackClient != nil)
 
 	url := strings.TrimRight(c.baseURL, "/") + "/responses"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -246,7 +250,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 	httpResp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		if c.fallbackClient != nil {
-			return c.fallbackClient.CreateChatCompletion(ctx, fallbackRequest(request))
+			fallback := fallbackRequest(request)
+			log.Printf("[openaicodex] transport error, falling back to openrouter model=%s err=%v", fallback.Model, err)
+			return c.fallbackClient.CreateChatCompletion(ctx, fallback)
 		}
 		return openai.ChatCompletionResponse{}, fmt.Errorf("send codex request: %w", err)
 	}
@@ -255,7 +261,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 	if httpResp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(httpResp.Body)
 		if c.fallbackClient != nil {
-			return c.fallbackClient.CreateChatCompletion(ctx, fallbackRequest(request))
+			fallback := fallbackRequest(request)
+			log.Printf("[openaicodex] backend error status=%d, falling back to openrouter model=%s body=%s", httpResp.StatusCode, fallback.Model, strings.TrimSpace(string(respBody)))
+			return c.fallbackClient.CreateChatCompletion(ctx, fallback)
 		}
 		return openai.ChatCompletionResponse{}, fmt.Errorf("codex responses error: status=%d body=%s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
@@ -525,6 +533,7 @@ func parseSSE(body io.Reader) (openai.ChatCompletionResponse, error) {
 			response.Object = "chat.completion"
 			response.Created = event.Response.CreatedAt
 			response.Model = event.Response.Model
+			log.Printf("[openaicodex] response created id=%s model=%s", response.ID, response.Model)
 		case "response.output_item.done":
 			switch event.Item.Type {
 			case "message":
@@ -533,6 +542,7 @@ func parseSSE(body io.Reader) (openai.ChatCompletionResponse, error) {
 						assistantText += content.Text
 					}
 				}
+				log.Printf("[openaicodex] response message chunk content_len=%d", len(assistantText))
 			case "function_call":
 				toolCalls = append(toolCalls, openai.ToolCall{
 					ID:   event.Item.CallID,
@@ -542,6 +552,7 @@ func parseSSE(body io.Reader) (openai.ChatCompletionResponse, error) {
 						Arguments: event.Item.Arguments,
 					},
 				})
+				log.Printf("[openaicodex] response tool_call name=%s call_id=%s", event.Item.Name, event.Item.CallID)
 			}
 		case "response.completed":
 			if event.Response.Usage != nil {
@@ -570,12 +581,14 @@ func parseSSE(body io.Reader) (openai.ChatCompletionResponse, error) {
 			Role:      openai.ChatMessageRoleAssistant,
 			ToolCalls: toolCalls,
 		}
+		log.Printf("[openaicodex] completion finished reason=tool_calls tool_calls=%d", len(toolCalls))
 	} else {
 		choice.FinishReason = openai.FinishReasonStop
 		choice.Message = openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleAssistant,
 			Content: assistantText,
 		}
+		log.Printf("[openaicodex] completion finished reason=stop content_len=%d", len(assistantText))
 	}
 	response.Choices = []openai.ChatCompletionChoice{choice}
 	return response, nil

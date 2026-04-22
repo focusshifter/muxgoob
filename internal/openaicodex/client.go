@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -227,7 +228,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 		if c.fallbackClient != nil {
 			fallback := fallbackRequest(request)
 			log.Printf("[openaicodex] auth unavailable, falling back to openrouter model=%s", fallback.Model)
-			return c.fallbackClient.CreateChatCompletion(ctx, fallback)
+			resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
+			log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
+			return resp, fallbackErr
 		}
 		return openai.ChatCompletionResponse{}, err
 	}
@@ -252,7 +255,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 		if c.fallbackClient != nil {
 			fallback := fallbackRequest(request)
 			log.Printf("[openaicodex] transport error, falling back to openrouter model=%s err=%v", fallback.Model, err)
-			return c.fallbackClient.CreateChatCompletion(ctx, fallback)
+			resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
+			log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
+			return resp, fallbackErr
 		}
 		return openai.ChatCompletionResponse{}, fmt.Errorf("send codex request: %w", err)
 	}
@@ -263,7 +268,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 		if c.fallbackClient != nil {
 			fallback := fallbackRequest(request)
 			log.Printf("[openaicodex] backend error status=%d, falling back to openrouter model=%s body=%s", httpResp.StatusCode, fallback.Model, strings.TrimSpace(string(respBody)))
-			return c.fallbackClient.CreateChatCompletion(ctx, fallback)
+			resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
+			log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
+			return resp, fallbackErr
 		}
 		return openai.ChatCompletionResponse{}, fmt.Errorf("codex responses error: status=%d body=%s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
@@ -430,13 +437,26 @@ func appendInstruction(instructions string, extra string) string {
 func normalizeSchemaForCodex(schema any) any {
 	switch value := schema.(type) {
 	case map[string]any:
-		normalized := make(map[string]any, len(value)+1)
+		normalized := make(map[string]any, len(value)+2)
 		for key, child := range value {
 			normalized[key] = normalizeSchemaForCodex(child)
 		}
 		if schemaType, _ := normalized["type"].(string); schemaType == "object" {
 			if _, exists := normalized["additionalProperties"]; !exists {
 				normalized["additionalProperties"] = false
+			}
+			properties, _ := normalized["properties"].(map[string]any)
+			if len(properties) > 0 {
+				required := make([]any, 0, len(properties))
+				keys := make([]string, 0, len(properties))
+				for key := range properties {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				for _, key := range keys {
+					required = append(required, key)
+				}
+				normalized["required"] = required
 			}
 		}
 		return normalized

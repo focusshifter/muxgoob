@@ -118,10 +118,12 @@ func RunLoop(
 		log.Printf("[tools] completion request iteration=%d model=%s messages=%d tools=%d", i+1, req.Model, len(req.Messages), len(req.Tools))
 		resp, err := client.CreateChatCompletion(ctx, req)
 		if err != nil {
+			log.Printf("[tools] completion request failed iteration=%d model=%s err=%v", i+1, req.Model, err)
 			return "", err
 		}
 
 		if len(resp.Choices) == 0 {
+			log.Printf("[tools] completion returned no choices iteration=%d model=%s", i+1, req.Model)
 			return "", fmt.Errorf("chat completion returned no choices")
 		}
 

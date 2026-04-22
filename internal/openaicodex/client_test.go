@@ -170,10 +170,18 @@ func TestNormalizeSchemaForCodexAddsAdditionalPropertiesFalseRecursively(t *test
 	if normalized["additionalProperties"] != false {
 		t.Fatalf("expected root additionalProperties=false, got %#v", normalized["additionalProperties"])
 	}
+	required, ok := normalized["required"].([]any)
+	if !ok || len(required) != 2 {
+		t.Fatalf("expected root required for all properties, got %#v", normalized["required"])
+	}
 	properties := normalized["properties"].(map[string]any)
 	filter := properties["filter"].(map[string]any)
 	if filter["additionalProperties"] != false {
 		t.Fatalf("expected nested additionalProperties=false, got %#v", filter["additionalProperties"])
+	}
+	nestedRequired, ok := filter["required"].([]any)
+	if !ok || len(nestedRequired) != 1 || nestedRequired[0] != "name" {
+		t.Fatalf("expected nested required=[name], got %#v", filter["required"])
 	}
 }
 

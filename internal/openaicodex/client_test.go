@@ -1,6 +1,7 @@
 package openaicodex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -137,6 +138,76 @@ func TestNormalizeConfiguredModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientCreateChatCompletionOmitsUnsupportedSamplingParams(t *testing.T) {
+	var (
+		got     capturedRequest
+		rawBody []byte
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		rawBody = append([]byte(nil), body...)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_sampling\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+		_, _ = io.WriteString(w, "event: response.output_item.done\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]},\"output_index\":0,\"sequence_number\":1}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_sampling\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+	}))
+	defer server.Close()
+
+	codexHome := t.TempDir()
+	writeAuthFile(t, codexHome, "test-access-token")
+
+	client := NewClient(WithBaseURL(server.URL), WithCodexHome(codexHome))
+	temp := float32(0.3)
+	topP := float32(1.0)
+	_, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model:            "openai/gpt-5.4:online",
+		Temperature:      temp,
+		TopP:             topP,
+		FrequencyPenalty: 0.2,
+		PresencePenalty:  0.1,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleUser, Content: "hi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletion error: %v", err)
+	}
+	if _, ok := got.Tools[0]["type"]; !ok {
+		t.Fatalf("expected native web_search tool to still be present")
+	}
+	if bytes.Contains(rawBody, []byte(`"temperature"`)) {
+		t.Fatalf("expected codex payload to omit unsupported temperature: %s", string(rawBody))
+	}
+	if bytes.Contains(rawBody, []byte(`"top_p"`)) {
+		t.Fatalf("expected codex payload to omit unsupported top_p: %s", string(rawBody))
+	}
+	if bytes.Contains(rawBody, []byte(`"frequency_penalty"`)) {
+		t.Fatalf("expected codex payload to omit unsupported frequency_penalty: %s", string(rawBody))
+	}
+	if bytes.Contains(rawBody, []byte(`"presence_penalty"`)) {
+		t.Fatalf("expected codex payload to omit unsupported presence_penalty: %s", string(rawBody))
+	}
+}
+
+func mustJSONMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	body, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return body
 }
 
 func TestClientCreateChatCompletionAddsNativeWebSearchForOnlineModel(t *testing.T) {

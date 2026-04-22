@@ -325,18 +325,6 @@ func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexReques
 		Input:        inputs,
 		Tools:        tools,
 	}
-	if request.Temperature != 0 {
-		payload.Temperature = &request.Temperature
-	}
-	if request.TopP != 0 {
-		payload.TopP = &request.TopP
-	}
-	if request.FrequencyPenalty != 0 {
-		payload.FrequencyPenalty = &request.FrequencyPenalty
-	}
-	if request.PresencePenalty != 0 {
-		payload.PresencePenalty = &request.PresencePenalty
-	}
 	if request.MaxCompletionTokens > 0 {
 		payload.MaxOutputTokens = request.MaxCompletionTokens
 	} else if request.MaxTokens > 0 {

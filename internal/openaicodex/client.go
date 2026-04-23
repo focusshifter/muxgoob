@@ -242,40 +242,53 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 	log.Printf("[openaicodex] request configured_model=%s payload_model=%s input_items=%d tools=%d fallback=%t", request.Model, payload.Model, len(payload.Input), len(payload.Tools), c.fallbackClient != nil)
 
 	url := strings.TrimRight(c.baseURL, "/") + "/responses"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return openai.ChatCompletionResponse{}, fmt.Errorf("build codex request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	httpResp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		if c.fallbackClient != nil {
-			fallback := fallbackRequest(request)
-			log.Printf("[openaicodex] transport error, falling back to openrouter model=%s err=%v", fallback.Model, err)
-			resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
-			log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
-			return resp, fallbackErr
+	for attempt := 1; attempt <= 2; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return openai.ChatCompletionResponse{}, fmt.Errorf("build codex request: %w", err)
 		}
-		return openai.ChatCompletionResponse{}, fmt.Errorf("send codex request: %w", err)
-	}
-	defer httpResp.Body.Close()
+		httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
 
-	if httpResp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(httpResp.Body)
-		if c.fallbackClient != nil {
-			fallback := fallbackRequest(request)
-			log.Printf("[openaicodex] backend error status=%d, falling back to openrouter model=%s body=%s", httpResp.StatusCode, fallback.Model, strings.TrimSpace(string(respBody)))
-			resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
-			log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
-			return resp, fallbackErr
+		httpResp, err := c.httpClient.Do(httpReq)
+		if err != nil {
+			if c.fallbackClient != nil {
+				fallback := fallbackRequest(request)
+				log.Printf("[openaicodex] transport error, falling back to openrouter model=%s err=%v", fallback.Model, err)
+				resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
+				log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
+				return resp, fallbackErr
+			}
+			return openai.ChatCompletionResponse{}, fmt.Errorf("send codex request: %w", err)
 		}
-		return openai.ChatCompletionResponse{}, fmt.Errorf("codex responses error: status=%d body=%s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
+
+		if httpResp.StatusCode >= 400 {
+			respBody, _ := io.ReadAll(httpResp.Body)
+			httpResp.Body.Close()
+			if c.fallbackClient != nil {
+				fallback := fallbackRequest(request)
+				log.Printf("[openaicodex] backend error status=%d, falling back to openrouter model=%s body=%s", httpResp.StatusCode, fallback.Model, strings.TrimSpace(string(respBody)))
+				resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
+				log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(resp.Choices), fallbackErr)
+				return resp, fallbackErr
+			}
+			return openai.ChatCompletionResponse{}, fmt.Errorf("codex responses error: status=%d body=%s", httpResp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+
+		resp, parseErr := parseSSE(httpResp.Body)
+		httpResp.Body.Close()
+		if parseErr != nil {
+			return openai.ChatCompletionResponse{}, parseErr
+		}
+		if shouldRetryEmptyStop(resp) && attempt < 2 {
+			log.Printf("[openaicodex] empty stop response on attempt=%d, retrying once", attempt)
+			continue
+		}
+		return resp, nil
 	}
 
-	return parseSSE(httpResp.Body)
+	return openai.ChatCompletionResponse{}, fmt.Errorf("codex request exhausted retries")
 }
 
 func fallbackRequest(request openai.ChatCompletionRequest) openai.ChatCompletionRequest {
@@ -285,6 +298,20 @@ func fallbackRequest(request openai.ChatCompletionRequest) openai.ChatCompletion
 		clone.Model = modelInfo.OpenRouterModel
 	}
 	return clone
+}
+
+func shouldRetryEmptyStop(resp openai.ChatCompletionResponse) bool {
+	if len(resp.Choices) == 0 {
+		return false
+	}
+	choice := resp.Choices[0]
+	if choice.FinishReason != openai.FinishReasonStop {
+		return false
+	}
+	if strings.TrimSpace(choice.Message.Content) != "" {
+		return false
+	}
+	return len(choice.Message.ToolCalls) == 0
 }
 
 func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexRequest, error) {

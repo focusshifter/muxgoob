@@ -276,6 +276,44 @@ func TestClientCreateChatCompletionOmitsUnsupportedSamplingParams(t *testing.T) 
 	}
 }
 
+func TestClientCreateChatCompletionRetriesOnEmptyStopContent(t *testing.T) {
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_retry\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+		if attempt == 1 {
+			_, _ = io.WriteString(w, "event: response.completed\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_retry\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, "event: response.output_item.done\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"second try worked\"}]},\"output_index\":0,\"sequence_number\":1}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_retry\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+	}))
+	defer server.Close()
+
+	codexHome := t.TempDir()
+	writeAuthFile(t, codexHome, "test-access-token")
+
+	client := NewClient(WithBaseURL(server.URL), WithCodexHome(codexHome))
+	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model:    "openai/gpt-5.4:online",
+		Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletion error: %v", err)
+	}
+	if attempt != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempt)
+	}
+	if len(resp.Choices) != 1 || resp.Choices[0].Message.Content != "second try worked" {
+		t.Fatalf("expected retry to recover content, got %#v", resp)
+	}
+}
+
 func TestClientCreateChatCompletionAddsNativeWebSearchForOnlineModel(t *testing.T) {
 	var got capturedRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

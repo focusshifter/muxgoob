@@ -136,21 +136,31 @@ func maybeBuildImageInspectionContext(message *telebot.Message, question string)
 	forceInspect := shouldForceInspectRecentImage(question)
 	replyToPhoto := replyReferencesPhoto(sqliteDb, message)
 	forceFallback := shouldReturnMissingImageFallback(question, message, replyToPhoto)
+	allowSilentFallback := !forceInspect && hasAlternateNonImageContext(message, replyToPhoto)
 
 	target, err := resolveImageTarget(sqliteDb, message)
 	if err != nil {
 		return "", "", false
 	}
 	if target == nil {
+		if allowSilentFallback {
+			return "", "", false
+		}
 		if forceInspect || forceFallback {
 			return "", visionFallbackNoImageMsg, true
 		}
 		return "", "", false
 	}
 	if forceInspect && (message == nil || (message.ReplyTo == nil && message.Photo == nil)) && target.Source != imageSourceReply {
+		if allowSilentFallback {
+			return "", "", false
+		}
 		return "", visionFallbackNoImageMsg, true
 	}
 	if message != nil && message.ReplyTo != nil && replyToPhoto && target.Source != imageSourceReply {
+		if allowSilentFallback {
+			return "", "", false
+		}
 		return "", visionFallbackNoImageMsg, true
 	}
 	if !shouldUseImageInspection(question, message, target) {
@@ -159,10 +169,16 @@ func maybeBuildImageInspectionContext(message *telebot.Message, question string)
 
 	answer, err := inspectRecentImageQuestion(message, target)
 	if err != nil {
+		if allowSilentFallback {
+			return "", "", false
+		}
 		return "", visionFallbackNoImageMsg, true
 	}
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
+		if allowSilentFallback {
+			return "", "", false
+		}
 		return "", visionFallbackNoImageMsg, true
 	}
 

@@ -78,6 +78,24 @@ func shouldUseImageInspection(question string, message *telebot.Message, target 
 	return message != nil && message.Photo != nil
 }
 
+func hasAlternateNonImageContext(message *telebot.Message, replyToPhoto bool) bool {
+	if message == nil {
+		return false
+	}
+	if replyToPhoto {
+		return false
+	}
+	if strings.TrimSpace(message.Text) != "" || strings.TrimSpace(message.Caption) != "" {
+		if message.ReplyTo == nil {
+			return false
+		}
+		if strings.TrimSpace(message.ReplyTo.Text) != "" || strings.TrimSpace(message.ReplyTo.Caption) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveImageTarget(db *sql.DB, question *telebot.Message) (*ResolvedImageTarget, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database is not initialized")

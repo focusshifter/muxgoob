@@ -1166,6 +1166,126 @@ func TestMaybeBuildImageInspectionContextReturnsFallbackWhenNoTarget(t *testing.
 	}
 }
 
+func TestMaybeBuildImageInspectionContextSkipsFallbackWhenReplyHasTextContext(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	replyMessage := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Text: "https://open.spotify.com/track/abc123"}
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "повторюсь, кстати. оч хорошо и мрачно", ReplyTo: replyMessage}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected image context to be skipped silently when reply text provides alternate context, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	}
+}
+
+func TestMaybeBuildImageInspectionContextKeepsFallbackForExplicitImageQuestionOnTextReply(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	replyMessage := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Text: "https://open.spotify.com/track/abc123"}
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?", ReplyTo: replyMessage}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if !handled || context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
+		t.Fatalf("expected explicit no-image fallback for direct image question, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	}
+}
+
+func TestMaybeBuildImageInspectionContextKeepsFallbackForCaptionedPhotoReply(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	replyMessage := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Caption: "мрачный спотифай превью", Photo: &telebot.Photo{}}
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что там вообще?", ReplyTo: replyMessage}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if !handled || context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
+		t.Fatalf("expected explicit no-image fallback for captioned photo reply, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	}
+}
+
 func TestMaybeBuildImageInspectionContextUsesReplyToPhotoGenericPrompt(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

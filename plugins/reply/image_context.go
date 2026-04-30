@@ -105,6 +105,9 @@ func resolveImageTarget(db *sql.DB, question *telebot.Message) (*ResolvedImageTa
 	}
 
 	if question.ReplyTo != nil && question.ReplyTo.Chat != nil && question.ReplyTo.Chat.ID == question.Chat.ID {
+		if target := imageTargetFromPhoto(question.Chat.ID, question.ReplyTo.ID, question.ReplyTo.Photo, imageSourceReply); target != nil {
+			return target, nil
+		}
 		target, err := lookupImageTargetByMessageID(db, question.Chat.ID, question.ReplyTo.ID, imageSourceReply)
 		if err != nil {
 			return nil, err
@@ -114,7 +117,25 @@ func resolveImageTarget(db *sql.DB, question *telebot.Message) (*ResolvedImageTa
 		}
 	}
 
+	if target := imageTargetFromPhoto(question.Chat.ID, question.ID, question.Photo, imageSourceLatest); target != nil {
+		return target, nil
+	}
+
 	return lookupLatestImageTarget(db, question.Chat.ID)
+}
+
+func imageTargetFromPhoto(chatID int64, messageID int, photo *telebot.Photo, source string) *ResolvedImageTarget {
+	if photo == nil || strings.TrimSpace(photo.FileID) == "" {
+		return nil
+	}
+	return &ResolvedImageTarget{
+		ChatID:    chatID,
+		MessageID: messageID,
+		FileID:    photo.FileID,
+		Source:    source,
+		Width:     photo.Width,
+		Height:    photo.Height,
+	}
 }
 
 func lookupImageTargetByMessageID(db *sql.DB, chatID int64, messageID int, source string) (*ResolvedImageTarget, error) {

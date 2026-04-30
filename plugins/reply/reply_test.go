@@ -816,6 +816,59 @@ func TestResolveImageTargetPrefersReplyPhoto(t *testing.T) {
 	}
 }
 
+func TestResolveImageTargetUsesReplyToPhotoPayloadWhenPhotoIsNotPersisted(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	chatID := int64(123)
+	question := &telebot.Message{
+		ID:     11,
+		Chat:   &telebot.Chat{ID: chatID},
+		Sender: &telebot.User{Username: "bob"},
+		Text:   "губи, что на картинке?",
+		ReplyTo: &telebot.Message{
+			ID:    10,
+			Chat:  &telebot.Chat{ID: chatID},
+			Photo: &telebot.Photo{File: telebot.File{FileID: "reply-payload-photo"}, Width: 640, Height: 480},
+		},
+	}
+
+	got, err := resolveImageTarget(mockDB, question)
+	if err != nil {
+		t.Fatalf("resolveImageTarget returned error: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected image target, got nil")
+	}
+	if got.FileID != "reply-payload-photo" || got.MessageID != 10 || got.Source != imageSourceReply || got.Width != 640 || got.Height != 480 {
+		t.Fatalf("unexpected target: %+v", got)
+	}
+}
+
 func TestResolveImageTargetFallsBackToLatestRecentPhoto(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

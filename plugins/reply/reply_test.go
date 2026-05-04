@@ -985,10 +985,10 @@ func TestShouldForceInspectRecentImage(t *testing.T) {
 		want     bool
 	}{
 		{name: "russian image question", question: "губи, что на картинке?", want: true},
-		{name: "meme question", question: "gooby, explain meme", want: true},
-		{name: "casual what there", question: "губи, что там вообще?", want: true},
-		{name: "non-image retrospective", question: "обсуждали ли мы spotify раньше?", want: false},
-		{name: "generic prompt", question: "gooby, придумай шутку", want: false},
+		{name: "meme question", question: "губи, объясни мем", want: true},
+		{name: "casual what there", question: "губи, что там?", want: true},
+		{name: "recent images should use metadata history", question: "губи, что было на последних картинках?", want: false},
+		{name: "non-image retrospective", question: "губи, что мы обсуждали вчера?", want: false},
 	}
 
 	for _, tc := range testCases {
@@ -1216,6 +1216,21 @@ func TestMaybeBuildImageInspectionContextReturnsFallbackWhenNoTarget(t *testing.
 	}
 	if context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
 		t.Fatalf("expected no-image fallback, got context=%q fallback=%q", context, fallback)
+	}
+}
+
+func TestMaybeBuildImageInspectionContextSkipsFallbackForRecentImagesMetadataQuestion(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что было на последних картинках?"}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected recent image-history question to continue to normal chat flow, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
 }
 

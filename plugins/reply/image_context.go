@@ -31,12 +31,30 @@ var imageQuestionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(найс картинка|nice picture|nice image)`),
 }
 
+var imageMetadataHistoryPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(последн|недавн|выше|рядом|в чате).*(картинк|фото|фотк|пикч|изображен|image|picture|photo)`),
+	regexp.MustCompile(`(?i)(картинк|фото|фотк|пикч|изображен|image|picture|photo).*(последн|недавн|выше|рядом|в чате)`),
+}
+
 func shouldForceInspectRecentImage(question string) bool {
+	question = strings.TrimSpace(question)
+	if question == "" || shouldUseImageMetadataHistory(question) {
+		return false
+	}
+	for _, pattern := range imageQuestionPatterns {
+		if pattern.MatchString(question) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldUseImageMetadataHistory(question string) bool {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return false
 	}
-	for _, pattern := range imageQuestionPatterns {
+	for _, pattern := range imageMetadataHistoryPatterns {
 		if pattern.MatchString(question) {
 			return true
 		}

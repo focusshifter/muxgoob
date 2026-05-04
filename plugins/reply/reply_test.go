@@ -1562,3 +1562,95 @@ func TestFormatChatGPTRequestLogIncludesProvider(t *testing.T) {
 		t.Fatalf("expected remaining fields in log line, got %q", got)
 	}
 }
+
+func TestBuildNoAssPrefillIncludesImageMetadataForPhotoMessages(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`CREATE TABLE media_metadata (
+		message_id INTEGER NOT NULL,
+		chat_id INTEGER NOT NULL,
+		media_type TEXT NOT NULL,
+		file_id TEXT NOT NULL,
+		file_unique_id TEXT,
+		model TEXT NOT NULL,
+		description TEXT NOT NULL,
+		visible_text TEXT,
+		tags TEXT,
+		status TEXT NOT NULL DEFAULT 'done',
+		error TEXT,
+		created_at INTEGER DEFAULT 0,
+		updated_at INTEGER DEFAULT 0,
+		PRIMARY KEY (chat_id, message_id, file_id)
+	)`)
+	if err != nil {
+		t.Fatalf("failed to create media_metadata: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO media_metadata (message_id, chat_id, media_type, file_id, model, description, visible_text, tags, status) VALUES (10, 123, 'photo', 'file-cat', 'test-model', 'Шесть пукающих котов в мемном альбоме', '', 'кот,мем', 'done')`)
+	if err != nil {
+		t.Fatalf("failed to insert media metadata: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	history := []telebot.Message{{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{ID: 1, Username: "alice"}, Caption: "котики"}}
+	currentMessage := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{ID: 2, Username: "bob"}, Text: "губи, что там было?"}
+
+	prefill := buildNoAssPrefill(history, currentMessage.Text, "", "", 99, currentMessage, nil)
+	if !strings.Contains(prefill, "{{user}} (alice): котики") {
+		t.Fatalf("expected captioned photo message in prefill, got: %s", prefill)
+	}
+	if !strings.Contains(prefill, "Image metadata: Шесть пукающих котов") {
+		t.Fatalf("expected image metadata in prefill, got: %s", prefill)
+	}
+}
+
+func TestDescribeAndStoreImageMetadataPersistsVisionDescription(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`CREATE TABLE media_metadata (
+		message_id INTEGER NOT NULL,
+		chat_id INTEGER NOT NULL,
+		media_type TEXT NOT NULL,
+		file_id TEXT NOT NULL,
+		file_unique_id TEXT,
+		model TEXT NOT NULL,
+		description TEXT NOT NULL,
+		visible_text TEXT,
+		tags TEXT,
+		status TEXT NOT NULL DEFAULT 'done',
+		error TEXT,
+		created_at INTEGER DEFAULT 0,
+		updated_at INTEGER DEFAULT 0,
+		PRIMARY KEY (chat_id, message_id, file_id)
+	)`)
+	if err != nil {
+		t.Fatalf("failed to create media_metadata: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	originalDescribe := describeImageForMetadata
+	describeImageForMetadata = func(message *telebot.Message, target *ResolvedImageTarget) (ImageMetadataDescription, error) {
+		return ImageMetadataDescription{Model: "test-model", Description: "рыжий кот выглядит виноватым после пука", Tags: []string{"кот", "мем"}}, nil
+	}
+	defer func() { describeImageForMetadata = originalDescribe }()
+
+	message := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{ID: 1, Username: "alice"}, Photo: &telebot.Photo{File: telebot.File{FileID: "file-cat"}, Width: 800, Height: 600}}
+	if err := describeAndStoreImageMetadata(message); err != nil {
+		t.Fatalf("describeAndStoreImageMetadata returned error: %v", err)
+	}
+
+	var description, tags, model string
+	if err := mockDB.QueryRow(`SELECT description, tags, model FROM media_metadata WHERE chat_id = 123 AND message_id = 10 AND file_id = 'file-cat'`).Scan(&description, &tags, &model); err != nil {
+		t.Fatalf("failed to read stored metadata: %v", err)
+	}
+	if description != "рыжий кот выглядит виноватым после пука" || model != "test-model" || !strings.Contains(tags, "кот") {
+		t.Fatalf("unexpected metadata description=%q model=%q tags=%q", description, model, tags)
+	}
+}

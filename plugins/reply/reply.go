@@ -131,6 +131,8 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 		return
 	}
 
+	maybeQueueImageMetadata(message)
+
 	// Check for !reply command
 	messageText := messagePromptText(message)
 	if messageText != "" {
@@ -724,7 +726,17 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 		if currentMessage != nil && message.ID == currentMessage.ID {
 			continue
 		}
-		if strings.TrimSpace(message.Text) == "" {
+		messageText := strings.TrimSpace(message.Text)
+		if messageText == "" {
+			messageText = strings.TrimSpace(message.Caption)
+		}
+		if metadata := strings.TrimSpace(imageMetadataForMessage(message)); metadata != "" {
+			if messageText != "" {
+				messageText += "\n"
+			}
+			messageText += "Image metadata: " + metadata
+		}
+		if messageText == "" {
 			continue
 		}
 		name := message.Sender.Username
@@ -735,7 +747,7 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 		if botID != 0 && message.Sender.ID == botID {
 			role = "{{char}}"
 		}
-		prefill.WriteString(fmt.Sprintf("%s (%s): %s\n", role, name, message.Text))
+		prefill.WriteString(fmt.Sprintf("%s (%s): %s\n", role, name, messageText))
 	}
 
 	currentName := ""

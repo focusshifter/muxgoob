@@ -150,6 +150,24 @@ func Initialize() {
 			FOREIGN KEY (message_id, chat_id) REFERENCES messages(id, chat_id)
 		);
 
+		CREATE TABLE IF NOT EXISTS media_metadata (
+			message_id INTEGER NOT NULL,
+			chat_id INTEGER NOT NULL,
+			media_type TEXT NOT NULL,
+			file_id TEXT NOT NULL,
+			file_unique_id TEXT,
+			model TEXT NOT NULL,
+			description TEXT NOT NULL,
+			visible_text TEXT,
+			tags TEXT,
+			status TEXT NOT NULL DEFAULT 'done',
+			error TEXT,
+			created_at INTEGER DEFAULT (strftime('%s', 'now')),
+			updated_at INTEGER DEFAULT (strftime('%s', 'now')),
+			PRIMARY KEY (chat_id, message_id, file_id),
+			FOREIGN KEY (message_id, chat_id) REFERENCES messages(id, chat_id)
+		);
+
 		-- Plugin-specific tables
 		CREATE TABLE IF NOT EXISTS birthday_notifications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,6 +231,7 @@ func Initialize() {
 
 		CREATE INDEX IF NOT EXISTS idx_messages_unixtime ON messages(unixtime);
 		CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+		CREATE INDEX IF NOT EXISTS idx_media_metadata_chat ON media_metadata(chat_id, status);
 		CREATE INDEX IF NOT EXISTS idx_messages_media_group ON messages(media_group_id);
 		CREATE INDEX IF NOT EXISTS idx_media_items_file_id ON media_items(file_id);
 		CREATE INDEX IF NOT EXISTS idx_dupe_links_url ON dupe_links(url);

@@ -84,6 +84,8 @@ type Configuration struct {
 	AiProvider                 string                 `yaml:"ai_provider"`
 	AiModel                    string                 `yaml:"ai_model"`
 	ImageAiModel               string                 `yaml:"image_ai_model"`
+	ImageMetadataEnabled       *bool                  `yaml:"image_metadata_enabled"`
+	ImageMetadataMaxPerMinute  int                    `yaml:"image_metadata_max_per_minute"`
 	SelfPromptConfig           SelfPromptConfig       `yaml:"selfprompt"`
 	SpotifyConfig              SpotifyConfig          `yaml:"spotify"`
 	SpotifyReviewPrompt        string                 `yaml:"spotify_review_prompt"`

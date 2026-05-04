@@ -157,3 +157,52 @@ func TestSearchMessagesToolFTSFindsOlderExactPhraseBeyondRecentCandidateWindow(t
 		t.Fatalf("expected older exact phrase match first, got %q", payload.Results[0].Text)
 	}
 }
+
+func TestSearchMessagesToolFindsImageMetadataDescriptions(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	if _, err := db.Exec(`CREATE TABLE media_metadata (
+		message_id INTEGER NOT NULL,
+		chat_id INTEGER NOT NULL,
+		media_type TEXT NOT NULL,
+		file_id TEXT NOT NULL,
+		model TEXT NOT NULL,
+		description TEXT NOT NULL,
+		visible_text TEXT,
+		tags TEXT,
+		status TEXT NOT NULL DEFAULT 'done',
+		error TEXT,
+		created_at INTEGER DEFAULT 0,
+		updated_at INTEGER DEFAULT 0,
+		PRIMARY KEY (chat_id, message_id, file_id)
+	)`); err != nil {
+		t.Fatalf("failed to create media_metadata: %v", err)
+	}
+
+	insertUser(t, db, 1, "alice", "Alice", "One")
+	now := time.Now().Unix()
+	insertMessage(t, db, 50, 100, 1, now-10, "")
+	if _, err := db.Exec(`INSERT INTO media_metadata (message_id, chat_id, media_type, file_id, model, description, visible_text, tags, status) VALUES (?, ?, 'photo', 'file-cat', 'test-model', ?, '', 'кот,мем', 'done')`, 50, 100, "Шесть картинок пукающих котов, мемный альбом про виноватых котиков"); err != nil {
+		t.Fatalf("failed to insert metadata: %v", err)
+	}
+
+	tool := NewSearchMessagesTool(db, 100, 0)
+	result, err := tool.Execute(context.Background(), `{"query":"пукающих котов","limit":5}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	var payload searchMessagesResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	if payload.Count != 1 {
+		t.Fatalf("expected one image metadata result, got %d: %s", payload.Count, result)
+	}
+	if !strings.Contains(payload.Results[0].Text, "[image]") || !strings.Contains(payload.Results[0].Text, "пукающих котов") {
+		t.Fatalf("expected image metadata in search result text, got %q", payload.Results[0].Text)
+	}
+}

@@ -147,15 +147,19 @@ func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string
 	}
 
 	results, err := searchMessagesWithFTS(db, chatID, excludeMessageID, query, variants, patterns, limit)
-	if err == nil {
-		return results, nil
+	if err != nil {
+		fallbackResults, fallbackErr := searchMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, limit)
+		if fallbackErr != nil {
+			return nil, err
+		}
+		results = fallbackResults
 	}
 
-	fallbackResults, fallbackErr := searchMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, limit)
-	if fallbackErr != nil {
-		return nil, err
+	metadataResults, metadataErr := searchImageMetadataWithLike(db, chatID, excludeMessageID, query, variants, patterns, limit)
+	if metadataErr == nil && len(metadataResults) > 0 {
+		results = mergeSearchResults(results, metadataResults, limit)
 	}
-	return fallbackResults, nil
+	return results, nil
 }
 
 func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
@@ -234,6 +238,68 @@ func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, quer
 		return nil, err
 	}
 	return finalizeRankedSearchResults(ranked, limit), nil
+}
+
+func searchImageMetadataWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
+	whereParts := make([]string, 0, len(patterns))
+	args := make([]any, 0, len(patterns)+3)
+	args = append(args, chatID)
+	if excludeMessageID > 0 {
+		args = append(args, excludeMessageID)
+	}
+	for _, pattern := range patterns {
+		whereParts = append(whereParts, "LOWER(COALESCE(mm.description, '') || ' ' || COALESCE(mm.visible_text, '') || ' ' || COALESCE(mm.tags, '')) LIKE ?")
+		args = append(args, "%"+pattern+"%")
+	}
+	args = append(args, searchCandidateLimit)
+
+	queryFilter := "WHERE mm.chat_id = ? AND mm.status = 'done'"
+	if excludeMessageID > 0 {
+		queryFilter += " AND mm.message_id != ?"
+	}
+
+	rows, err := db.Query(`
+		SELECT u.username, u.first_name, u.last_name, m.sender_id, m.unixtime,
+		       '[image] ' || TRIM(COALESCE(mm.description, '') || CASE WHEN COALESCE(mm.visible_text, '') != '' THEN ' Visible text: ' || mm.visible_text ELSE '' END)
+		FROM media_metadata mm
+		JOIN messages m ON m.chat_id = mm.chat_id AND m.id = mm.message_id
+		LEFT JOIN users u ON u.id = m.sender_id
+		`+queryFilter+`
+		  AND (`+strings.Join(whereParts, " OR ")+`)
+		ORDER BY m.unixtime DESC
+		LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("searching image metadata: %w", err)
+	}
+	defer rows.Close()
+
+	ranked, err := collectRankedSearchResults(rows, query, variants, patterns)
+	if err != nil {
+		return nil, err
+	}
+	return finalizeRankedSearchResults(ranked, limit), nil
+}
+
+func mergeSearchResults(primary, extra []searchMessageResult, limit int) []searchMessageResult {
+	merged := make([]searchMessageResult, 0, len(primary)+len(extra))
+	seen := make(map[string]struct{})
+	appendUnique := func(items []searchMessageResult) {
+		for _, item := range items {
+			key := fmt.Sprintf("%d:%s:%s", item.Timestamp, item.Sender, item.Text)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, item)
+		}
+	}
+	appendUnique(primary)
+	appendUnique(extra)
+	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Timestamp > merged[j].Timestamp })
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
 }
 
 func collectRankedSearchResults(rows *sql.Rows, query string, variants, patterns []string) ([]rankedSearchMessageResult, error) {

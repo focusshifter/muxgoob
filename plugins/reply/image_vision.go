@@ -22,7 +22,6 @@ import (
 const (
 	defaultImageAiModel         = "google/gemini-3.1-flash-lite-preview"
 	maxVisionImageDimension     = 768
-	defaultVisionMaxTokens      = 180
 	imageInspectionContextIntro = "Контекст по картинке:"
 )
 
@@ -99,24 +98,7 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 		question = "Что на этой картинке?"
 	}
 
-	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
-		Model:       model,
-		Temperature: 0.1,
-		MaxTokens:   defaultVisionMaxTokens,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: "You answer brief conversationally in Russian. Answer the user's question about the image or meme in 1-3 short sentences. Mention visible text only if relevant. Do not use markdown.",
-			},
-			{
-				Role: openai.ChatMessageRoleUser,
-				MultiContent: []openai.ChatMessagePart{
-					{Type: openai.ChatMessagePartTypeText, Text: question},
-					{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: dataURL, Detail: openai.ImageURLDetailLow}},
-				},
-			},
-		},
-	})
+	resp, err := client.CreateChatCompletion(context.Background(), buildImageVisionCompletionRequest(model, dataURL, question))
 	if err != nil {
 		return "", err
 	}
@@ -128,6 +110,26 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 		return "", fmt.Errorf("vision completion returned empty content")
 	}
 	return answer, nil
+}
+
+func buildImageVisionCompletionRequest(model, dataURL, question string) openai.ChatCompletionRequest {
+	return openai.ChatCompletionRequest{
+		Model:       model,
+		Temperature: 0.1,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: "You answer conversationally in Russian. Answer the user's question about the image or meme with enough detail to avoid truncating useful visual information. Mention visible text when relevant. Do not use markdown.",
+			},
+			{
+				Role: openai.ChatMessageRoleUser,
+				MultiContent: []openai.ChatMessagePart{
+					{Type: openai.ChatMessagePartTypeText, Text: question},
+					{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: dataURL, Detail: openai.ImageURLDetailLow}},
+				},
+			},
+		},
+	}
 }
 
 func maybeBuildImageInspectionContext(message *telebot.Message, question string) (string, string, bool) {

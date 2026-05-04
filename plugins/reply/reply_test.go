@@ -1646,6 +1646,20 @@ func TestBuildNoAssPrefillIncludesImageMetadataForPhotoMessages(t *testing.T) {
 	}
 }
 
+func TestBuildImageVisionCompletionRequestDoesNotCapOutputTokens(t *testing.T) {
+	req := buildImageVisionCompletionRequest("test-model", "data:image/jpeg;base64,abc", "что на картинке?")
+	if req.MaxTokens != 0 {
+		t.Fatalf("expected no max token cap for query-time image inspection, got %d", req.MaxTokens)
+	}
+}
+
+func TestBuildImageMetadataCompletionRequestDoesNotCapOutputTokens(t *testing.T) {
+	req := buildImageMetadataCompletionRequest("test-model", "data:image/jpeg;base64,abc")
+	if req.MaxTokens != 0 {
+		t.Fatalf("expected no max token cap for image metadata enrichment, got %d", req.MaxTokens)
+	}
+}
+
 func TestDescribeAndStoreImageMetadataPersistsVisionDescription(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

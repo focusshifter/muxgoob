@@ -17,7 +17,6 @@ import (
 	"github.com/focusshifter/muxgoob/registry"
 )
 
-const defaultImageMetadataMaxTokens = 220
 const defaultImageMetadataMaxPerMinute = 6
 
 type ImageMetadataDescription struct {
@@ -180,24 +179,7 @@ func realDescribeImageForMetadata(message *telebot.Message, target *ResolvedImag
 	config.BaseURL = "https://openrouter.ai/api/v1"
 	client := openai.NewClientWithConfig(config)
 
-	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
-		Model:       model,
-		Temperature: 0.1,
-		MaxTokens:   defaultImageMetadataMaxTokens,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: "Describe Telegram images for chat-history retrieval. Return compact Russian JSON with keys: description, visible_text, meme_or_joke, tags. Be factual. Mention visible text exactly. Do not invent context outside the image.",
-			},
-			{
-				Role: openai.ChatMessageRoleUser,
-				MultiContent: []openai.ChatMessagePart{
-					{Type: openai.ChatMessagePartTypeText, Text: "Опиши эту картинку как метадату сообщения для поиска и будущего контекста."},
-					{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: dataURL, Detail: openai.ImageURLDetailLow}},
-				},
-			},
-		},
-	})
+	resp, err := client.CreateChatCompletion(context.Background(), buildImageMetadataCompletionRequest(model, dataURL))
 	if err != nil {
 		return ImageMetadataDescription{}, err
 	}
@@ -215,6 +197,26 @@ func realDescribeImageForMetadata(message *telebot.Message, target *ResolvedImag
 	}
 	metadata.Model = model
 	return metadata, nil
+}
+
+func buildImageMetadataCompletionRequest(model, dataURL string) openai.ChatCompletionRequest {
+	return openai.ChatCompletionRequest{
+		Model:       model,
+		Temperature: 0.1,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: "Describe Telegram images for chat-history retrieval. Return Russian JSON with keys: description, visible_text, meme_or_joke, tags. Be factual and detailed enough to preserve useful visual information for future search. Mention visible text exactly. Do not invent context outside the image.",
+			},
+			{
+				Role: openai.ChatMessageRoleUser,
+				MultiContent: []openai.ChatMessagePart{
+					{Type: openai.ChatMessagePartTypeText, Text: "Опиши эту картинку как метадату сообщения для поиска и будущего контекста."},
+					{Type: openai.ChatMessagePartTypeImageURL, ImageURL: &openai.ChatMessageImageURL{URL: dataURL, Detail: openai.ImageURLDetailLow}},
+				},
+			},
+		},
+	}
 }
 
 func stripJSONFence(value string) string {

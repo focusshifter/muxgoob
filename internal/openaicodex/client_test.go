@@ -215,6 +215,89 @@ func TestClientFallsBackToOpenRouterOnCodexError(t *testing.T) {
 	}
 }
 
+func TestClientRefreshesCodexTokenOnUnauthorized(t *testing.T) {
+	codexHome := t.TempDir()
+	writeAuthFile(t, codexHome, "expired-access-token")
+
+	var responsesCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/responses":
+			responsesCalls++
+			if responsesCalls == 1 {
+				if auth := r.Header.Get("Authorization"); auth != "Bearer expired-access-token" {
+					t.Fatalf("unexpected first auth header: %q", auth)
+				}
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, `{"error":{"message":"Provided authentication token is expired.","code":"token_expired"}}`)
+				return
+			}
+			if auth := r.Header.Get("Authorization"); auth != "Bearer refreshed-access-token" {
+				t.Fatalf("unexpected refreshed auth header: %q", auth)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: response.created\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_refreshed\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+			_, _ = io.WriteString(w, "event: response.output_item.done\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"refreshed ok\"}]},\"output_index\":0,\"sequence_number\":1}\n\n")
+			_, _ = io.WriteString(w, "event: response.completed\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_refreshed\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+		case "/oauth/token":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse refresh form: %v", err)
+			}
+			if got := r.Form.Get("grant_type"); got != "refresh_token" {
+				t.Fatalf("unexpected grant_type: %q", got)
+			}
+			if got := r.Form.Get("refresh_token"); got != "refresh-token" {
+				t.Fatalf("unexpected refresh_token: %q", got)
+			}
+			if got := r.Form.Get("client_id"); got != codexClientID {
+				t.Fatalf("unexpected client_id: %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"access_token":"refreshed-access-token","refresh_token":"refreshed-refresh-token"}`)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(WithBaseURL(server.URL), WithAuthBaseURL(server.URL), WithCodexHome(codexHome))
+	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model:    "gpt-5.4",
+		Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletion error: %v", err)
+	}
+	if responsesCalls != 2 {
+		t.Fatalf("expected 2 codex response calls, got %d", responsesCalls)
+	}
+	if got := resp.Choices[0].Message.Content; got != "refreshed ok" {
+		t.Fatalf("unexpected response content: %q", got)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(codexHome, "auth.json"))
+	if err != nil {
+		t.Fatalf("read updated auth: %v", err)
+	}
+	var auth map[string]any
+	if err := json.Unmarshal(raw, &auth); err != nil {
+		t.Fatalf("parse updated auth: %v", err)
+	}
+	tokens := auth["tokens"].(map[string]any)
+	if tokens["access_token"] != "refreshed-access-token" {
+		t.Fatalf("expected persisted refreshed access token, got %#v", tokens["access_token"])
+	}
+	if tokens["refresh_token"] != "refreshed-refresh-token" {
+		t.Fatalf("expected persisted refreshed refresh token, got %#v", tokens["refresh_token"])
+	}
+	if _, ok := auth["last_refresh"].(string); !ok {
+		t.Fatalf("expected last_refresh to be persisted, got %#v", auth["last_refresh"])
+	}
+}
+
 func TestClientCreateChatCompletionOmitsUnsupportedSamplingParams(t *testing.T) {
 	var (
 		got     capturedRequest

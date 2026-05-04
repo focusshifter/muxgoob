@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,8 @@ import (
 
 const (
 	defaultBaseURL      = "https://chatgpt.com/backend-api/codex"
+	defaultAuthBaseURL  = "https://auth.openai.com"
+	codexClientID       = "app_EMoamEEZ73f0CkXaXp7hrann"
 	defaultInstructions = "You are a helpful assistant."
 )
 
@@ -31,6 +34,7 @@ type ChatCompletionCreator interface {
 
 type Client struct {
 	baseURL        string
+	authBaseURL    string
 	httpClient     *http.Client
 	codexHome      string
 	fallbackClient ChatCompletionCreator
@@ -38,7 +42,8 @@ type Client struct {
 
 func NewClient(opts ...Option) *Client {
 	client := &Client{
-		baseURL: defaultBaseURL,
+		baseURL:     defaultBaseURL,
+		authBaseURL: defaultAuthBaseURL,
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
@@ -54,6 +59,12 @@ func NewClient(opts ...Option) *Client {
 func WithBaseURL(baseURL string) Option {
 	return func(c *Client) {
 		c.baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	}
+}
+
+func WithAuthBaseURL(authBaseURL string) Option {
+	return func(c *Client) {
+		c.authBaseURL = strings.TrimRight(strings.TrimSpace(authBaseURL), "/")
 	}
 }
 
@@ -83,6 +94,11 @@ type codexAuthFile struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
 	} `json:"tokens"`
+}
+
+type codexTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type codexRequest struct {
@@ -223,7 +239,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 		return openai.ChatCompletionResponse{}, err
 	}
 
-	accessToken, err := c.loadAccessToken()
+	authPath, accessToken, err := c.loadAuthFile()
 	if err != nil {
 		if c.fallbackClient != nil {
 			fallback := fallbackRequest(request)
@@ -266,6 +282,15 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 		if httpResp.StatusCode >= 400 {
 			respBody, _ := io.ReadAll(httpResp.Body)
 			httpResp.Body.Close()
+			if httpResp.StatusCode == http.StatusUnauthorized && attempt == 1 {
+				refreshedToken, refreshErr := c.refreshAccessToken(ctx, authPath)
+				if refreshErr == nil {
+					log.Printf("[openaicodex] refreshed expired codex token")
+					accessToken = refreshedToken
+					continue
+				}
+				log.Printf("[openaicodex] token refresh failed: %v", refreshErr)
+			}
 			if c.fallbackClient != nil {
 				fallback := fallbackRequest(request)
 				log.Printf("[openaicodex] backend error status=%d, falling back to openrouter model=%s body=%s", httpResp.StatusCode, fallback.Model, strings.TrimSpace(string(respBody)))
@@ -555,6 +580,94 @@ func (c *Client) loadAuthFile() (string, string, error) {
 		return authPath, "", fmt.Errorf("codex auth file %s does not contain an access token", authPath)
 	}
 	return authPath, accessToken, nil
+}
+
+func (c *Client) refreshAccessToken(ctx context.Context, authPath string) (string, error) {
+	raw, err := os.ReadFile(authPath)
+	if err != nil {
+		return "", fmt.Errorf("read codex auth file %s: %w", authPath, err)
+	}
+	var auth codexAuthFile
+	if err := json.Unmarshal(raw, &auth); err != nil {
+		return "", fmt.Errorf("parse codex auth file %s: %w", authPath, err)
+	}
+	refreshToken := strings.TrimSpace(auth.Tokens.RefreshToken)
+	if refreshToken == "" {
+		return "", fmt.Errorf("codex auth file %s does not contain a refresh token", authPath)
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	form.Set("client_id", codexClientID)
+
+	refreshURL := strings.TrimRight(c.authBaseURL, "/") + "/oauth/token"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, refreshURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("build codex token refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("send codex token refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read codex token refresh response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("codex token refresh error: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var tokenResponse codexTokenResponse
+	if err := json.Unmarshal(respBody, &tokenResponse); err != nil {
+		return "", fmt.Errorf("parse codex token refresh response: %w", err)
+	}
+	accessToken := strings.TrimSpace(tokenResponse.AccessToken)
+	if accessToken == "" {
+		return "", fmt.Errorf("codex token refresh response did not contain an access token")
+	}
+	newRefreshToken := strings.TrimSpace(tokenResponse.RefreshToken)
+	if newRefreshToken == "" {
+		newRefreshToken = refreshToken
+	}
+	if err := persistRefreshedAuthFile(authPath, raw, accessToken, newRefreshToken); err != nil {
+		return "", err
+	}
+	return accessToken, nil
+}
+
+func persistRefreshedAuthFile(authPath string, raw []byte, accessToken string, refreshToken string) error {
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("parse codex auth file %s: %w", authPath, err)
+	}
+	tokens, _ := payload["tokens"].(map[string]any)
+	if tokens == nil {
+		tokens = map[string]any{}
+		payload["tokens"] = tokens
+	}
+	tokens["access_token"] = accessToken
+	tokens["refresh_token"] = refreshToken
+	payload["last_refresh"] = time.Now().UTC().Format(time.RFC3339Nano)
+
+	updated, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal codex auth file %s: %w", authPath, err)
+	}
+	updated = append(updated, '\n')
+	info, err := os.Stat(authPath)
+	mode := os.FileMode(0o600)
+	if err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := os.WriteFile(authPath, updated, mode); err != nil {
+		return fmt.Errorf("write codex auth file %s: %w", authPath, err)
+	}
+	return nil
 }
 
 func parseSSE(body io.Reader) (openai.ChatCompletionResponse, error) {

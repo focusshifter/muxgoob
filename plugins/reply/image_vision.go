@@ -23,7 +23,6 @@ const (
 	defaultImageAiModel         = "google/gemini-3.1-flash-lite-preview"
 	maxVisionImageDimension     = 768
 	defaultVisionMaxTokens      = 180
-	visionFallbackNoImageMsg    = "Не вижу рядом картинки — реплайнись на неё или закинь ещё раз."
 	imageInspectionContextIntro = "Контекст по картинке:"
 )
 
@@ -133,35 +132,17 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 
 func maybeBuildImageInspectionContext(message *telebot.Message, question string) (string, string, bool) {
 	question = strings.TrimSpace(question)
-	forceInspect := shouldForceInspectRecentImage(question)
 	replyToPhoto := replyReferencesPhoto(sqliteDb, message)
-	forceFallback := shouldReturnMissingImageFallback(question, message, replyToPhoto)
-	allowSilentFallback := !forceInspect && hasAlternateNonImageContext(message, replyToPhoto)
 
 	target, err := resolveImageTarget(sqliteDb, message)
 	if err != nil {
 		return "", "", false
 	}
 	if target == nil {
-		if allowSilentFallback {
-			return "", "", false
-		}
-		if forceInspect || forceFallback {
-			return "", visionFallbackNoImageMsg, true
-		}
 		return "", "", false
 	}
-	if forceInspect && (message == nil || (message.ReplyTo == nil && message.Photo == nil)) && target.Source != imageSourceReply {
-		if allowSilentFallback {
-			return "", "", false
-		}
-		return "", visionFallbackNoImageMsg, true
-	}
 	if message != nil && message.ReplyTo != nil && replyToPhoto && target.Source != imageSourceReply {
-		if allowSilentFallback {
-			return "", "", false
-		}
-		return "", visionFallbackNoImageMsg, true
+		return "", "", false
 	}
 	if !shouldUseImageInspection(question, message, target) {
 		return "", "", false
@@ -169,17 +150,11 @@ func maybeBuildImageInspectionContext(message *telebot.Message, question string)
 
 	answer, err := inspectRecentImageQuestion(message, target)
 	if err != nil {
-		if allowSilentFallback {
-			return "", "", false
-		}
-		return "", visionFallbackNoImageMsg, true
+		return "", "", false
 	}
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
-		if allowSilentFallback {
-			return "", "", false
-		}
-		return "", visionFallbackNoImageMsg, true
+		return "", "", false
 	}
 
 	context := strings.TrimSpace(strings.Join([]string{

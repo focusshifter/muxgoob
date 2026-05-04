@@ -978,29 +978,6 @@ func TestResolveImageTargetReturnsNilWhenNoPhotoFound(t *testing.T) {
 	}
 }
 
-func TestShouldForceInspectRecentImage(t *testing.T) {
-	testCases := []struct {
-		name     string
-		question string
-		want     bool
-	}{
-		{name: "russian image question", question: "губи, что на картинке?", want: true},
-		{name: "meme question", question: "губи, объясни мем", want: true},
-		{name: "casual what there", question: "губи, что там?", want: true},
-		{name: "recent images should use metadata history", question: "губи, что было на последних картинках?", want: false},
-		{name: "non-image retrospective", question: "губи, что мы обсуждали вчера?", want: false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := shouldForceInspectRecentImage(tc.question)
-			if got != tc.want {
-				t.Fatalf("shouldForceInspectRecentImage(%q) = %v, want %v", tc.question, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestShouldUseImageInspection(t *testing.T) {
 	replyTarget := &ResolvedImageTarget{ChatID: 123, MessageID: 10, FileID: "photo-reply", Source: imageSourceReply}
 	latestTarget := &ResolvedImageTarget{ChatID: 123, MessageID: 11, FileID: "photo-latest", Source: imageSourceLatest}
@@ -1163,7 +1140,7 @@ func TestMaybeBuildImageInspectionContextUsesReplyToPhotoFoodRatingPrompt(t *tes
 	}
 }
 
-func TestMaybeBuildImageInspectionContextReturnsFallbackWhenNoTarget(t *testing.T) {
+func TestMaybeBuildImageInspectionContextSkipsWordMatchFallbackWhenNoTarget(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1211,11 +1188,61 @@ func TestMaybeBuildImageInspectionContextReturnsFallbackWhenNoTarget(t *testing.
 
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?"}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
-	if !handled {
-		t.Fatal("expected image question to be handled")
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected plain text image word-match to continue to normal chat flow, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
-	if context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
-		t.Fatalf("expected no-image fallback, got context=%q fallback=%q", context, fallback)
+}
+
+func TestMaybeBuildImageInspectionContextSkipsWordMatchFallbackForAmbiguousImageQuestionNearPhoto(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id INTEGER,
+			chat_id INTEGER,
+			reply_to_message_id INTEGER,
+			unixtime INTEGER,
+			data TEXT,
+			PRIMARY KEY (id, chat_id)
+		);
+		CREATE TABLE IF NOT EXISTS media_items (
+			message_id INTEGER,
+			chat_id INTEGER,
+			type TEXT,
+			file_id TEXT,
+			width INTEGER,
+			height INTEGER,
+			file_size INTEGER,
+			data TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create schema: %v", err)
+	}
+
+	latestPhotoMessage := telebot.Message{ID: 20, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Unixtime: 200}
+	latestPhotoData, err := json.Marshal(latestPhotoMessage)
+	if err != nil {
+		t.Fatalf("marshal latest photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, unixtime, data) VALUES (?, ?, ?, ?)`, 20, 123, 200, string(latestPhotoData))
+	if err != nil {
+		t.Fatalf("insert latest photo message: %v", err)
+	}
+	_, err = mockDB.Exec(`INSERT INTO media_items (message_id, chat_id, type, file_id, width, height, file_size, data) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, 20, 123, "photo", "latest-photo", 1024, 768, 12345)
+	if err != nil {
+		t.Fatalf("insert latest photo item: %v", err)
+	}
+
+	originalSQLiteDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalSQLiteDB }()
+
+	message := &telebot.Message{ID: 21, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, а на картинках скок пуков?"}
+	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected ambiguous image question near prior photo to continue to normal metadata/chat flow, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
 }
 
@@ -1274,7 +1301,7 @@ func TestMaybeBuildImageInspectionContextSkipsFallbackWhenReplyHasTextContext(t 
 	}
 }
 
-func TestMaybeBuildImageInspectionContextKeepsFallbackForExplicitImageQuestionOnTextReply(t *testing.T) {
+func TestMaybeBuildImageInspectionContextSkipsWordMatchFallbackOnTextReply(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1309,12 +1336,12 @@ func TestMaybeBuildImageInspectionContextKeepsFallbackForExplicitImageQuestionOn
 	replyMessage := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Text: "https://open.spotify.com/track/abc123"}
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что на картинке?", ReplyTo: replyMessage}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
-	if !handled || context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
-		t.Fatalf("expected explicit no-image fallback for direct image question, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected text-reply image word-match to continue to normal chat flow, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
 }
 
-func TestMaybeBuildImageInspectionContextKeepsFallbackForCaptionedPhotoReply(t *testing.T) {
+func TestMaybeBuildImageInspectionContextSkipsFallbackForCaptionedPhotoReply(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1349,8 +1376,8 @@ func TestMaybeBuildImageInspectionContextKeepsFallbackForCaptionedPhotoReply(t *
 	replyMessage := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "alice"}, Caption: "мрачный спотифай превью", Photo: &telebot.Photo{}}
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, что там вообще?", ReplyTo: replyMessage}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
-	if !handled || context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
-		t.Fatalf("expected explicit no-image fallback for captioned photo reply, got handled=%v context=%q fallback=%q", handled, context, fallback)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected missing captioned-photo target to continue to normal chat flow, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
 }
 
@@ -1486,7 +1513,7 @@ func TestMaybeBuildImageInspectionContextIgnoresReplyToNonPhotoMessage(t *testin
 	}
 }
 
-func TestMaybeBuildImageInspectionContextReturnsFallbackWhenReplyToPhotoMissing(t *testing.T) {
+func TestMaybeBuildImageInspectionContextSkipsFallbackWhenReplyToPhotoMissing(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
@@ -1534,11 +1561,8 @@ func TestMaybeBuildImageInspectionContextReturnsFallbackWhenReplyToPhotoMissing(
 
 	message := &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{Username: "bob"}, Text: "губи, я именно про бадейку, чтоб поварешка тонула", ReplyTo: &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Photo: &telebot.Photo{}}}
 	context, fallback, handled := maybeBuildImageInspectionContext(message, message.Text)
-	if !handled {
-		t.Fatal("expected reply-to-photo follow-up to be handled even when replied photo is missing")
-	}
-	if context != "" || !strings.Contains(fallback, "Не вижу рядом картинки") {
-		t.Fatalf("expected missing-photo fallback for reply-to-photo follow-up, got context=%q fallback=%q", context, fallback)
+	if handled || context != "" || fallback != "" {
+		t.Fatalf("expected missing reply-to-photo target to continue to normal chat flow, got handled=%v context=%q fallback=%q", handled, context, fallback)
 	}
 }
 

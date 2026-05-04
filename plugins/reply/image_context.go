@@ -3,7 +3,6 @@ package reply
 import (
 	"database/sql"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/tucnak/telebot"
@@ -21,52 +20,6 @@ type ResolvedImageTarget struct {
 	Source    string
 	Width     int
 	Height    int
-}
-
-var imageQuestionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(картинк|картинка|фото|фотке|фотка|пикч|изображен|изображено|изображении|image|picture|photo)`),
-	regexp.MustCompile(`(?i)(мем|meme)`),
-	regexp.MustCompile(`(?i)(что там|what'?s there|what is there|what's in)`),
-	regexp.MustCompile(`(?i)(объясни|explain).*(мем|meme|картинк|image|picture)`),
-	regexp.MustCompile(`(?i)(найс картинка|nice picture|nice image)`),
-}
-
-var imageMetadataHistoryPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(последн|недавн|выше|рядом|в чате).*(картинк|фото|фотк|пикч|изображен|image|picture|photo)`),
-	regexp.MustCompile(`(?i)(картинк|фото|фотк|пикч|изображен|image|picture|photo).*(последн|недавн|выше|рядом|в чате)`),
-}
-
-func shouldForceInspectRecentImage(question string) bool {
-	question = strings.TrimSpace(question)
-	if question == "" || shouldUseImageMetadataHistory(question) {
-		return false
-	}
-	for _, pattern := range imageQuestionPatterns {
-		if pattern.MatchString(question) {
-			return true
-		}
-	}
-	return false
-}
-
-func shouldUseImageMetadataHistory(question string) bool {
-	question = strings.TrimSpace(question)
-	if question == "" {
-		return false
-	}
-	for _, pattern := range imageMetadataHistoryPatterns {
-		if pattern.MatchString(question) {
-			return true
-		}
-	}
-	return false
-}
-
-func shouldReturnMissingImageFallback(question string, message *telebot.Message, replyToPhoto bool) bool {
-	if shouldForceInspectRecentImage(question) {
-		return true
-	}
-	return replyToPhoto
 }
 
 func replyReferencesPhoto(db *sql.DB, message *telebot.Message) bool {
@@ -94,24 +47,6 @@ func shouldUseImageInspection(question string, message *telebot.Message, target 
 		return target.Source == imageSourceReply
 	}
 	return message != nil && message.Photo != nil
-}
-
-func hasAlternateNonImageContext(message *telebot.Message, replyToPhoto bool) bool {
-	if message == nil {
-		return false
-	}
-	if replyToPhoto {
-		return false
-	}
-	if strings.TrimSpace(message.Text) != "" || strings.TrimSpace(message.Caption) != "" {
-		if message.ReplyTo == nil {
-			return false
-		}
-		if strings.TrimSpace(message.ReplyTo.Text) != "" || strings.TrimSpace(message.ReplyTo.Caption) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func resolveImageTarget(db *sql.DB, question *telebot.Message) (*ResolvedImageTarget, error) {

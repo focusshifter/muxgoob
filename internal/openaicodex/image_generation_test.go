@@ -81,3 +81,18 @@ func TestClientGenerateImageViaCodexResponses(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", resp)
 	}
 }
+
+func TestImageHTTPClientExtendsShortTimeoutForSlowImageGenerations(t *testing.T) {
+	shortTimeout := defaultImageGenerationTimeout / 5
+	base := &http.Client{Timeout: shortTimeout}
+	got := imageHTTPClient(base)
+	if got == base {
+		t.Fatal("expected short-timeout client to be cloned")
+	}
+	if got.Timeout != defaultImageGenerationTimeout {
+		t.Fatalf("expected image timeout %v, got %v", defaultImageGenerationTimeout, got.Timeout)
+	}
+	if base.Timeout != shortTimeout {
+		t.Fatalf("base client timeout was mutated: %v", base.Timeout)
+	}
+}

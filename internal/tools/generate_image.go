@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -25,6 +26,7 @@ type GenerateImageTool struct {
 	sent      bool
 	generator ImageGenerator
 	send      func(chatID int64, imagePath string, caption string) error
+	notify    func(chatID int64, action telebot.ChatAction) error
 	outputDir string
 }
 
@@ -69,7 +71,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 					},
 					"size": map[string]any{
 						"type":        "string",
-						"description": "Output size. Default 1024x1024. gpt-image-2 also supports 2048x2048, 2048x1152, 3840x2160, 2160x3840, 1536x1024, 1024x1536, or auto.",
+						"description": "Telegram-optimized output size. Default 1024x1024. Prefer 1024x1024 for square, 1536x1024 for landscape, or 1024x1536 for portrait. Do not request 2K/4K sizes unless the user explicitly asks for high resolution.",
 					},
 					"quality": map[string]any{
 						"type":        "string",
@@ -99,7 +101,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if model == "" {
 		model = "gpt-image-2"
 	}
-	size := cleanImageOption(parsedArgs.Size)
+	size := telegramImageSize(cleanImageOption(parsedArgs.Size))
 	if size == "" {
 		size = "1024x1024"
 	}
@@ -116,6 +118,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if generator == nil {
 		generator = openaicodex.NewClient()
 	}
+	stopTyping := t.startActionKeepalive(ctx, telebot.Typing, 2*time.Second)
 	result, err := generator.GenerateImage(ctx, openaicodex.ImageGenerationRequest{
 		Prompt:       prompt,
 		Model:        model,
@@ -123,6 +126,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 		Quality:      quality,
 		OutputFormat: outputFormat,
 	})
+	stopTyping()
 	if err != nil {
 		return "", err
 	}
@@ -138,6 +142,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if sender == nil {
 		sender = sendImageToChat
 	}
+	// Chat actions are best-effort only; failing to show "uploading photo" should not
+	// prevent delivery of the generated image.
+	_ = t.notifyAction(telebot.UploadingPhoto)
 	if err := sender(t.chatID, path, caption); err != nil {
 		return "", err
 	}
@@ -147,6 +154,44 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 
 func (t *GenerateImageTool) WasSent() bool {
 	return t != nil && t.sent
+}
+
+func (t *GenerateImageTool) startActionKeepalive(ctx context.Context, action telebot.ChatAction, interval time.Duration) func() {
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	done := make(chan struct{})
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() { close(done) })
+	}
+	_ = t.notifyAction(action)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				_ = t.notifyAction(action)
+			}
+		}
+	}()
+	return stop
+}
+
+func (t *GenerateImageTool) notifyAction(action telebot.ChatAction) error {
+	if t == nil {
+		return nil
+	}
+	notify := t.notify
+	if notify == nil {
+		notify = notifyChatAction
+	}
+	return notify(t.chatID, action)
 }
 
 func (t *GenerateImageTool) writeImage(data []byte, extension string) (string, error) {
@@ -180,6 +225,13 @@ func sendImageToChat(chatID int64, imagePath string, caption string) error {
 	return err
 }
 
+func notifyChatAction(chatID int64, action telebot.ChatAction) error {
+	if registry.Bot == nil {
+		return nil
+	}
+	return registry.Bot.Notify(&imageRecipient{chatID: chatID}, action)
+}
+
 type imageRecipient struct {
 	chatID int64
 }
@@ -198,6 +250,19 @@ func cleanImageOption(value string) string {
 		}
 	}, value)
 	return strings.TrimSpace(cleaned)
+}
+
+func telegramImageSize(size string) string {
+	switch strings.ToLower(strings.TrimSpace(size)) {
+	case "2048x2048", "4096x4096":
+		return "1024x1024"
+	case "2048x1152", "3840x2160":
+		return "1536x1024"
+	case "1152x2048", "2160x3840":
+		return "1024x1536"
+	default:
+		return size
+	}
 }
 
 func truncateCaption(caption string) string {

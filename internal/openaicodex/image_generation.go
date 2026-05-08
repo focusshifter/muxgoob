@@ -11,13 +11,15 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const (
-	defaultImageResponsesModel = "gpt-5.5"
-	defaultImageModel          = "gpt-image-2"
-	defaultImageInstructions   = "You are an image generation assistant."
-	maxImageResultBase64Chars  = 64 * 1024 * 1024
+	defaultImageResponsesModel    = "gpt-5.5"
+	defaultImageModel             = "gpt-image-2"
+	defaultImageInstructions      = "You are an image generation assistant."
+	defaultImageGenerationTimeout = 10 * time.Minute
+	maxImageResultBase64Chars     = 64 * 1024 * 1024
 )
 
 type ImageGenerationRequest struct {
@@ -141,7 +143,8 @@ func (c *Client) GenerateImage(ctx context.Context, request ImageGenerationReque
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	httpResp, err := c.httpClient.Do(httpReq)
+	httpClient := imageHTTPClient(c.httpClient)
+	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return ImageGenerationResponse{}, fmt.Errorf("send codex image request: %w", err)
 	}
@@ -156,6 +159,18 @@ func (c *Client) GenerateImage(ctx context.Context, request ImageGenerationReque
 	}
 	result.Model = model
 	return result, nil
+}
+
+func imageHTTPClient(httpClient *http.Client) *http.Client {
+	if httpClient == nil {
+		return &http.Client{Timeout: defaultImageGenerationTimeout}
+	}
+	if httpClient.Timeout == 0 || httpClient.Timeout >= defaultImageGenerationTimeout {
+		return httpClient
+	}
+	clone := *httpClient
+	clone.Timeout = defaultImageGenerationTimeout
+	return &clone
 }
 
 func parseImageSSE(body io.Reader, outputFormat string) (ImageGenerationResponse, error) {

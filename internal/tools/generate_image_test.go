@@ -6,6 +6,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/tucnak/telebot"
+
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 )
 
@@ -30,10 +32,18 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	}}
 	var sentPath string
 	var sentCaption string
+	var actions []telebot.ChatAction
 	tool := &GenerateImageTool{
 		chatID:    123,
 		generator: stub,
 		outputDir: t.TempDir(),
+		notify: func(chatID int64, action telebot.ChatAction) error {
+			if chatID != 123 {
+				t.Fatalf("expected notify chat id 123, got %d", chatID)
+			}
+			actions = append(actions, action)
+			return nil
+		},
 		send: func(chatID int64, imagePath string, caption string) error {
 			if chatID != 123 {
 				t.Fatalf("expected chat id 123, got %d", chatID)
@@ -44,18 +54,21 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 		},
 	}
 
-	result, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота","size":"2048x2048","quality":"low","output_format":"png"}`)
+	result, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота","size":"2048x1152","quality":"low","output_format":"png"}`)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
 	if len(stub.requests) != 1 {
 		t.Fatalf("expected one generation request, got %d", len(stub.requests))
 	}
-	if stub.requests[0].Prompt != "нарисуй кота" || stub.requests[0].Model != "gpt-image-2" || stub.requests[0].Size != "2048x2048" {
+	if stub.requests[0].Prompt != "нарисуй кота" || stub.requests[0].Model != "gpt-image-2" || stub.requests[0].Size != "1536x1024" {
 		t.Fatalf("unexpected request: %#v", stub.requests[0])
 	}
 	if sentPath == "" {
 		t.Fatal("expected image to be sent")
+	}
+	if len(actions) < 2 || actions[0] != telebot.Typing || actions[len(actions)-1] != telebot.UploadingPhoto {
+		t.Fatalf("expected typing then uploading photo actions, got %#v", actions)
 	}
 	written, err := os.ReadFile(sentPath)
 	if err != nil {
@@ -74,7 +87,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Path != sentPath {
+	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "1536x1024" || payload.Path != sentPath {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }

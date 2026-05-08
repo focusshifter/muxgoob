@@ -32,6 +32,7 @@ type GenerateImageTool struct {
 
 type generateImageArgs struct {
 	Prompt       string `json:"prompt"`
+	Caption      string `json:"caption,omitempty"`
 	Model        string `json:"model,omitempty"`
 	Size         string `json:"size,omitempty"`
 	Quality      string `json:"quality,omitempty"`
@@ -63,7 +64,11 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 				"properties": map[string]any{
 					"prompt": map[string]any{
 						"type":        "string",
-						"description": "Detailed image prompt. Preserve the user's language and requested style/content.",
+						"description": "Detailed image prompt. Preserve the user's language and requested style/content. This is only for image generation and will not be printed to the chat.",
+					},
+					"caption": map[string]any{
+						"type":        "string",
+						"description": "Optional short Telegram caption related to the generated image, in the user's tone/language. Do not put the full prompt here. Leave empty if no natural caption is useful.",
 					},
 					"model": map[string]any{
 						"type":        "string",
@@ -134,10 +139,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if err != nil {
 		return "", err
 	}
-	caption := ""
-	if result.RevisedPrompt != "" {
-		caption = truncateCaption("Prompt: " + result.RevisedPrompt)
-	}
+	caption := truncateCaption(parsedArgs.Caption)
 	sender := t.send
 	if sender == nil {
 		sender = sendImageToChat

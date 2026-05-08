@@ -1076,6 +1076,7 @@ var askChatGpt = func(message *telebot.Message) string {
 		"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
 		"After sendPoll succeeds, do not send any follow-up confirmation text.",
 		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
+		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
 		"After generateImage succeeds, do not send any follow-up confirmation text.",
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",

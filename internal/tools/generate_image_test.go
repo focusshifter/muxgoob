@@ -54,7 +54,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 		},
 	}
 
-	result, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота","size":"2048x1152","quality":"low","output_format":"png"}`)
+	result, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота","caption":"цивик вышел подрифтить","size":"2048x1152","quality":"low","output_format":"png"}`)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if string(written) != "fake-png" {
 		t.Fatalf("unexpected written image: %q", written)
 	}
-	if sentCaption != "Prompt: a revised prompt" {
+	if sentCaption != "цивик вышел подрифтить" {
 		t.Fatalf("unexpected caption: %q", sentCaption)
 	}
 	if !tool.WasSent() {
@@ -89,5 +89,34 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	}
 	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "1536x1024" || payload.Path != sentPath {
 		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestGenerateImageToolDoesNotUseRevisedPromptAsCaption(t *testing.T) {
+	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{
+		Model:         "gpt-image-2",
+		Image:         []byte("fake-png"),
+		MimeType:      "image/png",
+		Extension:     "png",
+		RevisedPrompt: "internal expanded prompt should not be shown",
+	}}
+	var sentCaption string
+	tool := &GenerateImageTool{
+		chatID:    123,
+		generator: stub,
+		outputDir: t.TempDir(),
+		notify:    func(int64, telebot.ChatAction) error { return nil },
+		send: func(_ int64, _ string, caption string) error {
+			sentCaption = caption
+			return nil
+		},
+	}
+
+	_, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота"}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if sentCaption != "" {
+		t.Fatalf("expected empty caption, got %q", sentCaption)
 	}
 }

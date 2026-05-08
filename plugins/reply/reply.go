@@ -1059,6 +1059,7 @@ var askChatGpt = func(message *telebot.Message) string {
 	}
 
 	pollTool := chattools.NewSendPollTool(message.Chat.ID)
+	imageTool := chattools.NewGenerateImageTool(message.Chat.ID)
 	forceSearch := shouldForceSearchMessages(question)
 	toolRegistry := chattools.NewRegistry(
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
@@ -1067,12 +1068,15 @@ var askChatGpt = func(message *telebot.Message) string {
 		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
 		chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
 		pollTool,
+		imageTool,
 	)
 	toolSystemMessage := strings.Join([]string{
 		"You can call tools when they are needed.",
 		"Avoid markdown. If formatting is needed, use Telegram markdown only.",
 		"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
 		"After sendPoll succeeds, do not send any follow-up confirmation text.",
+		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
+		"After generateImage succeeds, do not send any follow-up confirmation text.",
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
@@ -1143,7 +1147,7 @@ var askChatGpt = func(message *telebot.Message) string {
 		log.Printf("ChatCompletion error: %v", err)
 		return ""
 	}
-	if pollTool.WasSent() {
+	if pollTool.WasSent() || imageTool.WasSent() {
 		return actionOnlyReplyToken
 	}
 

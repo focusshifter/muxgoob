@@ -8,6 +8,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
@@ -90,6 +91,36 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 	}
 
 	return ""
+}
+
+func TestImageGenerationToolIsOptInPerChat(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	chatID := int64(12345)
+	tools, systemParts, imageTool := appendImageGenerationToolIfEnabled(chatID, nil, nil)
+	if imageTool != nil || len(tools) != 0 || len(systemParts) != 0 {
+		t.Fatalf("generateImage should not be appended by default: tool=%v tools=%d system=%d", imageTool, len(tools), len(systemParts))
+	}
+
+	if err := registry.SetImageGenerationEnabled(chatID, true); err != nil {
+		t.Fatalf("SetImageGenerationEnabled: %v", err)
+	}
+	tools, systemParts, imageTool = appendImageGenerationToolIfEnabled(chatID, nil, nil)
+	if imageTool == nil {
+		t.Fatalf("expected generateImage tool after enabling chat")
+	}
+	defs := chattools.NewRegistry(tools...).Definitions()
+	if len(defs) != 1 || defs[0].Function == nil || defs[0].Function.Name != "generateImage" {
+		t.Fatalf("expected only generateImage definition, got %#v", defs)
+	}
+	if !strings.Contains(strings.Join(systemParts, " "), "generateImage") {
+		t.Fatalf("expected image-generation prompt instructions after enabling chat, got %#v", systemParts)
+	}
 }
 
 func TestReplyPlugin_Process(t *testing.T) {

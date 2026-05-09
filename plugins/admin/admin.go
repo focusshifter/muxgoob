@@ -99,7 +99,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai] [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai] [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
@@ -212,6 +212,39 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			bot.Send(message.Chat, fmt.Sprintf("Global AI model set to: %s", model))
 		}
 
+	case "images":
+		if len(parts) < 4 {
+			bot.Send(message.Chat, "Usage:\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>")
+			return
+		}
+		targetChatID, err := strconv.ParseInt(parts[3], 10, 64)
+		if err != nil {
+			bot.Send(message.Chat, "Invalid chat_id")
+			return
+		}
+		switch parts[2] {
+		case "enable", "allow", "on":
+			if err := registry.SetImageGenerationEnabled(targetChatID, true); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error enabling image generation: %v", err))
+				return
+			}
+			bot.Send(message.Chat, fmt.Sprintf("Image generation enabled for chat %d", targetChatID))
+		case "disable", "deny", "off":
+			if err := registry.SetImageGenerationEnabled(targetChatID, false); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error disabling image generation: %v", err))
+				return
+			}
+			bot.Send(message.Chat, fmt.Sprintf("Image generation disabled for chat %d", targetChatID))
+		case "status":
+			status := "disabled"
+			if registry.GetImageGenerationEnabled(targetChatID) {
+				status = "enabled"
+			}
+			bot.Send(message.Chat, fmt.Sprintf("Image generation for chat %d: %s", targetChatID, status))
+		default:
+			bot.Send(message.Chat, "Unknown images command. Use enable, disable, or status")
+		}
+
 	case "get":
 		var chatID *int64
 		if len(parts) >= 3 {
@@ -223,6 +256,10 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		provider := registry.GetAiProvider(chatID)
 		model := registry.GetAiModel(chatID)
 		imageModel := registry.GetImageAiModel(chatID)
+		imageGenerationStatus := "disabled"
+		if chatID != nil && registry.GetImageGenerationEnabled(*chatID) {
+			imageGenerationStatus = "enabled"
+		}
 		selfpromptModel := selfpromptplugin.GetModel(chatID)
 		if selfpromptModel == "" {
 			selfpromptModel = "(default AI model)"
@@ -230,9 +267,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 
 		var response string
 		if chatID != nil {
-			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage model: %s\nSelfprompt model: %s", *chatID, provider, model, imageModel, selfpromptModel)
+			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage model: %s\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageModel, imageGenerationStatus, selfpromptModel)
 		} else {
-			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage model: %s\nSelfprompt model: %s", provider, model, imageModel, selfpromptModel)
+			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage model: %s\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageModel, selfpromptModel)
 		}
 		if provider == "openai-codex" {
 			response += "\nCodex auth: " + openaicodex.NewClient().AuthStatus()

@@ -3,6 +3,7 @@ package registry
 import (
 	"database/sql"
 	"log"
+	"strconv"
 
 	"github.com/focusshifter/muxgoob/database"
 )
@@ -12,9 +13,10 @@ const (
 	ConfigPluginName = "config"
 
 	// AI provider and model keys
-	AiProviderKey   = "ai_provider"
-	AiModelKey      = "ai_model"
-	ImageAiModelKey = "image_ai_model"
+	AiProviderKey             = "ai_provider"
+	AiModelKey                = "ai_model"
+	ImageAiModelKey           = "image_ai_model"
+	ImageGenerationEnabledKey = "image_generation_enabled"
 )
 
 // init is called after database initialization
@@ -171,4 +173,25 @@ func SetAiModel(chatID *int64, model string) error {
 // SetImageAiModel sets the image AI model in the database
 func SetImageAiModel(chatID *int64, model string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, model)
+}
+
+// GetImageGenerationEnabled returns whether the generateImage tool is allowed for a chat.
+// Image generation is opt-in per chat; the default is disabled so the tool is not exposed
+// unless an admin explicitly enables it for that chat ID.
+func GetImageGenerationEnabled(chatID int64) bool {
+	if database.DB == nil {
+		return false
+	}
+	value := GetPluginSetting(&chatID, ConfigPluginName, ImageGenerationEnabledKey, "false")
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Printf("[registry] Invalid %s value for chat %d: %q", ImageGenerationEnabledKey, chatID, value)
+		return false
+	}
+	return enabled
+}
+
+// SetImageGenerationEnabled sets whether a chat may use the generateImage tool.
+func SetImageGenerationEnabled(chatID int64, enabled bool) error {
+	return SetPluginSetting(&chatID, ConfigPluginName, ImageGenerationEnabledKey, strconv.FormatBool(enabled))
 }

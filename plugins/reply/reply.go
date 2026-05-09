@@ -61,6 +61,20 @@ func (c *RealChatGptClient) Ask(message *telebot.Message) string {
 	return askChatGpt(message)
 }
 
+func appendImageGenerationToolIfEnabled(chatID int64, tools []chattools.Tool, toolSystemParts []string) ([]chattools.Tool, []string, *chattools.GenerateImageTool) {
+	if !registry.GetImageGenerationEnabled(chatID) {
+		return tools, toolSystemParts, nil
+	}
+	imageTool := chattools.NewGenerateImageTool(chatID)
+	tools = append(tools, imageTool)
+	toolSystemParts = append(toolSystemParts,
+		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
+		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
+		"After generateImage succeeds, do not send any follow-up confirmation text.",
+	)
+	return tools, toolSystemParts, imageTool
+}
+
 type ReplyPlugin struct {
 	random     RandomGenerator
 	chatClient ChatGptClient
@@ -1059,25 +1073,27 @@ var askChatGpt = func(message *telebot.Message) string {
 	}
 
 	pollTool := chattools.NewSendPollTool(message.Chat.ID)
-	imageTool := chattools.NewGenerateImageTool(message.Chat.ID)
-	forceSearch := shouldForceSearchMessages(question)
-	toolRegistry := chattools.NewRegistry(
+	var imageTool *chattools.GenerateImageTool
+	tools := []chattools.Tool{
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
 		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
 		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
 		chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
 		pollTool,
-		imageTool,
-	)
-	toolSystemMessage := strings.Join([]string{
+	}
+	toolSystemParts := []string{
 		"You can call tools when they are needed.",
 		"Avoid markdown. If formatting is needed, use Telegram markdown only.",
 		"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
 		"After sendPoll succeeds, do not send any follow-up confirmation text.",
-		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
-		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
-		"After generateImage succeeds, do not send any follow-up confirmation text.",
+	}
+	if registry.GetImageGenerationEnabled(message.Chat.ID) {
+		tools, toolSystemParts, imageTool = appendImageGenerationToolIfEnabled(message.Chat.ID, tools, toolSystemParts)
+	}
+	forceSearch := shouldForceSearchMessages(question)
+	toolRegistry := chattools.NewRegistry(tools...)
+	toolSystemParts = append(toolSystemParts,
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
@@ -1089,7 +1105,8 @@ var askChatGpt = func(message *telebot.Message) string {
 		"For any question about prior chat discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering.",
 		"Treat the prefill as recent context only, not authoritative chat history.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
-	}, " ")
+	)
+	toolSystemMessage := strings.Join(toolSystemParts, " ")
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 

@@ -332,6 +332,69 @@ func TestAdminPlugin_ImageModelCommand(t *testing.T) {
 	}
 }
 
+func TestAdminPlugin_ImageGenerationAllowlistCommand(t *testing.T) {
+	originalConfig := registry.Config
+	defer func() {
+		registry.Config = originalConfig
+	}()
+	registry.Config.OwnerUsername = "test_owner"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("Failed to create plugin_settings table: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+
+	plugin := &AdminPlugin{}
+	targetChatID := int64(777)
+	if registry.GetImageGenerationEnabled(targetChatID) {
+		t.Fatalf("image generation should be disabled by default")
+	}
+
+	plugin.Process(&telebot.Message{
+		Text:   "!ai images enable 777",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+	if !mockBot.SendCalled {
+		t.Fatalf("Expected response for image generation enable command")
+	}
+	if got, ok := mockBot.SendWhat.(string); !ok || !strings.Contains(got, "Image generation enabled for chat 777") {
+		t.Fatalf("Unexpected enable response: %v", mockBot.SendWhat)
+	}
+	if !registry.GetImageGenerationEnabled(targetChatID) {
+		t.Fatalf("image generation should be enabled for chat 777")
+	}
+
+	mockBot.SendCalled = false
+	mockBot.SendWhat = nil
+	plugin.Process(&telebot.Message{
+		Text:   "!ai get 777",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+	response, ok := mockBot.SendWhat.(string)
+	if !mockBot.SendCalled || !ok || !strings.Contains(response, "Image generation: enabled") {
+		t.Fatalf("Expected !ai get to include enabled image generation, got: %v", mockBot.SendWhat)
+	}
+
+	mockBot.SendCalled = false
+	mockBot.SendWhat = nil
+	plugin.Process(&telebot.Message{
+		Text:   "!ai images disable 777",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{Type: telebot.ChatPrivate},
+	})
+	if registry.GetImageGenerationEnabled(targetChatID) {
+		t.Fatalf("image generation should be disabled for chat 777")
+	}
+}
+
 func TestAdminPlugin_GetIncludesOpenAICodexStatus(t *testing.T) {
 	originalConfig := registry.Config
 	originalCodexHome := os.Getenv("CODEX_HOME")

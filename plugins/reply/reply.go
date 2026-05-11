@@ -228,7 +228,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 				log.Printf("[reply] Username matches, calling chat client")
 				replyText := p.chatClient.Ask(message)
 				log.Printf("[reply] Chat client returned: %s", replyText)
-				if replyText != "" {
+				if replyText != "" && !isActionOnlyReply(replyText) {
 					log.Printf("[reply] Sending reply")
 					bot.Send(message.Chat, replyText, &telebot.SendOptions{
 						ReplyTo: message})

@@ -82,6 +82,8 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 		return "Нет"
 	} else if text == "This is a reply to the bot" {
 		return "Mock reply to bot message"
+	} else if text == "Reply action only to the bot" {
+		return actionOnlyReplyToken
 	} else if text == "gooby, is this a test?" {
 		return "Да" // Return "Да" for this test case
 	} else if text == "gooby, сделай опрос?" {
@@ -367,6 +369,29 @@ func TestReplyPlugin_Process(t *testing.T) {
 			},
 			expectedCalls: true,
 			expectedReply: "Mock reply to bot message", // Our mock returns this for the reply case
+			rngValue:      0,
+		},
+		{
+			name: "Reply to bot's message - action-only suppressed",
+			message: &telebot.Message{
+				Text: "Reply action only to the bot",
+				Sender: &telebot.User{
+					Username: "test_user",
+				},
+				Chat: &telebot.Chat{
+					ID: 123,
+				},
+				ReplyTo: &telebot.Message{
+					Sender: &telebot.User{
+						Username: "test_bot",
+					},
+					Chat: &telebot.Chat{
+						ID: 123,
+					},
+				},
+			},
+			expectedCalls: false,
+			expectedReply: "",
 			rngValue:      0,
 		},
 		{

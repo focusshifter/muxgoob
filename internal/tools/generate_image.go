@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,13 +125,14 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 		generator = openaicodex.NewClient()
 	}
 	stopTyping := t.startActionKeepalive(ctx, telebot.Typing, 2*time.Second)
-	result, err := generator.GenerateImage(ctx, openaicodex.ImageGenerationRequest{
+	request := openaicodex.ImageGenerationRequest{
 		Prompt:       prompt,
 		Model:        model,
 		Size:         size,
 		Quality:      quality,
 		OutputFormat: outputFormat,
-	})
+	}
+	result, err := generateImageWithRetry(ctx, generator, request)
 	stopTyping()
 	if err != nil {
 		return "", err
@@ -156,6 +158,28 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 
 func (t *GenerateImageTool) WasSent() bool {
 	return t != nil && t.sent
+}
+
+func generateImageWithRetry(ctx context.Context, generator ImageGenerator, request openaicodex.ImageGenerationRequest) (openaicodex.ImageGenerationResponse, error) {
+	result, err := generator.GenerateImage(ctx, request)
+	if err == nil || !isTransientImageGenerationError(err) || ctx.Err() != nil {
+		return result, err
+	}
+
+	log.Printf("[tools] generateImage transient failure, retrying once: %v", err)
+	return generator.GenerateImage(ctx, request)
+}
+
+func isTransientImageGenerationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "internal_error") ||
+		strings.Contains(message, "stream error") ||
+		strings.Contains(message, "unexpected eof") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "timeout")
 }
 
 func (t *GenerateImageTool) startActionKeepalive(ctx context.Context, action telebot.ChatAction, interval time.Duration) func() {

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -14,11 +15,17 @@ import (
 type imageGeneratorStub struct {
 	requests []openaicodex.ImageGenerationRequest
 	resp     openaicodex.ImageGenerationResponse
+	errs     []error
 	err      error
 }
 
 func (s *imageGeneratorStub) GenerateImage(_ context.Context, request openaicodex.ImageGenerationRequest) (openaicodex.ImageGenerationResponse, error) {
 	s.requests = append(s.requests, request)
+	if len(s.errs) > 0 {
+		err := s.errs[0]
+		s.errs = s.errs[1:]
+		return s.resp, err
+	}
 	return s.resp, s.err
 }
 
@@ -118,5 +125,37 @@ func TestGenerateImageToolDoesNotUseRevisedPromptAsCaption(t *testing.T) {
 	}
 	if sentCaption != "" {
 		t.Fatalf("expected empty caption, got %q", sentCaption)
+	}
+}
+
+func TestGenerateImageToolRetriesTransientGenerationError(t *testing.T) {
+	stub := &imageGeneratorStub{
+		resp: openaicodex.ImageGenerationResponse{
+			Model:     "gpt-image-2",
+			Image:     []byte("fake-png"),
+			MimeType:  "image/png",
+			Extension: "png",
+		},
+		errs: []error{
+			fmt.Errorf("read codex image event stream: stream error: stream ID 7; INTERNAL_ERROR; received from peer"),
+			nil,
+		},
+	}
+	tool := &GenerateImageTool{
+		chatID:    123,
+		generator: stub,
+		outputDir: t.TempDir(),
+		notify:    func(int64, telebot.ChatAction) error { return nil },
+		send:      func(int64, string, string) error { return nil },
+	}
+
+	if _, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота"}`); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(stub.requests) != 2 {
+		t.Fatalf("expected retry after transient error, got %d requests", len(stub.requests))
+	}
+	if !tool.WasSent() {
+		t.Fatal("expected image to be sent after retry")
 	}
 }

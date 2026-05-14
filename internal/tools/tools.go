@@ -25,6 +25,10 @@ type Registry struct {
 	defs  []openai.Tool
 }
 
+type sentActionTool interface {
+	WasSent() bool
+}
+
 func NewRegistry(tools ...Tool) *Registry {
 	registry := &Registry{
 		tools: make(map[string]Tool, len(tools)),
@@ -82,6 +86,18 @@ func (r *Registry) Execute(ctx context.Context, toolCall openai.ToolCall) string
 	log.Printf("[tools] %s returned %s", toolCall.Function.Name, summarizeToolResult(result))
 
 	return result
+}
+
+func (r *Registry) toolSentAction(name string) bool {
+	if r == nil {
+		return false
+	}
+	tool, ok := r.tools[name]
+	if !ok {
+		return false
+	}
+	actionTool, ok := tool.(sentActionTool)
+	return ok && actionTool.WasSent()
 }
 
 func formatToolCallNames(toolCalls []openai.ToolCall) string {
@@ -152,6 +168,10 @@ func RunLoop(
 				Content:    toolResult,
 				Name:       toolCall.Function.Name,
 			})
+			if registry.toolSentAction(toolCall.Function.Name) {
+				log.Printf("[tools] %s sent action result, ending tool loop without follow-up completion", toolCall.Function.Name)
+				return "", nil
+			}
 		}
 		if forcedChoice, ok := req.ToolChoice.(openai.ToolChoice); ok && forcedChoice.Type == openai.ToolTypeFunction {
 			req.ToolChoice = nil

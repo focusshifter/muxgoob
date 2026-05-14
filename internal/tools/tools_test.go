@@ -22,6 +22,25 @@ func (t stubTool) Execute(context.Context, string) (string, error) {
 	return t.result, t.err
 }
 
+type actionStubTool struct {
+	definition openai.Tool
+	result     string
+	sent       bool
+}
+
+func (t *actionStubTool) Definition() openai.Tool {
+	return t.definition
+}
+
+func (t *actionStubTool) Execute(context.Context, string) (string, error) {
+	t.sent = true
+	return t.result, nil
+}
+
+func (t *actionStubTool) WasSent() bool {
+	return t.sent
+}
+
 type mockCompletionClient struct {
 	responses []openai.ChatCompletionResponse
 	requests  []openai.ChatCompletionRequest
@@ -176,6 +195,55 @@ func TestRunLoopReturnsToolErrorsToModel(t *testing.T) {
 	toolMessage := client.requests[1].Messages[2]
 	if toolMessage.Content != `{"error":"boom","tool":"fetchUsers"}` && toolMessage.Content != `{"tool":"fetchUsers","error":"boom"}` {
 		t.Fatalf("unexpected tool error content: %s", toolMessage.Content)
+	}
+}
+
+func TestRunLoopStopsAfterActionToolSends(t *testing.T) {
+	client := &mockCompletionClient{
+		responses: []openai.ChatCompletionResponse{
+			{
+				Choices: []openai.ChatCompletionChoice{{
+					FinishReason: openai.FinishReasonToolCalls,
+					Message: openai.ChatCompletionMessage{
+						Role: openai.ChatMessageRoleAssistant,
+						ToolCalls: []openai.ToolCall{{
+							ID:   "call_1",
+							Type: openai.ToolTypeFunction,
+							Function: openai.FunctionCall{
+								Name:      "generateImage",
+								Arguments: `{"prompt":"draw a cat"}`,
+							},
+						}},
+					},
+				}},
+			},
+		},
+	}
+
+	registry := NewRegistry(&actionStubTool{
+		definition: openai.Tool{
+			Type:     openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{Name: "generateImage"},
+		},
+		result: `{"sent":true}`,
+	})
+
+	result, err := RunLoop(context.Background(), client, openai.ChatCompletionRequest{
+		Model: "gpt-5.5",
+		Messages: []openai.ChatCompletionMessage{{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "draw a cat",
+		}},
+		Tools: registry.Definitions(),
+	}, registry, 5)
+	if err != nil {
+		t.Fatalf("RunLoop returned error: %v", err)
+	}
+	if result != "" {
+		t.Fatalf("expected empty action-only result, got %q", result)
+	}
+	if client.callCount != 1 {
+		t.Fatalf("expected one completion call, got %d", client.callCount)
 	}
 }
 

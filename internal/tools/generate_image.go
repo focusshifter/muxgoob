@@ -1,9 +1,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,6 +20,12 @@ import (
 
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
+	"golang.org/x/image/draw"
+)
+
+const (
+	defaultGeneratedImageSize = "512x512"
+	telegramSendImageSize     = 1024
 )
 
 type ImageGenerator interface {
@@ -77,7 +87,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 					},
 					"size": map[string]any{
 						"type":        "string",
-						"description": "Telegram-optimized output size. Default 1024x1024. Prefer 1024x1024 for square, 1536x1024 for landscape, or 1024x1536 for portrait. Do not request 2K/4K sizes unless the user explicitly asks for high resolution.",
+						"description": "Generation size. Default 512x512. Prefer 512x512; the host will upscale to 1024x1024 before Telegram delivery. Do not request larger sizes unless the user explicitly asks for high resolution.",
 					},
 					"quality": map[string]any{
 						"type":        "string",
@@ -109,7 +119,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	}
 	size := telegramImageSize(cleanImageOption(parsedArgs.Size))
 	if size == "" {
-		size = "1024x1024"
+		size = defaultGeneratedImageSize
 	}
 	quality := cleanImageOption(parsedArgs.Quality)
 	outputFormat := strings.ToLower(cleanImageOption(parsedArgs.OutputFormat))
@@ -228,6 +238,12 @@ func (t *GenerateImageTool) writeImage(data []byte, extension string) (string, e
 	if extension == "" {
 		extension = "png"
 	}
+	if resized, resizedExtension, err := upscaleImageForTelegram(data, extension); err == nil {
+		data = resized
+		extension = resizedExtension
+	} else {
+		log.Printf("[tools] generateImage could not upscale image before send: %v", err)
+	}
 	outputDir := strings.TrimSpace(t.outputDir)
 	if outputDir == "" {
 		outputDir = filepath.Join(os.TempDir(), "muxgoob-generated-images")
@@ -279,15 +295,40 @@ func cleanImageOption(value string) string {
 }
 
 func telegramImageSize(size string) string {
-	switch strings.ToLower(strings.TrimSpace(size)) {
-	case "2048x2048", "4096x4096":
-		return "1024x1024"
-	case "2048x1152", "3840x2160":
-		return "1536x1024"
-	case "1152x2048", "2160x3840":
-		return "1024x1536"
+	// Generate small images to keep the image model from adding unnecessary tiny details.
+	// Delivery is upscaled to 1024x1024 after generation.
+	return defaultGeneratedImageSize
+}
+
+func upscaleImageForTelegram(data []byte, extension string) ([]byte, string, error) {
+	source, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	bounds := source.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, "", fmt.Errorf("invalid image dimensions %dx%d", width, height)
+	}
+	if width == telegramSendImageSize && height == telegramSendImageSize {
+		return data, extension, nil
+	}
+	destination := image.NewRGBA(image.Rect(0, 0, telegramSendImageSize, telegramSendImageSize))
+	draw.CatmullRom.Scale(destination, destination.Bounds(), source, bounds, draw.Over, nil)
+
+	var out bytes.Buffer
+	switch strings.ToLower(strings.TrimPrefix(extension, ".")) {
+	case "jpg", "jpeg":
+		if err := jpeg.Encode(&out, destination, &jpeg.Options{Quality: 88}); err != nil {
+			return nil, "", err
+		}
+		return out.Bytes(), "jpg", nil
 	default:
-		return size
+		if err := png.Encode(&out, destination); err != nil {
+			return nil, "", err
+		}
+		return out.Bytes(), "png", nil
 	}
 }
 

@@ -1,9 +1,13 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"testing"
 
@@ -30,9 +34,10 @@ func (s *imageGeneratorStub) GenerateImage(_ context.Context, request openaicode
 }
 
 func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
+	generatedPNG := testPNG(t, 512, 512)
 	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{
 		Model:         "gpt-image-2",
-		Image:         []byte("fake-png"),
+		Image:         generatedPNG,
 		MimeType:      "image/png",
 		Extension:     "png",
 		RevisedPrompt: "a revised prompt",
@@ -68,7 +73,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if len(stub.requests) != 1 {
 		t.Fatalf("expected one generation request, got %d", len(stub.requests))
 	}
-	if stub.requests[0].Prompt != "нарисуй кота" || stub.requests[0].Model != "gpt-image-2" || stub.requests[0].Size != "1536x1024" {
+	if stub.requests[0].Prompt != "нарисуй кота" || stub.requests[0].Model != "gpt-image-2" || stub.requests[0].Size != "512x512" {
 		t.Fatalf("unexpected request: %#v", stub.requests[0])
 	}
 	if sentPath == "" {
@@ -77,12 +82,17 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if len(actions) < 2 || actions[0] != telebot.Typing || actions[len(actions)-1] != telebot.UploadingPhoto {
 		t.Fatalf("expected typing then uploading photo actions, got %#v", actions)
 	}
-	written, err := os.ReadFile(sentPath)
+	written, err := os.Open(sentPath)
 	if err != nil {
-		t.Fatalf("read written image: %v", err)
+		t.Fatalf("open written image: %v", err)
 	}
-	if string(written) != "fake-png" {
-		t.Fatalf("unexpected written image: %q", written)
+	defer written.Close()
+	decoded, _, err := image.Decode(written)
+	if err != nil {
+		t.Fatalf("decode written image: %v", err)
+	}
+	if decoded.Bounds().Dx() != 1024 || decoded.Bounds().Dy() != 1024 {
+		t.Fatalf("expected image upscaled to 1024x1024, got %dx%d", decoded.Bounds().Dx(), decoded.Bounds().Dy())
 	}
 	if sentCaption != "цивик вышел подрифтить" {
 		t.Fatalf("unexpected caption: %q", sentCaption)
@@ -94,9 +104,24 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "1536x1024" || payload.Path != sentPath {
+	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "512x512" || payload.Path != sentPath {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
+}
+
+func testPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x % 255), G: uint8(y % 255), B: 128, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode test png: %v", err)
+	}
+	return buf.Bytes()
 }
 
 func TestGenerateImageToolDoesNotUseRevisedPromptAsCaption(t *testing.T) {

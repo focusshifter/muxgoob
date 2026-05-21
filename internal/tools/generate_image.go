@@ -1,13 +1,9 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -20,13 +16,10 @@ import (
 
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
-	"golang.org/x/image/draw"
 )
 
 const (
 	defaultGeneratedImageSize = "1024x1024"
-	detailReductionImageSize  = 512
-	telegramSendImageSize     = 1024
 )
 
 type ImageGenerator interface {
@@ -88,7 +81,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 					},
 					"size": map[string]any{
 						"type":        "string",
-						"description": "Generation size. Default 1024x1024, the minimum supported by the image backend. The host will reduce visible detail by downscaling to 512x512 and upscaling back to 1024x1024 before Telegram delivery. Do not request smaller or larger sizes unless the user explicitly asks for high resolution.",
+						"description": "Generation size. Default 1024x1024, the minimum supported by the image backend. Do not request smaller or larger sizes unless the user explicitly asks for high resolution.",
 					},
 					"quality": map[string]any{
 						"type":        "string",
@@ -239,12 +232,6 @@ func (t *GenerateImageTool) writeImage(data []byte, extension string) (string, e
 	if extension == "" {
 		extension = "png"
 	}
-	if resized, resizedExtension, err := prepareImageForTelegram(data, extension); err == nil {
-		data = resized
-		extension = resizedExtension
-	} else {
-		log.Printf("[tools] generateImage could not prepare image before send: %v", err)
-	}
 	outputDir := strings.TrimSpace(t.outputDir)
 	if outputDir == "" {
 		outputDir = filepath.Join(os.TempDir(), "muxgoob-generated-images")
@@ -297,43 +284,8 @@ func cleanImageOption(value string) string {
 
 func telegramImageSize(size string) string {
 	// The Codex image backend rejects 512x512 as too small for gpt-image-2.
-	// Generate at the minimum accepted size, then pixel-crush locally before delivery.
+	// Generate at the minimum accepted size and send it unchanged.
 	return defaultGeneratedImageSize
-}
-
-func prepareImageForTelegram(data []byte, extension string) ([]byte, string, error) {
-	source, _, err := image.Decode(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", err
-	}
-	bounds := source.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-	if width <= 0 || height <= 0 {
-		return nil, "", fmt.Errorf("invalid image dimensions %dx%d", width, height)
-	}
-
-	// Reduce fine detail locally: shrink to 512x512, then upscale to Telegram's
-	// 1024x1024 delivery size. This keeps the image backend happy while avoiding
-	// the over-detailed look of a raw 1024px generation.
-	lowDetail := image.NewRGBA(image.Rect(0, 0, detailReductionImageSize, detailReductionImageSize))
-	draw.ApproxBiLinear.Scale(lowDetail, lowDetail.Bounds(), source, bounds, draw.Over, nil)
-	destination := image.NewRGBA(image.Rect(0, 0, telegramSendImageSize, telegramSendImageSize))
-	draw.ApproxBiLinear.Scale(destination, destination.Bounds(), lowDetail, lowDetail.Bounds(), draw.Over, nil)
-
-	var out bytes.Buffer
-	switch strings.ToLower(strings.TrimPrefix(extension, ".")) {
-	case "jpg", "jpeg":
-		if err := jpeg.Encode(&out, destination, &jpeg.Options{Quality: 88}); err != nil {
-			return nil, "", err
-		}
-		return out.Bytes(), "jpg", nil
-	default:
-		if err := png.Encode(&out, destination); err != nil {
-			return nil, "", err
-		}
-		return out.Bytes(), "png", nil
-	}
 }
 
 func truncateCaption(caption string) string {

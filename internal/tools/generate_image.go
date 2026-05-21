@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	defaultGeneratedImageSize = "512x512"
+	defaultGeneratedImageSize = "1024x1024"
+	detailReductionImageSize  = 512
 	telegramSendImageSize     = 1024
 )
 
@@ -87,7 +88,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 					},
 					"size": map[string]any{
 						"type":        "string",
-						"description": "Generation size. Default 512x512. Prefer 512x512; the host will upscale to 1024x1024 before Telegram delivery. Do not request larger sizes unless the user explicitly asks for high resolution.",
+						"description": "Generation size. Default 1024x1024, the minimum supported by the image backend. The host will reduce visible detail by downscaling to 512x512 and upscaling back to 1024x1024 before Telegram delivery. Do not request smaller or larger sizes unless the user explicitly asks for high resolution.",
 					},
 					"quality": map[string]any{
 						"type":        "string",
@@ -238,11 +239,11 @@ func (t *GenerateImageTool) writeImage(data []byte, extension string) (string, e
 	if extension == "" {
 		extension = "png"
 	}
-	if resized, resizedExtension, err := upscaleImageForTelegram(data, extension); err == nil {
+	if resized, resizedExtension, err := prepareImageForTelegram(data, extension); err == nil {
 		data = resized
 		extension = resizedExtension
 	} else {
-		log.Printf("[tools] generateImage could not upscale image before send: %v", err)
+		log.Printf("[tools] generateImage could not prepare image before send: %v", err)
 	}
 	outputDir := strings.TrimSpace(t.outputDir)
 	if outputDir == "" {
@@ -295,12 +296,12 @@ func cleanImageOption(value string) string {
 }
 
 func telegramImageSize(size string) string {
-	// Generate small images to keep the image model from adding unnecessary tiny details.
-	// Delivery is upscaled to 1024x1024 after generation.
+	// The Codex image backend rejects 512x512 as too small for gpt-image-2.
+	// Generate at the minimum accepted size, then pixel-crush locally before delivery.
 	return defaultGeneratedImageSize
 }
 
-func upscaleImageForTelegram(data []byte, extension string) ([]byte, string, error) {
+func prepareImageForTelegram(data []byte, extension string) ([]byte, string, error) {
 	source, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, "", err
@@ -311,11 +312,14 @@ func upscaleImageForTelegram(data []byte, extension string) ([]byte, string, err
 	if width <= 0 || height <= 0 {
 		return nil, "", fmt.Errorf("invalid image dimensions %dx%d", width, height)
 	}
-	if width == telegramSendImageSize && height == telegramSendImageSize {
-		return data, extension, nil
-	}
+
+	// Reduce fine detail locally: shrink to 512x512, then upscale to Telegram's
+	// 1024x1024 delivery size. This keeps the image backend happy while avoiding
+	// the over-detailed look of a raw 1024px generation.
+	lowDetail := image.NewRGBA(image.Rect(0, 0, detailReductionImageSize, detailReductionImageSize))
+	draw.ApproxBiLinear.Scale(lowDetail, lowDetail.Bounds(), source, bounds, draw.Over, nil)
 	destination := image.NewRGBA(image.Rect(0, 0, telegramSendImageSize, telegramSendImageSize))
-	draw.CatmullRom.Scale(destination, destination.Bounds(), source, bounds, draw.Over, nil)
+	draw.ApproxBiLinear.Scale(destination, destination.Bounds(), lowDetail, lowDetail.Bounds(), draw.Over, nil)
 
 	var out bytes.Buffer
 	switch strings.ToLower(strings.TrimPrefix(extension, ".")) {

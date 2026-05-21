@@ -34,7 +34,7 @@ func (s *imageGeneratorStub) GenerateImage(_ context.Context, request openaicode
 }
 
 func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
-	generatedPNG := testPNG(t, 512, 512)
+	generatedPNG := testPNG(t, 1024, 1024)
 	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{
 		Model:         "gpt-image-2",
 		Image:         generatedPNG,
@@ -73,7 +73,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if len(stub.requests) != 1 {
 		t.Fatalf("expected one generation request, got %d", len(stub.requests))
 	}
-	if stub.requests[0].Prompt != "нарисуй кота" || stub.requests[0].Model != "gpt-image-2" || stub.requests[0].Size != "512x512" {
+	if stub.requests[0].Prompt != "нарисуй кота" || stub.requests[0].Model != "gpt-image-2" || stub.requests[0].Size != "1024x1024" {
 		t.Fatalf("unexpected request: %#v", stub.requests[0])
 	}
 	if sentPath == "" {
@@ -92,7 +92,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 		t.Fatalf("decode written image: %v", err)
 	}
 	if decoded.Bounds().Dx() != 1024 || decoded.Bounds().Dy() != 1024 {
-		t.Fatalf("expected image upscaled to 1024x1024, got %dx%d", decoded.Bounds().Dx(), decoded.Bounds().Dy())
+		t.Fatalf("expected image delivered as 1024x1024, got %dx%d", decoded.Bounds().Dx(), decoded.Bounds().Dy())
 	}
 	if sentCaption != "цивик вышел подрифтить" {
 		t.Fatalf("unexpected caption: %q", sentCaption)
@@ -104,7 +104,7 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "512x512" || payload.Path != sentPath {
+	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "1024x1024" || payload.Path != sentPath {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }

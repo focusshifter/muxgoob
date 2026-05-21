@@ -1068,13 +1068,15 @@ Recent messages from %s:
 			if delta == nil || len(delta.Identity)+len(delta.Interests) == 0 {
 				return currentFacts
 			}
-			merged := facts.ApplyDelta(current, delta)
+			merged := facts.EnforceDossierBudgets(facts.ApplyDelta(current, delta))
 			candidate := facts.RenderDossier(merged)
-			consolidator := consolidatePersonFacts
-			if consolidatePersonFactsFunc != nil {
-				consolidator = consolidatePersonFactsFunc
+			if shouldConsolidateFacts(candidate) {
+				consolidator := consolidatePersonFacts
+				if consolidatePersonFactsFunc != nil {
+					consolidator = consolidatePersonFactsFunc
+				}
+				candidate = facts.EnforcePersonFactsBudgets(consolidator(chatID, user.Name, candidate))
 			}
-			candidate = consolidator(chatID, user.Name, candidate)
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {
 				return evaluation.Value

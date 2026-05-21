@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	factsutil "github.com/focusshifter/muxgoob/utils/facts"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -200,5 +201,5 @@ func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("retrieving person facts: %w", err)
 	}
-	return facts, nil
+	return factsutil.EnforcePersonFactsBudgets(facts), nil
 }

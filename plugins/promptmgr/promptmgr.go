@@ -14,6 +14,7 @@ import (
 
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/registry"
+	factsutil "github.com/focusshifter/muxgoob/utils/facts"
 )
 
 // GLOBAL_CHAT_ID is a special chat ID used for global prompts
@@ -722,7 +723,7 @@ func GetPersonFacts(chatID int64, userID int64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error retrieving person facts: %v", err)
 	}
-	return facts, nil
+	return factsutil.EnforcePersonFactsBudgets(facts), nil
 }
 
 func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error) {
@@ -773,7 +774,7 @@ func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error
 		if err := rows.Scan(&userID, &facts); err != nil {
 			return nil, fmt.Errorf("error scanning person facts: %v", err)
 		}
-		results[userID] = facts
+		results[userID] = factsutil.EnforcePersonFactsBudgets(facts)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -807,7 +808,7 @@ func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 		if err := rows.Scan(&userID, &facts); err != nil {
 			return nil, fmt.Errorf("error scanning person facts: %v", err)
 		}
-		results[userID] = facts
+		results[userID] = factsutil.EnforcePersonFactsBudgets(facts)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -818,7 +819,7 @@ func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 }
 
 func SavePersonFacts(chatID int64, userID int64, facts string) error {
-	trimmedFacts := strings.TrimSpace(facts)
+	trimmedFacts := factsutil.EnforcePersonFactsBudgets(facts)
 	if trimmedFacts == "" {
 		return nil
 	}

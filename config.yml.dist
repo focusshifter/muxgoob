@@ -53,6 +53,7 @@ spotify_review_prompt: |
     Write a witty review in RUSSIAN about the {type} "{title}" ({year}) by {artist}.
     Semi-follow the overall consensus from the facts below instead of being automatically harsh.
     Mention both what works and what does not, using concrete musical observations.
+    If the type is album, give the album a numeric rating from 1 to 10 in 0.5 increments; return it in the structured album_rating field and do not include the rating in review_text.
     No Markdown, plain text only.
 
     {grounding}

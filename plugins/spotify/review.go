@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -46,12 +47,12 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 	}
 
 	// Call for the actual review text
-	review := callChatModelForReview(&chatID, prompt)
+	review, rating := callChatModelForReview(&chatID, prompt, typ)
 	if strings.TrimSpace(review) == "" {
 		return ""
 	}
 
-	if err := saveReviewText(typ, spotifyID, review); err != nil {
+	if err := saveReviewText(typ, spotifyID, review, rating); err != nil {
 		log.Printf("[spotify] Failed to save review text: %v", err)
 	}
 
@@ -121,10 +122,87 @@ func buildSpotifyReviewPrompt(typ, artist, title, year, grounding string) string
 	} else if grounding != "" {
 		prompt = prompt + "\n\nGrounding (do not quote verbatim):\n" + grounding
 	}
+	if typ == "album" {
+		prompt = prompt + "\n\nGive the album a numeric rating from 1 to 10 in 0.5 increments. The model must return this rating in the structured album_rating field. Do not include the numeric rating in review_text; the application will append the final rating paragraph."
+	}
 	return prompt
 }
 
-func callChatModelForReview(chatID *int64, prompt string) string {
+type spotifyStructuredReview struct {
+	ReviewText  string   `json:"review_text"`
+	AlbumRating *float64 `json:"album_rating"`
+}
+
+func buildSpotifyReviewCompletionRequest(model, prompt, typ string) openai.ChatCompletionRequest {
+	return openai.ChatCompletionRequest{
+		Model: model,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleUser, Content: prompt},
+		},
+		Temperature:    float32(0.8),
+		ResponseFormat: spotifyReviewResponseFormat(typ),
+	}
+}
+
+func spotifyReviewResponseFormat(_ string) *openai.ChatCompletionResponseFormat {
+	required := `["review_text","album_rating"]`
+	schema := json.RawMessage(fmt.Sprintf(`{
+		"type":"object",
+		"additionalProperties":false,
+		"properties":{
+			"review_text":{"type":"string","description":"The review body without the final numeric rating paragraph."},
+			"album_rating":{"type":["number","null"],"minimum":1,"maximum":10,"multipleOf":0.5,"description":"Album rating from 1 to 10 in 0.5 increments. Must be null for non-album reviews."}
+		},
+		"required":%s
+	}`, required))
+	return &openai.ChatCompletionResponseFormat{
+		Type: openai.ChatCompletionResponseFormatTypeJSONSchema,
+		JSONSchema: &openai.ChatCompletionResponseFormatJSONSchema{
+			Name:   "spotify_review",
+			Strict: true,
+			Schema: schema,
+		},
+	}
+}
+
+func parseSpotifyReviewCompletion(content, typ string) (string, sql.NullFloat64, error) {
+	var structured spotifyStructuredReview
+	if err := json.Unmarshal([]byte(content), &structured); err != nil {
+		return "", sql.NullFloat64{}, err
+	}
+
+	reviewText := strings.TrimSpace(structured.ReviewText)
+	if reviewText == "" {
+		return "", sql.NullFloat64{}, fmt.Errorf("empty review_text")
+	}
+
+	if typ != "album" {
+		return reviewText, sql.NullFloat64{}, nil
+	}
+	if structured.AlbumRating == nil {
+		return "", sql.NullFloat64{}, fmt.Errorf("missing album_rating")
+	}
+	rating := *structured.AlbumRating
+	if !isValidAlbumRating(rating) {
+		return "", sql.NullFloat64{}, fmt.Errorf("invalid album_rating: %v", rating)
+	}
+	return reviewText + "\n\n" + formatAlbumRating(rating), sql.NullFloat64{Float64: rating, Valid: true}, nil
+}
+
+func isValidAlbumRating(rating float64) bool {
+	return rating >= 1 && rating <= 10 && math.Abs(rating*2-math.Round(rating*2)) < 0.000001
+}
+
+func formatAlbumRating(rating float64) string {
+	formatted := fmt.Sprintf("%.1f", rating)
+	if strings.HasSuffix(formatted, ".0") {
+		formatted = strings.TrimSuffix(formatted, ".0")
+	}
+	formatted = strings.ReplaceAll(formatted, ".", ",")
+	return formatted + " / 10"
+}
+
+func callChatModelForReview(chatID *int64, prompt, typ string) (string, sql.NullFloat64) {
 	var client chattools.ChatCompletionCreator
 	model := resolveSpotifyReviewModel(chatID)
 
@@ -132,7 +210,7 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 	switch provider {
 	case "openrouter":
 		if registry.Config.OpenrouterApiKey == "" {
-			return ""
+			return "", sql.NullFloat64{}
 		}
 		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
@@ -160,7 +238,7 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 		}
 	default:
 		if registry.Config.OpenaiApiKey == "" {
-			return ""
+			return "", sql.NullFloat64{}
 		}
 		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		if model == "" {
@@ -172,20 +250,19 @@ func callChatModelForReview(chatID *int64, prompt string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	resp, err := client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model: model,
-		Messages: []openai.ChatCompletionMessage{
-			{Role: openai.ChatMessageRoleUser, Content: prompt},
-		},
-		Temperature: float32(0.8),
-	})
+	resp, err := client.CreateChatCompletion(ctx, buildSpotifyReviewCompletionRequest(model, prompt, typ))
 	if err != nil || len(resp.Choices) == 0 {
 		if err != nil {
 			log.Printf("[spotify] Chat review error: %v", err)
 		}
-		return ""
+		return "", sql.NullFloat64{}
 	}
-	return strings.TrimSpace(resp.Choices[0].Message.Content)
+	review, rating, err := parseSpotifyReviewCompletion(resp.Choices[0].Message.Content, typ)
+	if err != nil {
+		log.Printf("[spotify] Failed to parse structured review response: %v", err)
+		return "", sql.NullFloat64{}
+	}
+	return review, rating
 }
 
 func resolveSpotifyReviewModel(chatID *int64) string {
@@ -373,9 +450,12 @@ func getExistingReview(typ, itemKey string) string {
 }
 
 // saveReviewText stores review text locally before publishing.
-func saveReviewText(typ, itemKey, reviewText string) error {
+func saveReviewText(typ, itemKey, reviewText string, rating sql.NullFloat64) error {
 	if strings.TrimSpace(reviewText) == "" {
 		return nil
+	}
+	if typ != "album" {
+		rating = sql.NullFloat64{}
 	}
 
 	var existingURL string
@@ -388,8 +468,8 @@ func saveReviewText(typ, itemKey, reviewText string) error {
 	}
 
 	_, err = database.DB.Exec(
-		"INSERT OR REPLACE INTO spotify_reviews (type, item_key, review_url, review_text) VALUES (?, ?, ?, ?)",
-		typ, itemKey, strings.TrimSpace(existingURL), reviewText,
+		"INSERT OR REPLACE INTO spotify_reviews (type, item_key, review_url, review_text, album_rating) VALUES (?, ?, ?, ?, ?)",
+		typ, itemKey, strings.TrimSpace(existingURL), reviewText, rating,
 	)
 	return err
 }
@@ -497,12 +577,12 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 		return "", fmt.Errorf("failed to build review prompt")
 	}
 
-	review := callChatModelForReview(&chatID, prompt)
+	review, rating := callChatModelForReview(&chatID, prompt, itemType)
 	if strings.TrimSpace(review) == "" {
 		return "", fmt.Errorf("failed to generate review")
 	}
 
-	if err := saveReviewText(itemType, spotifyID, review); err != nil {
+	if err := saveReviewText(itemType, spotifyID, review, rating); err != nil {
 		log.Printf("[spotify] Failed to save review text: %v", err)
 	}
 

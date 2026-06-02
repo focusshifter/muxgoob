@@ -213,6 +213,7 @@ func Initialize() {
 			item_key TEXT NOT NULL,  -- unique identifier for the item (spotify format)
 			review_url TEXT NOT NULL,  -- telegraph URL of the review (may be empty if not published yet)
 			review_text TEXT,  -- stored review text
+			album_rating REAL,  -- numeric album rating returned by the structured review response
 			created_at INTEGER DEFAULT (strftime('%s', 'now')),
 			UNIQUE(type, item_key)
 		);
@@ -249,6 +250,11 @@ func Initialize() {
 	if _, err := DB.Exec(`ALTER TABLE spotify_reviews ADD COLUMN review_text TEXT`); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			log.Printf("[database] Failed to add review_text column: %v", err)
+		}
+	}
+	if _, err := DB.Exec(`ALTER TABLE spotify_reviews ADD COLUMN album_rating REAL`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			log.Printf("[database] Failed to add album_rating column: %v", err)
 		}
 	}
 

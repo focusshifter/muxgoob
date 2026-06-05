@@ -100,6 +100,40 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	}
 }
 
+func TestGenerateImageToolDefaultsToLowQuality(t *testing.T) {
+	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{
+		Model:     "gpt-image-2",
+		Image:     []byte("fake-png"),
+		MimeType:  "image/png",
+		Extension: "png",
+	}}
+	tool := &GenerateImageTool{
+		chatID:    123,
+		generator: stub,
+		outputDir: t.TempDir(),
+		notify:    func(int64, telebot.ChatAction) error { return nil },
+		send:      func(int64, string, string) error { return nil },
+	}
+
+	result, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота"}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(stub.requests) != 1 {
+		t.Fatalf("expected one generation request, got %d", len(stub.requests))
+	}
+	if stub.requests[0].Quality != "low" {
+		t.Fatalf("expected default low quality, got %q", stub.requests[0].Quality)
+	}
+	var payload generateImageResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if payload.Quality != "low" {
+		t.Fatalf("expected result quality low, got %q", payload.Quality)
+	}
+}
+
 func TestGenerateImageToolDoesNotUseRevisedPromptAsCaption(t *testing.T) {
 	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{
 		Model:         "gpt-image-2",

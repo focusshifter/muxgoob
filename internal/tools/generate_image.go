@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	defaultGeneratedImageSize = "1024x1024"
+	defaultGeneratedImageSize    = "1024x1024"
+	defaultGeneratedImageQuality = "low"
 )
 
 type ImageGenerator interface {
@@ -85,7 +86,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 					},
 					"quality": map[string]any{
 						"type":        "string",
-						"description": "Optional quality: low, medium, high, or auto.",
+						"description": "Optional quality: low, medium, high, or auto. Default low for fast Telegram chat images; use medium/high only when the user explicitly asks for high quality, extra detail, or high resolution.",
 					},
 					"output_format": map[string]any{
 						"type":        "string",
@@ -116,6 +117,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 		size = defaultGeneratedImageSize
 	}
 	quality := cleanImageOption(parsedArgs.Quality)
+	if quality == "" {
+		quality = defaultGeneratedImageQuality
+	}
 	outputFormat := strings.ToLower(cleanImageOption(parsedArgs.OutputFormat))
 	if outputFormat == "" {
 		outputFormat = "png"

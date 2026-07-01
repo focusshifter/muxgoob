@@ -28,9 +28,10 @@ func CreateBirthdayNotificationsTable(t *testing.T, db *sql.DB) {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS birthday_notifications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL DEFAULT 0,
 			username TEXT,
 			year INTEGER,
-			UNIQUE(username, year)
+			UNIQUE(chat_id, username, year)
 		);
 	`)
 	if err != nil {
@@ -38,22 +39,38 @@ func CreateBirthdayNotificationsTable(t *testing.T, db *sql.DB) {
 	}
 }
 
+// CreateBirthdaysTable creates the birthdays table in the test database
+func CreateBirthdaysTable(t *testing.T, db *sql.DB) {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS birthdays (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			username TEXT NOT NULL,
+			birthday TEXT NOT NULL,
+			UNIQUE(chat_id, username)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create birthdays table: %v", err)
+	}
+}
+
 // NotMentioned is a test-friendly version of the notMentioned function
 // that handles the sql.ErrNoRows case correctly
-func NotMentioned(username string, year int, message *telebot.Message) bool {
+func NotMentioned(chatID int64, username string, year int, message *telebot.Message) bool {
 	var exists bool
 	err := database.DB.QueryRow(
-		"SELECT 1 FROM birthday_notifications WHERE username = ? AND year = ?",
-		username, year).Scan(&exists)
+		"SELECT 1 FROM birthday_notifications WHERE chat_id = ? AND username = ? AND year = ?",
+		chatID, username, year).Scan(&exists)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			// No record found, which means we haven't mentioned this user yet
-			log.Printf("[birthdays] Notify %s", username)
+			// No record found, which means we haven't mentioned this user in this chat yet
+			log.Printf("[birthdays] Notify %s in chat %d", username, chatID)
 
 			_, err = database.DB.Exec(
-				"INSERT INTO birthday_notifications (username, year) VALUES (?, ?)",
-				username, year)
+				"INSERT INTO birthday_notifications (chat_id, username, year) VALUES (?, ?, ?)",
+				chatID, username, year)
 			if err != nil {
 				log.Printf("[birthdays] Error saving birthday notification: %v", err)
 				return false
@@ -66,6 +83,6 @@ func NotMentioned(username string, year int, message *telebot.Message) bool {
 		}
 	}
 
-	// Record found, which means we've already mentioned this user
+	// Record found, which means we've already mentioned this user in this chat
 	return false
 }

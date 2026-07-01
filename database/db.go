@@ -169,11 +169,20 @@ func Initialize() {
 		);
 
 		-- Plugin-specific tables
+		CREATE TABLE IF NOT EXISTS birthdays (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL,
+			username TEXT NOT NULL,
+			birthday TEXT NOT NULL,
+			UNIQUE(chat_id, username)
+		);
+
 		CREATE TABLE IF NOT EXISTS birthday_notifications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			chat_id INTEGER NOT NULL DEFAULT 0,
 			username TEXT,
 			year INTEGER,
-			UNIQUE(username, year)
+			UNIQUE(chat_id, username, year)
 		);
 
 		CREATE TABLE IF NOT EXISTS dupe_links (
@@ -258,9 +267,75 @@ func Initialize() {
 		}
 	}
 
+	if err := ensureBirthdayNotificationChatScope(); err != nil {
+		log.Fatal("[database] Failed to migrate birthday notifications:", err)
+	}
+
 	if err := EnsureMessageSearchIndex(DB); err != nil {
 		log.Fatal("[database] Failed to initialize message search index:", err)
 	}
+}
+
+func ensureBirthdayNotificationChatScope() error {
+	rows, err := DB.Query(`PRAGMA table_info(birthday_notifications)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hasChatID := false
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == "chat_id" {
+			hasChatID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if !hasChatID {
+		if err := WithTx(context.Background(), func(tx *sql.Tx) error {
+			if _, err := tx.Exec(`
+				CREATE TABLE birthday_notifications_new (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					chat_id INTEGER NOT NULL DEFAULT 0,
+					username TEXT,
+					year INTEGER,
+					UNIQUE(chat_id, username, year)
+				)`); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`
+				INSERT OR IGNORE INTO birthday_notifications_new (id, chat_id, username, year)
+				SELECT id, 0, username, year FROM birthday_notifications`); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`DROP TABLE birthday_notifications`); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`ALTER TABLE birthday_notifications_new RENAME TO birthday_notifications`); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+
+	_, err = DB.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_birthdays_chat ON birthdays(chat_id);
+		CREATE INDEX IF NOT EXISTS idx_birthday_notifications_chat_username ON birthday_notifications(chat_id, username);
+	`)
+	return err
 }
 
 func Close() {

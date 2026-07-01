@@ -6,10 +6,12 @@ nametrigger:
       chance:
       reply:
 time_zone: Europe/Moscow
-birthdays:
-  - chat_id: 123456789
-    users:
-      username1: 2006-01-02
+# birthdays are stored in SQLite now. If this legacy section is present,
+# it is imported/upserted into the birthdays table on startup.
+# birthdays:
+#   - chat_id: 123456789
+#     users:
+#       username1: 2006-01-02
 dupe_ignored_domains:
   - twitch.tv
   - www.twitch.tv

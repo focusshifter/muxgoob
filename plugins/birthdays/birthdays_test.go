@@ -15,13 +15,21 @@ import (
 
 // TestBirthdaysPlugin_Start tests the Start method of BirthdaysPlugin
 func TestBirthdaysPlugin_Start(t *testing.T) {
-	// Save original configs to restore later
+	// Save original configs and database to restore later
 	originalConfigs := registry.Config
+	originalDB := database.DB
 	originalTimeNow := timeNow
 	defer func() {
 		registry.Config = originalConfigs
+		database.DB = originalDB
 		timeNow = originalTimeNow
 	}()
+
+	// Setup mock database
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	testutils.CreateBirthdaysTable(t, mockDB)
+	database.DB = mockDB
 
 	// Mock time.Now
 	fixedTime := time.Date(2025, 3, 8, 12, 0, 0, 0, time.UTC)
@@ -91,7 +99,17 @@ func TestBirthdaysPlugin_Start(t *testing.T) {
 	}
 
 	if user2Birthday.Day() != 5 {
-		t.Errorf("Expected user2 birth day 5, got %d", user2Birthday.Day())
+		t.Errorf("Expected user2 birthday day 5, got %d", user2Birthday.Day())
+	}
+
+	var storedBirthday string
+	if err := mockDB.QueryRow(
+		"SELECT birthday FROM birthdays WHERE chat_id = ? AND username = ?",
+		int64(123), "user1").Scan(&storedBirthday); err != nil {
+		t.Fatalf("Expected user1 birthday to be migrated into DB: %v", err)
+	}
+	if storedBirthday != "1990-01-01" {
+		t.Errorf("Expected migrated DB birthday 1990-01-01, got %s", storedBirthday)
 	}
 }
 
@@ -117,7 +135,7 @@ func TestCheckTodaysBirthdays(t *testing.T) {
 	testutils.CreateBirthdayNotificationsTable(t, mockDB)
 
 	// Insert some test data to avoid the "no rows" error
-	_, err := mockDB.Exec("INSERT INTO birthday_notifications (username, year) VALUES (?, ?)", "existing_user", 2025)
+	_, err := mockDB.Exec("INSERT INTO birthday_notifications (chat_id, username, year) VALUES (?, ?, ?)", 123, "existing_user", 2025)
 	if err != nil {
 		t.Fatalf("Failed to insert test data: %v", err)
 	}
@@ -169,7 +187,7 @@ func TestCheckTodaysBirthdays(t *testing.T) {
 				continue
 			}
 			for username, birthday := range config.birthdays {
-				if cur.Month() == birthday.Month() && cur.Day() == birthday.Day() && testutils.NotMentioned(username, cur.Year(), message) {
+				if cur.Month() == birthday.Month() && cur.Day() == birthday.Day() && testutils.NotMentioned(message.Chat.ID, username, cur.Year(), message) {
 					age := strconv.Itoa(age.AgeAt(birthday, cur))
 					bot.Send(message.Chat, "Hooray! 🎉 @"+username+" is turning "+age+"! 🎂", &telebot.SendOptions{})
 				}
@@ -202,8 +220,8 @@ func TestCheckTodaysBirthdays(t *testing.T) {
 	// Verify that the notification was recorded in the database
 	var count int
 	err = mockDB.QueryRow(
-		"SELECT COUNT(*) FROM birthday_notifications WHERE username = ? AND year = ?",
-		"today_user", 2025).Scan(&count)
+		"SELECT COUNT(*) FROM birthday_notifications WHERE chat_id = ? AND username = ? AND year = ?",
+		123, "today_user", 2025).Scan(&count)
 	if err != nil {
 		t.Fatalf("Error counting records: %v", err)
 	}
@@ -334,7 +352,7 @@ func TestNotMentioned(t *testing.T) {
 	testutils.CreateBirthdayNotificationsTable(t, mockDB)
 
 	// Insert test data for an existing user
-	_, err := mockDB.Exec("INSERT INTO birthday_notifications (username, year) VALUES (?, ?)", "existing_user", 2025)
+	_, err := mockDB.Exec("INSERT INTO birthday_notifications (chat_id, username, year) VALUES (?, ?, ?)", 123, "existing_user", 2025)
 	if err != nil {
 		t.Fatalf("Failed to insert test data: %v", err)
 	}
@@ -345,12 +363,12 @@ func TestNotMentioned(t *testing.T) {
 	message := &telebot.Message{}
 
 	// Insert the test_user after the test to verify it was added
-	result := testutils.NotMentioned("test_user", 2025, message)
+	result := testutils.NotMentioned(123, "test_user", 2025, message)
 
 	// Manually check if the record was inserted
 	var count int
-	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE username = ? AND year = ?",
-		"test_user", 2025).Scan(&count)
+	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE chat_id = ? AND username = ? AND year = ?",
+		123, "test_user", 2025).Scan(&count)
 	if err != nil {
 		t.Fatalf("Error counting records: %v", err)
 	}
@@ -364,18 +382,18 @@ func TestNotMentioned(t *testing.T) {
 	}
 
 	// Test case 2: User already mentioned (should return false now)
-	result = testutils.NotMentioned("test_user", 2025, message)
+	result = testutils.NotMentioned(123, "test_user", 2025, message)
 	if result {
 		t.Error("Expected notMentioned to return false for an already mentioned user")
 	}
 
 	// Test case 3: Different year
-	result = testutils.NotMentioned("test_user", 2026, message)
+	result = testutils.NotMentioned(123, "test_user", 2026, message)
 
 	// Verify the record was inserted
 	count = 0
-	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE username = ? AND year = ?",
-		"test_user", 2026).Scan(&count)
+	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE chat_id = ? AND username = ? AND year = ?",
+		123, "test_user", 2026).Scan(&count)
 	if err != nil {
 		t.Fatalf("Error counting records: %v", err)
 	}
@@ -389,12 +407,12 @@ func TestNotMentioned(t *testing.T) {
 	}
 
 	// Test case 4: Different user
-	result = testutils.NotMentioned("another_user", 2025, message)
+	result = testutils.NotMentioned(123, "another_user", 2025, message)
 
 	// Verify the record was inserted
 	count = 0
-	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE username = ? AND year = ?",
-		"another_user", 2025).Scan(&count)
+	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE chat_id = ? AND username = ? AND year = ?",
+		123, "another_user", 2025).Scan(&count)
 	if err != nil {
 		t.Fatalf("Error counting records: %v", err)
 	}
@@ -405,5 +423,21 @@ func TestNotMentioned(t *testing.T) {
 
 	if !result {
 		t.Error("Expected notMentioned to return true for a different user")
+	}
+
+	// Test case 5: Same user/year in a different chat should be independent
+	result = testutils.NotMentioned(456, "test_user", 2025, message)
+	if !result {
+		t.Error("Expected notMentioned to return true for the same user/year in a different chat")
+	}
+
+	count = 0
+	err = mockDB.QueryRow("SELECT COUNT(*) FROM birthday_notifications WHERE username = ? AND year = ?",
+		"test_user", 2025).Scan(&count)
+	if err != nil {
+		t.Fatalf("Error counting per-chat records: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("Expected two per-chat records for test_user in 2025, got %d", count)
 	}
 }

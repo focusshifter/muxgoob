@@ -172,6 +172,26 @@ func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query
 		return nil, nil
 	}
 
+	ranked := make([]rankedSearchMessageResult, 0)
+	strictMatchQuery := buildStrictFTSQuery(query, variants)
+	if strictMatchQuery != "" && strictMatchQuery != matchQuery {
+		strictRanked, err := queryRankedMessagesWithFTS(db, chatID, excludeMessageID, strictMatchQuery, query, variants, patterns, limit)
+		if err != nil {
+			return nil, err
+		}
+		ranked = append(ranked, strictRanked...)
+	}
+
+	broadRanked, err := queryRankedMessagesWithFTS(db, chatID, excludeMessageID, matchQuery, query, variants, patterns, limit)
+	if err != nil {
+		return nil, err
+	}
+	ranked = append(ranked, broadRanked...)
+
+	return finalizeRankedSearchResults(dedupeRankedSearchResults(ranked), limit), nil
+}
+
+func queryRankedMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, matchQuery, query string, variants, patterns []string, limit int) ([]rankedSearchMessageResult, error) {
 	args := make([]any, 0, 4)
 	args = append(args, matchQuery, chatID)
 	queryFilter := "WHERE messages_fts MATCH ? AND m.chat_id = ?"
@@ -199,20 +219,44 @@ func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query
 	if err != nil {
 		return nil, err
 	}
-	return finalizeRankedSearchResults(ranked, limit), nil
+	return ranked, nil
 }
 
 func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
-	whereParts := make([]string, 0, len(patterns))
-	args := make([]any, 0, len(patterns)+3)
-	args = append(args, chatID)
-	if excludeMessageID > 0 {
-		args = append(args, excludeMessageID)
+	ranked := make([]rankedSearchMessageResult, 0)
+
+	strictWhereParts, strictArgs := buildStrictLikeFilters(query, variants, "LOWER(COALESCE(NULLIF(m.text, ''), m.caption, ''))")
+	if len(strictWhereParts) > 0 {
+		strictRanked, err := queryRankedMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, strictWhereParts, strictArgs, limit)
+		if err != nil {
+			return nil, err
+		}
+		ranked = append(ranked, strictRanked...)
 	}
+
+	whereParts := make([]string, 0, len(patterns))
+	args := make([]any, 0, len(patterns))
 	for _, pattern := range patterns {
 		whereParts = append(whereParts, "LOWER(COALESCE(NULLIF(m.text, ''), m.caption, '')) LIKE ?")
 		args = append(args, "%"+pattern+"%")
 	}
+
+	broadRanked, err := queryRankedMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, whereParts, args, limit)
+	if err != nil {
+		return nil, err
+	}
+	ranked = append(ranked, broadRanked...)
+
+	return finalizeRankedSearchResults(dedupeRankedSearchResults(ranked), limit), nil
+}
+
+func queryRankedMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, whereParts []string, matchArgs []any, limit int) ([]rankedSearchMessageResult, error) {
+	args := make([]any, 0, len(matchArgs)+3)
+	args = append(args, chatID)
+	if excludeMessageID > 0 {
+		args = append(args, excludeMessageID)
+	}
+	args = append(args, matchArgs...)
 	args = append(args, searchCandidateLimit)
 
 	queryFilter := "WHERE m.chat_id = ?"
@@ -237,7 +281,7 @@ func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, quer
 	if err != nil {
 		return nil, err
 	}
-	return finalizeRankedSearchResults(ranked, limit), nil
+	return ranked, nil
 }
 
 func searchImageMetadataWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
@@ -368,6 +412,109 @@ func finalizeRankedSearchResults(ranked []rankedSearchMessageResult, limit int) 
 		results = append(results, item.searchMessageResult)
 	}
 	return results
+}
+
+func buildStrictLikeFilters(query string, variants []string, expression string) ([]string, []any) {
+	terms := append([]string{query}, variants...)
+	seen := make(map[string]struct{})
+	whereParts := make([]string, 0, len(terms))
+	args := make([]any, 0)
+
+	for _, term := range terms {
+		normalized := normalizeSearchText(term)
+		if normalized == "" {
+			continue
+		}
+
+		tokens := make([]string, 0, 4)
+		for _, token := range querySplitPattern.FindAllString(normalized, -1) {
+			if _, skip := searchStopWords[token]; skip {
+				continue
+			}
+			if len([]rune(token)) < 2 {
+				continue
+			}
+			tokens = append(tokens, token)
+		}
+		if len(tokens) < 2 {
+			continue
+		}
+
+		key := strings.Join(tokens, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		andParts := make([]string, 0, len(tokens))
+		for _, token := range tokens {
+			andParts = append(andParts, expression+" LIKE ?")
+			args = append(args, "%"+token+"%")
+		}
+		whereParts = append(whereParts, "("+strings.Join(andParts, " AND ")+")")
+	}
+
+	return whereParts, args
+}
+
+func dedupeRankedSearchResults(ranked []rankedSearchMessageResult) []rankedSearchMessageResult {
+	if len(ranked) == 0 {
+		return ranked
+	}
+
+	seen := make(map[string]int, len(ranked))
+	deduped := make([]rankedSearchMessageResult, 0, len(ranked))
+	for _, item := range ranked {
+		key := fmt.Sprintf("%d:%s:%s", item.Timestamp, item.Sender, item.Text)
+		if idx, ok := seen[key]; ok {
+			if item.score > deduped[idx].score {
+				deduped[idx] = item
+			}
+			continue
+		}
+		seen[key] = len(deduped)
+		deduped = append(deduped, item)
+	}
+	return deduped
+}
+
+func buildStrictFTSQuery(query string, variants []string) string {
+	terms := append([]string{query}, variants...)
+	seen := make(map[string]struct{})
+	clauses := make([]string, 0, len(terms))
+
+	for _, term := range terms {
+		normalized := normalizeSearchText(term)
+		if normalized == "" {
+			continue
+		}
+
+		tokens := make([]string, 0, 4)
+		for _, token := range querySplitPattern.FindAllString(normalized, -1) {
+			if _, skip := searchStopWords[token]; skip {
+				continue
+			}
+			if len([]rune(token)) < 2 {
+				continue
+			}
+			tokens = append(tokens, token)
+		}
+		if len(tokens) == 0 {
+			continue
+		}
+
+		clause := strings.Join(tokens, " AND ")
+		if len(tokens) > 1 {
+			clause = "(" + clause + ")"
+		}
+		if _, ok := seen[clause]; ok {
+			continue
+		}
+		seen[clause] = struct{}{}
+		clauses = append(clauses, clause)
+	}
+
+	return strings.Join(clauses, " OR ")
 }
 
 func buildFTSQuery(query string, variants []string) string {
@@ -506,6 +653,29 @@ func scoreSearchResult(text, rawQuery string, variants []string, patterns []stri
 		case strings.Contains(normalizedText, normalized):
 			score += 120
 		}
+
+		queryTokens := make([]string, 0, 4)
+		for _, token := range querySplitPattern.FindAllString(normalized, -1) {
+			if _, skip := searchStopWords[token]; skip {
+				continue
+			}
+			if len([]rune(token)) < 2 {
+				continue
+			}
+			queryTokens = append(queryTokens, token)
+		}
+		if len(queryTokens) > 1 {
+			matchedTokens := 0
+			for _, queryToken := range queryTokens {
+				if searchTextContainsToken(textTokens, queryToken) {
+					matchedTokens++
+				}
+			}
+			score += matchedTokens * 40
+			if matchedTokens == len(queryTokens) {
+				score += 180
+			}
+		}
 	}
 
 	for _, pattern := range patterns {
@@ -535,6 +705,15 @@ func scoreSearchResult(text, rawQuery string, variants []string, patterns []stri
 	}
 
 	return score
+}
+
+func searchTextContainsToken(textTokens map[string]struct{}, queryToken string) bool {
+	for textToken := range textTokens {
+		if textToken == queryToken || strings.HasPrefix(textToken, queryToken) || strings.Contains(textToken, queryToken) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSearchText(value string) string {

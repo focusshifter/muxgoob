@@ -2,6 +2,7 @@ package birthdays
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -337,6 +338,171 @@ func TestHandleBirthdayCommand(t *testing.T) {
 }
 
 // TestNotMentioned tests the notMentioned function
+func TestBirthdayAdminCommandAddAndDelete(t *testing.T) {
+	originalBot := registry.Bot
+	originalConfig := registry.Config
+	originalDB := database.DB
+	originalIsBotOwner := isBotOwner
+	defer func() {
+		registry.Bot = originalBot
+		registry.Config = originalConfig
+		database.DB = originalDB
+		isBotOwner = originalIsBotOwner
+	}()
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	testutils.CreateBirthdaysTable(t, mockDB)
+	database.DB = mockDB
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	loc, _ := time.LoadLocation("UTC")
+	registry.Config.TimeLoc = loc
+	isBotOwner = func(*telebot.Message) bool { return true }
+	birthdayConfigs = nil
+
+	message := &telebot.Message{
+		Text:   "!birthday @alice 1987-05-14",
+		Chat:   &telebot.Chat{ID: 123},
+		Sender: &telebot.User{ID: 1},
+	}
+	handleBirthdayCommand(message)
+
+	var storedBirthday string
+	if err := mockDB.QueryRow("SELECT birthday FROM birthdays WHERE chat_id = ? AND username = ?", int64(123), "alice").Scan(&storedBirthday); err != nil {
+		t.Fatalf("expected birthday to be saved: %v", err)
+	}
+	if storedBirthday != "1987-05-14" {
+		t.Fatalf("expected saved birthday 1987-05-14, got %s", storedBirthday)
+	}
+	if len(birthdayConfigs) != 1 || birthdayConfigs[0].birthdays["alice"].Format("2006-01-02") != "1987-05-14" {
+		t.Fatalf("expected in-memory birthdays to be updated, got %#v", birthdayConfigs)
+	}
+
+	mockBot.SendCalled = false
+	message.Text = "!birthday list"
+	handleBirthdayCommand(message)
+	listText, ok := mockBot.SendWhat.(string)
+	if !ok || !strings.Contains(listText, "Birthdays for chat 123") || !strings.Contains(listText, "@alice — 1987-05-14") {
+		t.Fatalf("expected list with alice birthday, got %#v", mockBot.SendWhat)
+	}
+
+	message.Text = "!birthday @alice -"
+	handleBirthdayCommand(message)
+
+	var count int
+	if err := mockDB.QueryRow("SELECT COUNT(*) FROM birthdays WHERE chat_id = ? AND username = ?", int64(123), "alice").Scan(&count); err != nil {
+		t.Fatalf("failed to count birthdays: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected birthday to be deleted, got count %d", count)
+	}
+	if _, exists := birthdayConfigs[0].birthdays["alice"]; exists {
+		t.Fatal("expected in-memory birthday to be deleted")
+	}
+}
+
+func TestBirthdayAdminCommandSupportsExplicitChatID(t *testing.T) {
+	originalBot := registry.Bot
+	originalConfig := registry.Config
+	originalDB := database.DB
+	originalIsBotOwner := isBotOwner
+	defer func() {
+		registry.Bot = originalBot
+		registry.Config = originalConfig
+		database.DB = originalDB
+		isBotOwner = originalIsBotOwner
+	}()
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	testutils.CreateBirthdaysTable(t, mockDB)
+	database.DB = mockDB
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	loc, _ := time.LoadLocation("UTC")
+	registry.Config.TimeLoc = loc
+	isBotOwner = func(*telebot.Message) bool { return true }
+	birthdayConfigs = nil
+
+	message := &telebot.Message{
+		Text:   "!birthday -777 @alice 1987-05-14",
+		Chat:   &telebot.Chat{ID: 123},
+		Sender: &telebot.User{ID: 1},
+	}
+	handleBirthdayCommand(message)
+
+	var storedBirthday string
+	if err := mockDB.QueryRow("SELECT birthday FROM birthdays WHERE chat_id = ? AND username = ?", int64(-777), "alice").Scan(&storedBirthday); err != nil {
+		t.Fatalf("expected explicit-chat birthday to be saved: %v", err)
+	}
+
+	message.Text = "!birthday -777 list"
+	handleBirthdayCommand(message)
+	listText, ok := mockBot.SendWhat.(string)
+	if !ok || !strings.Contains(listText, "Birthdays for chat -777") || !strings.Contains(listText, "@alice — 1987-05-14") {
+		t.Fatalf("expected explicit chat list, got %#v", mockBot.SendWhat)
+	}
+
+	message.Text = "!birthday -777 @alice -"
+	handleBirthdayCommand(message)
+	var count int
+	if err := mockDB.QueryRow("SELECT COUNT(*) FROM birthdays WHERE chat_id = ? AND username = ?", int64(-777), "alice").Scan(&count); err != nil {
+		t.Fatalf("failed to count birthdays: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected explicit-chat birthday to be deleted, got count %d", count)
+	}
+}
+
+func TestBirthdayAdminCommandRequiresBotOwner(t *testing.T) {
+	originalBot := registry.Bot
+	originalConfig := registry.Config
+	originalDB := database.DB
+	originalIsBotOwner := isBotOwner
+	defer func() {
+		registry.Bot = originalBot
+		registry.Config = originalConfig
+		database.DB = originalDB
+		isBotOwner = originalIsBotOwner
+	}()
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	testutils.CreateBirthdaysTable(t, mockDB)
+	database.DB = mockDB
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	loc, _ := time.LoadLocation("UTC")
+	registry.Config.TimeLoc = loc
+	isBotOwner = func(*telebot.Message) bool { return false }
+	birthdayConfigs = nil
+
+	handleBirthdayCommand(&telebot.Message{
+		Text:   "!birthday @alice 1987-05-14",
+		Chat:   &telebot.Chat{ID: 123},
+		Sender: &telebot.User{ID: 1},
+	})
+
+	var count int
+	if err := mockDB.QueryRow("SELECT COUNT(*) FROM birthdays").Scan(&count); err != nil {
+		t.Fatalf("failed to count birthdays: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected non-admin command not to save birthday, got count %d", count)
+	}
+	if !mockBot.SendCalled {
+		t.Fatal("expected denial message to be sent")
+	}
+	messageText, ok := mockBot.SendWhat.(string)
+	if !ok || messageText != "Only bot owner can manage birthdays" {
+		t.Fatalf("expected owner-only denial, got %#v", mockBot.SendWhat)
+	}
+}
+
 func TestNotMentioned(t *testing.T) {
 	// Save original database to restore later
 	originalDB := database.DB

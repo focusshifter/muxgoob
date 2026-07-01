@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bearbin/go-age"
@@ -29,6 +30,9 @@ var birthdayConfigs []birthdayConfig
 
 // Add a variable to allow mocking time.Now() in tests
 var timeNow = time.Now
+
+// Add a variable to allow mocking owner lookup in tests.
+var isBotOwner = messageSenderIsBotOwner
 
 func init() {
 	registry.RegisterPlugin(&BirthdaysPlugin{})
@@ -88,6 +92,41 @@ func saveBirthday(chatID int64, username string, birthday time.Time) error {
 		ON CONFLICT(chat_id, username) DO UPDATE SET birthday = excluded.birthday`,
 		chatID, username, birthday.Format("2006-01-02"))
 	return err
+}
+
+func deleteBirthday(chatID int64, username string) error {
+	_, err := database.DB.Exec(`DELETE FROM birthdays WHERE chat_id = ? AND username = ?`, chatID, username)
+	return err
+}
+
+func setBirthdayInMemory(chatID int64, username string, birthday time.Time) {
+	for i := range birthdayConfigs {
+		if birthdayConfigs[i].chatID != chatID {
+			continue
+		}
+		if birthdayConfigs[i].birthdays == nil {
+			birthdayConfigs[i].birthdays = make(map[string]time.Time)
+		}
+		birthdayConfigs[i].birthdays[username] = birthday
+		return
+	}
+
+	birthdayConfigs = append(birthdayConfigs, birthdayConfig{
+		chatID: chatID,
+		birthdays: map[string]time.Time{
+			username: birthday,
+		},
+	})
+}
+
+func deleteBirthdayInMemory(chatID int64, username string) {
+	for i := range birthdayConfigs {
+		if birthdayConfigs[i].chatID != chatID {
+			continue
+		}
+		delete(birthdayConfigs[i].birthdays, username)
+		return
+	}
 }
 
 func reloadBirthdayConfigs() error {
@@ -170,6 +209,10 @@ func handleBirthdayCommand(message *telebot.Message) {
 		loc = time.Local
 	}
 
+	if handleBirthdayAdminCommand(message, loc) {
+		return
+	}
+
 	birthdayExp := regexp.MustCompile(`(?i)^\!(др|birthda(y|ys))$`)
 
 	switch {
@@ -207,6 +250,118 @@ func handleBirthdayCommand(message *telebot.Message) {
 			bot.Send(message.Chat, "No upcoming birthdays", &telebot.SendOptions{})
 		}
 	}
+}
+
+func handleBirthdayAdminCommand(message *telebot.Message, loc *time.Location) bool {
+	if message == nil || message.Chat == nil {
+		return false
+	}
+
+	parts := strings.Fields(message.Text)
+	if len(parts) < 2 || len(parts) > 4 || !regexp.MustCompile(`(?i)^!birthday$`).MatchString(parts[0]) {
+		return false
+	}
+
+	bot := registry.Bot
+	targetChatID := message.Chat.ID
+	argIndex := 1
+	if parsedChatID, err := strconv.ParseInt(parts[argIndex], 10, 64); err == nil {
+		targetChatID = parsedChatID
+		argIndex++
+	}
+
+	if !isBotOwner(message) {
+		bot.Send(message.Chat, "Only bot owner can manage birthdays", &telebot.SendOptions{})
+		return true
+	}
+
+	if argIndex < len(parts) && strings.EqualFold(parts[argIndex], "list") {
+		if argIndex != len(parts)-1 {
+			bot.Send(message.Chat, birthdayUsage(), &telebot.SendOptions{})
+			return true
+		}
+		text, err := formatBirthdayList(targetChatID)
+		if err != nil {
+			log.Printf("[birthdays] Error listing birthdays for chat %d: %v", targetChatID, err)
+			bot.Send(message.Chat, "Failed to list birthdays", &telebot.SendOptions{})
+			return true
+		}
+		bot.Send(message.Chat, text, &telebot.SendOptions{})
+		return true
+	}
+
+	if argIndex+1 >= len(parts) || argIndex+2 != len(parts) || !strings.HasPrefix(parts[argIndex], "@") || len(parts[argIndex]) < 2 {
+		bot.Send(message.Chat, birthdayUsage(), &telebot.SendOptions{})
+		return true
+	}
+	username := strings.TrimPrefix(parts[argIndex], "@")
+	value := parts[argIndex+1]
+
+	if value == "-" {
+		if err := deleteBirthday(targetChatID, username); err != nil {
+			log.Printf("[birthdays] Error deleting birthday for chat %d user %s: %v", targetChatID, username, err)
+			bot.Send(message.Chat, "Failed to delete birthday", &telebot.SendOptions{})
+			return true
+		}
+		deleteBirthdayInMemory(targetChatID, username)
+		bot.Send(message.Chat, "Deleted birthday for @"+username+" in chat "+strconv.FormatInt(targetChatID, 10), &telebot.SendOptions{})
+		return true
+	}
+
+	birthday, err := time.ParseInLocation("2006-01-02", value, loc)
+	if err != nil {
+		bot.Send(message.Chat, "Invalid date. Use YYYY-MM-DD, for example: !birthday @username 1987-05-14", &telebot.SendOptions{})
+		return true
+	}
+
+	if err := saveBirthday(targetChatID, username, birthday); err != nil {
+		log.Printf("[birthdays] Error saving birthday for chat %d user %s: %v", targetChatID, username, err)
+		bot.Send(message.Chat, "Failed to save birthday", &telebot.SendOptions{})
+		return true
+	}
+	setBirthdayInMemory(targetChatID, username, birthday)
+	bot.Send(message.Chat, "Saved birthday for @"+username+" on "+birthday.Format("2006-01-02")+" in chat "+strconv.FormatInt(targetChatID, 10), &telebot.SendOptions{})
+	return true
+}
+
+func birthdayUsage() string {
+	return "Usage: !birthday list, !birthday CHATID list, !birthday @username 1987-05-14, !birthday @username -, !birthday CHATID @username 1987-05-14, or !birthday CHATID @username -"
+}
+
+func formatBirthdayList(chatID int64) (string, error) {
+	rows, err := database.DB.Query(`
+		SELECT username, birthday
+		FROM birthdays
+		WHERE chat_id = ?
+		ORDER BY substr(birthday, 6, 5), username`, chatID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	lines := []string{"Birthdays for chat " + strconv.FormatInt(chatID, 10) + ":"}
+	for rows.Next() {
+		var username string
+		var birthday string
+		if err := rows.Scan(&username, &birthday); err != nil {
+			return "", err
+		}
+		lines = append(lines, "@"+username+" — "+birthday)
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "No birthdays configured")
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func messageSenderIsBotOwner(message *telebot.Message) bool {
+	if message == nil || message.Sender == nil {
+		return false
+	}
+	return message.Sender.Username != "" && strings.EqualFold(message.Sender.Username, registry.Config.OwnerUsername)
 }
 
 func notMentioned(chatID int64, username string, year int) bool {

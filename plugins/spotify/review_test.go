@@ -3,6 +3,7 @@ package spotify
 import (
 	"database/sql"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -47,6 +48,26 @@ func TestBuildSpotifyReviewPrompt_CustomTemplate(t *testing.T) {
 		if !strings.Contains(prompt, check) {
 			t.Fatalf("expected prompt to contain %q, got %q", check, prompt)
 		}
+	}
+}
+
+func TestBuildTelegraphReviewContentStartsWithSpotifyLink(t *testing.T) {
+	content := buildTelegraphReviewContent("https://open.spotify.com/album/album123", "Отличный альбом.")
+	if len(content) != 2 {
+		t.Fatalf("expected link and review paragraphs, got %#v", content)
+	}
+	if content[0].Tag != "p" || len(content[0].Children) != 1 {
+		t.Fatalf("unexpected Spotify link paragraph: %#v", content[0])
+	}
+	link, ok := content[0].Children[0].(telegraphNode)
+	if !ok {
+		t.Fatalf("expected a Telegraph link node, got %#v", content[0].Children[0])
+	}
+	if link.Tag != "a" || link.Attrs["href"] != "https://open.spotify.com/album/album123" || !reflect.DeepEqual(link.Children, []interface{}{"Spotify"}) {
+		t.Fatalf("unexpected Spotify link: %#v", link)
+	}
+	if !reflect.DeepEqual(content[1].Children, []interface{}{"Отличный альбом."}) {
+		t.Fatalf("unexpected review paragraph: %#v", content[1])
 	}
 }
 

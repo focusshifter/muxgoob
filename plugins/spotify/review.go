@@ -57,7 +57,7 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 	}
 
 	// Publish
-	pageURL, err := publishToTelegraph(artist, title, year, review)
+	pageURL, err := publishToTelegraph(artist, title, year, canonicalSpotifyURL(typ, spotifyID), review)
 	if err != nil {
 		log.Printf("[spotify] Telegraph publish failed: %v", err)
 		return ""
@@ -278,23 +278,38 @@ func resolveSpotifyReviewModel(chatID *int64) string {
 	return "gpt-4o-mini"
 }
 
-func publishToTelegraph(artist, title, year, review string) (string, error) {
+type telegraphNode struct {
+	Tag      string            `json:"tag"`
+	Attrs    map[string]string `json:"attrs,omitempty"`
+	Children []interface{}     `json:"children"`
+}
+
+func canonicalSpotifyURL(typ, spotifyID string) string {
+	return fmt.Sprintf("https://open.spotify.com/%s/%s", typ, spotifyID)
+}
+
+func buildTelegraphReviewContent(spotifyURL, review string) []telegraphNode {
+	return []telegraphNode{
+		{
+			Tag: "p",
+			Children: []interface{}{telegraphNode{
+				Tag:      "a",
+				Attrs:    map[string]string{"href": spotifyURL},
+				Children: []interface{}{"Spotify"},
+			}},
+		},
+		{Tag: "p", Children: []interface{}{review}},
+	}
+}
+
+func publishToTelegraph(artist, title, year, spotifyURL, review string) (string, error) {
 	accessToken := registry.Config.SpotifyReviewMicroblogAuth
 	if accessToken == "" {
 		return "", fmt.Errorf("no telegraph access token configured")
 	}
 
-	// Very simple paragraph node with the review text
 	// See https://telegra.ph/api#createPage
-	type node struct {
-		Tag      string        `json:"tag"`
-		Children []interface{} `json:"children"`
-	}
-
-	content := []node{{
-		Tag:      "p",
-		Children: []interface{}{review},
-	}}
+	content := buildTelegraphReviewContent(spotifyURL, review)
 	contentJSON, _ := json.Marshal(content)
 
 	var titleText string
@@ -340,7 +355,7 @@ func publishToTelegraph(artist, title, year, review string) (string, error) {
 	return result.Result.URL, nil
 }
 
-func editTelegraph(existingURL, artist, title, year, review string) error {
+func editTelegraph(existingURL, artist, title, year, spotifyURL, review string) error {
 	accessToken := registry.Config.SpotifyReviewMicroblogAuth
 	if accessToken == "" {
 		return fmt.Errorf("no telegraph access token configured")
@@ -353,16 +368,7 @@ func editTelegraph(existingURL, artist, title, year, review string) error {
 	}
 	path := parts[len(parts)-1]
 
-	// Very simple paragraph node with the review text
-	type node struct {
-		Tag      string        `json:"tag"`
-		Children []interface{} `json:"children"`
-	}
-
-	content := []node{{
-		Tag:      "p",
-		Children: []interface{}{review},
-	}}
+	content := buildTelegraphReviewContent(spotifyURL, review)
 	contentJSON, _ := json.Marshal(content)
 
 	var titleText string
@@ -587,7 +593,7 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 	}
 
 	// Edit the existing Telegraph article
-	if err := editTelegraph(reviewURL, artist, title, year, review); err != nil {
+	if err := editTelegraph(reviewURL, artist, title, year, canonicalSpotifyURL(itemType, spotifyID), review); err != nil {
 		return "", fmt.Errorf("failed to edit Telegraph article: %v", err)
 	}
 

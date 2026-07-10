@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,6 +69,31 @@ func TestSpotifyPlugin_Start(t *testing.T) {
 				t.Errorf("For input '%s': expected albumID=%s, got=%s", tc.input, tc.albumID, matches[0][1])
 			}
 		}
+	}
+}
+
+func TestSpotifyPlugin_ExtractSpotifyIDsIncludesHiddenTextLinks(t *testing.T) {
+	plugin := &SpotifyPlugin{}
+	plugin.Start(nil)
+
+	message := &telebot.Message{
+		Text: "Очень танцы.",
+		Entities: []telebot.MessageEntity{
+			{
+				Type:   telebot.EntityTextLink,
+				Offset: 6,
+				Length: 6,
+				URL:    "https://open.spotify.com/album/6mUdeDZCsExyJLMdAfDuwh?si=abc",
+			},
+		},
+	}
+
+	albumIDs, trackIDs := plugin.extractSpotifyIDs(message)
+	if got, want := albumIDs, []string{"6mUdeDZCsExyJLMdAfDuwh"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("album IDs = %v, want %v", got, want)
+	}
+	if len(trackIDs) != 0 {
+		t.Fatalf("track IDs = %v, want none", trackIDs)
 	}
 }
 

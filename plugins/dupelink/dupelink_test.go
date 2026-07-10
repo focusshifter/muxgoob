@@ -1,6 +1,7 @@
 package dupelink
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,34 @@ import (
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
+
+func TestGetURLsIncludesVisibleAndHiddenLinks(t *testing.T) {
+	message := &telebot.Message{
+		Text: "Очень танцы. https://example.com/visible",
+		Entities: []telebot.MessageEntity{
+			{
+				Type:   "text_link",
+				Offset: 6,
+				Length: 6,
+				URL:    "https://open.spotify.com/album/123?si=abc",
+			},
+			{
+				Type:   "url",
+				Offset: 13,
+				Length: 27,
+			},
+		},
+	}
+
+	got := getURLs(message)
+	want := []string{
+		"https://open.spotify.com/album/123?si=abc",
+		"https://example.com/visible",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("getURLs() = %v, want %v", got, want)
+	}
+}
 
 func TestDupeLinkPlugin_Process(t *testing.T) {
 	// Save original configs to restore later

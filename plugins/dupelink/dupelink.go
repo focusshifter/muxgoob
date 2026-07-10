@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/tucnak/telebot"
 
@@ -70,12 +71,37 @@ func getURLs(message *telebot.Message) []string {
 	var urls []string
 
 	for _, entity := range message.Entities {
-		if entity.Type == "url" {
-			urls = append(urls, string([]rune(message.Text)[entity.Offset:(entity.Offset+entity.Length)]))
+		switch entity.Type {
+		case "text_link":
+			// Telegram places the destination for formatted links in URL, while
+			// the text at Offset/Length is only the label shown to the user.
+			if entity.URL != "" {
+				urls = append(urls, entity.URL)
+			}
+		case "url":
+			if messageURL, ok := entityText(message.Text, entity.Offset, entity.Length); ok {
+				urls = append(urls, messageURL)
+			}
 		}
 	}
 
 	return urls
+}
+
+// entityText extracts a Telegram entity, whose offsets are counted in UTF-16
+// code units rather than Go runes or bytes.
+func entityText(text string, offset, length int) (string, bool) {
+	if offset < 0 || length < 0 {
+		return "", false
+	}
+
+	codeUnits := utf16.Encode([]rune(text))
+	end := offset + length
+	if end < offset || end > len(codeUnits) {
+		return "", false
+	}
+
+	return string(utf16.Decode(codeUnits[offset:end])), true
 }
 
 // normalizeURL normalizes URLs for duplicate detection

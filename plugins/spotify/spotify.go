@@ -96,23 +96,48 @@ func (p *SpotifyPlugin) Process(message *telebot.Message) {
 		return
 	}
 
-	// Find Spotify album links in the message
-	albumMatches := p.albumRegex.FindAllStringSubmatch(message.Text, -1)
-	for _, match := range albumMatches {
-		if len(match) > 1 {
-			albumID := match[1]
-			p.processAlbum(message, albumID)
+	albumIDs, trackIDs := p.extractSpotifyIDs(message)
+	for _, albumID := range albumIDs {
+		p.processAlbum(message, albumID)
+	}
+
+	for _, trackID := range trackIDs {
+		p.processTrack(message, trackID)
+	}
+}
+
+// extractSpotifyIDs finds links both in visible message text and in Telegram
+// text_link entities, whose URL is hidden behind a formatted label.
+func (p *SpotifyPlugin) extractSpotifyIDs(message *telebot.Message) (albumIDs, trackIDs []string) {
+	candidates := []string{message.Text}
+	for _, entity := range message.Entities {
+		if entity.Type == telebot.EntityTextLink && entity.URL != "" {
+			candidates = append(candidates, entity.URL)
 		}
 	}
 
-	// Find Spotify track links in the message
-	trackMatches := p.trackRegex.FindAllStringSubmatch(message.Text, -1)
-	for _, match := range trackMatches {
-		if len(match) > 1 {
-			trackID := match[1]
-			p.processTrack(message, trackID)
+	seenAlbums := make(map[string]struct{})
+	seenTracks := make(map[string]struct{})
+	for _, candidate := range candidates {
+		for _, match := range p.albumRegex.FindAllStringSubmatch(candidate, -1) {
+			if len(match) > 1 {
+				if _, seen := seenAlbums[match[1]]; !seen {
+					seenAlbums[match[1]] = struct{}{}
+					albumIDs = append(albumIDs, match[1])
+				}
+			}
+		}
+		for _, match := range p.trackRegex.FindAllStringSubmatch(candidate, -1) {
+			if len(match) > 1 {
+				if _, seen := seenTracks[match[1]]; !seen {
+					seenTracks[match[1]] = struct{}{}
+					trackIDs = append(trackIDs, match[1])
+				}
+			}
 		}
 	}
+
+	return albumIDs, trackIDs
 }
 
 func (p *SpotifyPlugin) isEnabled(chatID *int64) bool {

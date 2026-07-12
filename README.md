@@ -8,6 +8,7 @@ Only the configured `owner_username` may manage jobs. Cron expressions use the g
 
 ```text
 !cron add <chat_id> "0 9 * * *" <alias> <command>
+!cron list [chat_id]
 !cron remove <chat_id> <alias>
 !cron reschedule <chat_id> <alias> "0 10 * * *"
 !cron update <chat_id> <alias> <command>

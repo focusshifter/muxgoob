@@ -22,6 +22,7 @@ var (
 	removeCommand     = regexp.MustCompile(`^!cron\s+remove\s+(-?\d+)\s+([A-Za-z0-9_-]+)\s*$`)
 	rescheduleCommand = regexp.MustCompile(`^!cron\s+reschedule\s+(-?\d+)\s+([A-Za-z0-9_-]+)\s+"([^"]+)"\s*$`)
 	updateCommand     = regexp.MustCompile(`^!cron\s+update\s+(-?\d+)\s+([A-Za-z0-9_-]+)\s+(.+?)\s*$`)
+	listCommand       = regexp.MustCompile(`^!cron\s+list(?:\s+(-?\d+))?\s*$`)
 )
 
 // CronPlugin persists owner-managed scheduled bot commands and dispatches them
@@ -98,6 +99,8 @@ func (p *CronPlugin) Process(message *telebot.Message) {
 		p.handleReschedule(message, rescheduleCommand.FindStringSubmatch(message.Text))
 	case updateCommand.MatchString(message.Text):
 		p.handleUpdate(message, updateCommand.FindStringSubmatch(message.Text))
+	case listCommand.MatchString(message.Text):
+		p.handleList(message, listCommand.FindStringSubmatch(message.Text))
 	default:
 		p.replyUsage(message)
 	}
@@ -222,6 +225,46 @@ func (p *CronPlugin) handleUpdate(message *telebot.Message, parts []string) {
 	p.reply(message, fmt.Sprintf("Cron job %q updated for chat %d.", alias, chatID))
 }
 
+func (p *CronPlugin) handleList(message *telebot.Message, parts []string) {
+	query := `SELECT chat_id, alias, expression, command FROM cron_jobs`
+	args := []interface{}{}
+	if parts[1] != "" {
+		chatID, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			p.reply(message, "Invalid chat_id")
+			return
+		}
+		query += ` WHERE chat_id = ?`
+		args = append(args, chatID)
+	}
+	query += ` ORDER BY chat_id, alias`
+
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		p.reply(message, "Failed to list cron jobs: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	lines := []string{"Cron jobs (" + configuredLocation().String() + "):"}
+	for rows.Next() {
+		var job cronJob
+		if err := rows.Scan(&job.ChatID, &job.Alias, &job.Expression, &job.Command); err != nil {
+			p.reply(message, "Failed to list cron jobs: "+err.Error())
+			return
+		}
+		lines = append(lines, fmt.Sprintf("%d / %s — %q → %s", job.ChatID, job.Alias, job.Expression, job.Command))
+	}
+	if err := rows.Err(); err != nil {
+		p.reply(message, "Failed to list cron jobs: "+err.Error())
+		return
+	}
+	if len(lines) == 1 {
+		lines = append(lines, "No cron jobs configured.")
+	}
+	p.reply(message, strings.Join(lines, "\n"))
+}
+
 func (p *CronPlugin) reply(message *telebot.Message, text string) {
 	if registry.Bot != nil {
 		if _, err := registry.Bot.Send(message.Chat, text); err != nil {
@@ -231,7 +274,7 @@ func (p *CronPlugin) reply(message *telebot.Message, text string) {
 }
 
 func (p *CronPlugin) replyUsage(message *telebot.Message) {
-	p.reply(message, "Usage:\n!cron add <chat_id> \"0 9 * * *\" <alias> <command>\n!cron remove <chat_id> <alias>\n!cron reschedule <chat_id> <alias> \"0 10 * * *\"\n!cron update <chat_id> <alias> <command>\nSchedules use config time_zone: "+configuredLocation().String())
+	p.reply(message, "Usage:\n!cron add <chat_id> \"0 9 * * *\" <alias> <command>\n!cron list [chat_id]\n!cron remove <chat_id> <alias>\n!cron reschedule <chat_id> <alias> \"0 10 * * *\"\n!cron update <chat_id> <alias> <command>\nSchedules use config time_zone: "+configuredLocation().String())
 }
 
 func messageSenderIsBotOwner(message *telebot.Message) bool {

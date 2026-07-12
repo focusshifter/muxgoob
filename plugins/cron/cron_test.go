@@ -79,6 +79,13 @@ func TestCronCommandsAreOwnerOnlyAndPersistExactCommand(t *testing.T) {
 		t.Fatalf("rescheduled expression = %q", expression)
 	}
 
+	plugin.Process(cronMessage("owner", "!cron list -100"))
+	listing, _ := mockBot.SendWhat.(string)
+	if !strings.Contains(listing, "Cron jobs (Europe/Moscow):") ||
+		!strings.Contains(listing, `-100 / morning — "0 10 * * *" → !prompt send morning briefing`) {
+		t.Fatalf("cron listing = %q", listing)
+	}
+
 	plugin.Process(cronMessage("owner", "!cron remove -100 morning"))
 	assertCronJobCount(t, db, 0)
 }

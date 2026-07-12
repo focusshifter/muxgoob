@@ -239,6 +239,19 @@ func Initialize() {
 			FOREIGN KEY (user_id) REFERENCES users(id)
 		);
 
+		CREATE TABLE IF NOT EXISTS cron_jobs (
+			chat_id INTEGER NOT NULL,
+			alias TEXT NOT NULL,
+			expression TEXT NOT NULL,
+			command TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (chat_id, alias),
+			FOREIGN KEY (chat_id) REFERENCES chats(id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_cron_jobs_chat ON cron_jobs(chat_id);
+
 		CREATE INDEX IF NOT EXISTS idx_messages_unixtime ON messages(unixtime);
 		CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
 		CREATE INDEX IF NOT EXISTS idx_media_metadata_chat ON media_metadata(chat_id, status);

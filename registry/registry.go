@@ -105,7 +105,11 @@ func LoadConfig(configPath string) {
 		log.Fatal(err)
 	}
 
-	loc, _ := time.LoadLocation(Config.TimeZone)
+	loc, err := time.LoadLocation(Config.TimeZone)
+	if err != nil {
+		log.Printf("Invalid time_zone %q; using local timezone %q: %v", Config.TimeZone, time.Local, err)
+		loc = time.Local
+	}
 	Config.TimeLoc = loc
 
 	log.Printf("Loaded config from %s", configPath)
@@ -118,4 +122,12 @@ func RegisterPlugin(p MuxPlugin) {
 	log.Printf("Registered plugin: %v", key)
 
 	Plugins[key] = p
+}
+
+// DispatchMessage runs all registered plugins for an incoming or scheduled message.
+// Plugins run independently so a slow plugin does not block the rest of the bot.
+func DispatchMessage(message *telebot.Message) {
+	for _, plugin := range Plugins {
+		go plugin.Process(message)
+	}
 }

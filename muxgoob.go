@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/focusshifter/muxgoob/plugins/admin"
 	_ "github.com/focusshifter/muxgoob/plugins/birthdays"
+	_ "github.com/focusshifter/muxgoob/plugins/cron"
 	_ "github.com/focusshifter/muxgoob/plugins/dupelink"
 	_ "github.com/focusshifter/muxgoob/plugins/logwrite"
 	_ "github.com/focusshifter/muxgoob/plugins/nametrigger"
@@ -138,11 +139,7 @@ func handleIncomingMessage(message *telebot.Message) {
 		}
 	}
 
-	for _, d := range registry.Plugins {
-		if obj, ok := d.(interface{ Process(*telebot.Message) }); ok {
-			go obj.Process(message)
-		}
-	}
+	registry.DispatchMessage(message)
 }
 
 func getMessageID(msg *telebot.Message) interface{} {

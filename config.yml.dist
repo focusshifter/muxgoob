@@ -5,6 +5,7 @@ nametrigger:
     - usernames: []
       chance:
       reply:
+# IANA timezone used for birthdays and cron schedules (for example Europe/Moscow).
 time_zone: Europe/Moscow
 # birthdays are stored in SQLite now. If this legacy section is present,
 # it is imported/upserted into the birthdays table on startup.

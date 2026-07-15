@@ -14,4 +14,4 @@ Only the configured `owner_username` may manage jobs. Cron expressions use the g
 !cron update <chat_id> <alias> <command>
 ```
 
-Jobs are persisted in SQLite and restored after a bot restart. Aliases are unique within a chat; adding an existing alias replaces both its schedule and command.
+Jobs are persisted in SQLite and restored after a bot restart. Aliases are unique within a chat; adding an existing alias replaces both its schedule and command. Commands beginning with `!` run unchanged; plain-language instructions are automatically dispatched as a Gooby prompt.

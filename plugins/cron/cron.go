@@ -347,6 +347,19 @@ func jobKey(chatID int64, alias string) string {
 	return strconv.FormatInt(chatID, 10) + ":" + alias
 }
 
+func scheduledCommandText(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" || strings.HasPrefix(command, "!") {
+		return command
+	}
+
+	lower := strings.ToLower(command)
+	if strings.HasPrefix(lower, "gooby") || strings.HasPrefix(lower, "губи") || strings.HasPrefix(lower, "губян") {
+		return command
+	}
+	return "Губи, " + command
+}
+
 func dispatchScheduledCommand(job cronJob) {
 	chat := &telebot.Chat{ID: job.ChatID}
 	if database.DB != nil {
@@ -359,7 +372,7 @@ func dispatchScheduledCommand(job cronJob) {
 		chat.Title, chat.Username, chat.FirstName, chat.LastName = title.String, username.String, firstName.String, lastName.String
 	}
 	registry.DispatchMessage(&telebot.Message{
-		Text:   job.Command,
+		Text:   scheduledCommandText(job.Command),
 		Chat:   chat,
 		Sender: &telebot.User{Username: registry.Config.OwnerUsername},
 	})

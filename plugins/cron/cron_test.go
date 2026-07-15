@@ -182,6 +182,21 @@ func (p capturePlugin) Process(message *telebot.Message) {
 	p.received <- message
 }
 
+func TestScheduledCommandText(t *testing.T) {
+	cases := map[string]string{
+		"!version":           "!version",
+		"Губи, нарисуй мем":  "Губи, нарисуй мем",
+		"gooby, draw a meme": "gooby, draw a meme",
+		"нарисуй мем про капитана":     "Губи, нарисуй мем про капитана",
+		"  нарисуй мем про капитана  ": "Губи, нарисуй мем про капитана",
+	}
+	for input, want := range cases {
+		if got := scheduledCommandText(input); got != want {
+			t.Errorf("scheduledCommandText(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func cronMessage(username, text string) *telebot.Message {
 	return &telebot.Message{
 		Text:   text,

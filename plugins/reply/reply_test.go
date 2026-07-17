@@ -1763,3 +1763,15 @@ func TestDescribeAndStoreImageMetadataPersistsVisionDescription(t *testing.T) {
 		t.Fatalf("unexpected metadata description=%q model=%q tags=%q", description, model, tags)
 	}
 }
+
+func TestReplyOptionsForMessage(t *testing.T) {
+	if options := replyOptionsForMessage(&telebot.Message{}); options != nil {
+		t.Fatal("synthetic message must not produce a reply target")
+	}
+
+	message := &telebot.Message{ID: 42}
+	options := replyOptionsForMessage(message)
+	if options == nil || options.ReplyTo != message {
+		t.Fatal("real Telegram message must be used as reply target")
+	}
+}

@@ -268,14 +268,14 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			}
 		}
 
-		sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+		sendReplyWithLog(bot, message.Chat, replyText, replyOptionsForMessage(message))
 
 	case commandExp.MatchString(messageText):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
 
 		if replyText != "" && !isActionOnlyReply(replyText) {
-			sendReplyWithLog(bot, message.Chat, replyText, &telebot.SendOptions{ReplyTo: message})
+			sendReplyWithLog(bot, message.Chat, replyText, replyOptionsForMessage(message))
 		}
 
 	case dotkaExp.MatchString(messageText):
@@ -352,6 +352,13 @@ func initialToolChoice(forceSearch bool) any {
 
 func formatChatGPTRequestLog(provider string, model string, chatID int64, questionLen int, toolCount int) string {
 	return fmt.Sprintf("[reply] ChatGPT request provider=%s model=%s chat_id=%d question_len=%d tools=%d", provider, model, chatID, questionLen, toolCount)
+}
+
+func replyOptionsForMessage(message *telebot.Message) *telebot.SendOptions {
+	if message == nil || message.ID == 0 {
+		return nil
+	}
+	return &telebot.SendOptions{ReplyTo: message}
 }
 
 func sendReplyWithLog(bot *registry.BotWrapper, chat *telebot.Chat, text string, opts *telebot.SendOptions) {

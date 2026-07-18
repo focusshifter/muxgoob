@@ -1645,6 +1645,21 @@ func TestShouldForceSearchMessages(t *testing.T) {
 	}
 }
 
+func TestShouldForceHistoryBounds(t *testing.T) {
+	for _, question := range []string{
+		"Губи, от какой даты первое сообщение в истории чата?",
+		"какое самое раннее сообщение?",
+		"what is the oldest message in chat history?",
+	} {
+		if !shouldForceHistoryBounds(question) {
+			t.Fatalf("should force history bounds for %q", question)
+		}
+	}
+	if shouldForceHistoryBounds("найди сообщения про мехворриор") {
+		t.Fatal("topic search must not force history bounds")
+	}
+}
+
 func TestFormatChatGPTRequestLogIncludesProvider(t *testing.T) {
 	got := formatChatGPTRequestLog("openrouter", "openai/gpt-5.4:online", 686563, 26, 6)
 	if !strings.Contains(got, "provider=openrouter") {

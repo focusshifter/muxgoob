@@ -327,6 +327,23 @@ var retrospectiveQuestionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(сообщени|чат|истори|discussion|history|messages?).*(про|about)`),
 }
 
+var historyBoundsQuestionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(перв(ое|ый|ая)?|сам(ое|ый|ая)?\s+ранн|стар(ое|ый|ая)?\s+сообщени|раньше\s+всего|earliest|oldest|first\s+message|history\s+start)`),
+}
+
+func shouldForceHistoryBounds(question string) bool {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return false
+	}
+	for _, pattern := range historyBoundsQuestionPatterns {
+		if pattern.MatchString(question) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldForceSearchMessages(question string) bool {
 	question = strings.TrimSpace(question)
 	if question == "" {
@@ -340,14 +357,20 @@ func shouldForceSearchMessages(question string) bool {
 	return false
 }
 
-func initialToolChoice(forceSearch bool) any {
-	if !forceSearch {
-		return nil
+func initialToolChoice(forceSearch, forceHistoryBounds bool) any {
+	if forceHistoryBounds {
+		return openai.ToolChoice{
+			Type:     openai.ToolTypeFunction,
+			Function: openai.ToolFunction{Name: "getChatHistoryBounds"},
+		}
 	}
-	return openai.ToolChoice{
-		Type:     openai.ToolTypeFunction,
-		Function: openai.ToolFunction{Name: "searchMessages"},
+	if forceSearch {
+		return openai.ToolChoice{
+			Type:     openai.ToolTypeFunction,
+			Function: openai.ToolFunction{Name: "searchMessages"},
+		}
 	}
+	return nil
 }
 
 func formatChatGPTRequestLog(provider string, model string, chatID int64, questionLen int, toolCount int) string {
@@ -1083,6 +1106,7 @@ var askChatGpt = func(message *telebot.Message) string {
 	var imageTool *chattools.GenerateImageTool
 	tools := []chattools.Tool{
 		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
+		chattools.NewChatHistoryBoundsTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
 		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
 		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
@@ -1099,6 +1123,7 @@ var askChatGpt = func(message *telebot.Message) string {
 		tools, toolSystemParts, imageTool = appendImageGenerationToolIfEnabled(message.Chat.ID, tools, toolSystemParts)
 	}
 	forceSearch := shouldForceSearchMessages(question)
+	forceHistoryBounds := shouldForceHistoryBounds(question)
 	toolRegistry := chattools.NewRegistry(tools...)
 	toolSystemParts = append(toolSystemParts,
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
@@ -1108,8 +1133,9 @@ var askChatGpt = func(message *telebot.Message) string {
 		"Use forgetTopic when the user directly asks you to forget, remove, or stop remembering a durable chat topic or lore item.",
 		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
 		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
+		"Use getChatHistoryBounds for questions asking for the first, oldest, earliest, latest, or total stored chat history; do not infer chronological bounds from a topic search.",
 		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",
-		"For any question about prior chat discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering.",
+		"For questions about prior discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering. For chronological bounds, call getChatHistoryBounds instead.",
 		"Treat the prefill as recent context only, not authoritative chat history.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
 	)
@@ -1152,7 +1178,7 @@ var askChatGpt = func(message *telebot.Message) string {
 			FrequencyPenalty: 0.2,
 			PresencePenalty:  0.1,
 			Tools:            toolRegistry.Definitions(),
-			ToolChoice:       initialToolChoice(forceSearch),
+			ToolChoice:       initialToolChoice(forceSearch, forceHistoryBounds),
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,

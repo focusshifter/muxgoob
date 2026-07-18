@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	openai "github.com/sashabaranov/go-openai"
@@ -42,6 +43,8 @@ type SearchMessagesTool struct {
 type searchMessagesArgs struct {
 	Query    string   `json:"query"`
 	Variants []string `json:"variants"`
+	After    string   `json:"after"`
+	Before   string   `json:"before"`
 	Limit    int      `json:"limit"`
 }
 
@@ -86,6 +89,14 @@ func (t *SearchMessagesTool) Definition() openai.Tool {
 						},
 						"description": "Optional alternate spellings, transliterations, spacing variants, aliases, or related franchise terms to search together with the main query. Generate these yourself when needed.",
 					},
+					"after": map[string]any{
+						"type":        "string",
+						"description": "Optional inclusive lower date bound in YYYY-MM-DD, interpreted as UTC.",
+					},
+					"before": map[string]any{
+						"type":        "string",
+						"description": "Optional inclusive upper date bound in YYYY-MM-DD, interpreted as UTC.",
+					},
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum number of results to return. Defaults to 20 and caps at 50.",
@@ -128,7 +139,12 @@ func (t *SearchMessagesTool) Execute(_ context.Context, args string) (string, er
 		parsedArgs.Limit = maxMessageLimit
 	}
 
-	results, err := searchMessages(t.db, t.chatID, t.excludeMessageID, parsedArgs.Query, parsedArgs.Variants, parsedArgs.Limit)
+	after, before, err := parseSearchDateRange(parsedArgs.After, parsedArgs.Before)
+	if err != nil {
+		return "", err
+	}
+
+	results, err := searchMessages(t.db, t.chatID, t.excludeMessageID, parsedArgs.Query, parsedArgs.Variants, after, before, parsedArgs.Limit)
 	if err != nil {
 		return "", err
 	}
@@ -140,29 +156,55 @@ func (t *SearchMessagesTool) Execute(_ context.Context, args string) (string, er
 	}), nil
 }
 
-func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string, variants []string, limit int) ([]searchMessageResult, error) {
+func parseSearchDateRange(afterText, beforeText string) (after, before int64, err error) {
+	if afterText != "" {
+		date, parseErr := time.Parse("2006-01-02", afterText)
+		if parseErr != nil {
+			return 0, 0, fmt.Errorf("invalid after date %q: use YYYY-MM-DD", afterText)
+		}
+		after = date.Unix()
+	}
+	if beforeText != "" {
+		date, parseErr := time.Parse("2006-01-02", beforeText)
+		if parseErr != nil {
+			return 0, 0, fmt.Errorf("invalid before date %q: use YYYY-MM-DD", beforeText)
+		}
+		before = date.AddDate(0, 0, 1).Unix()
+	}
+	if after > 0 && before > 0 && after >= before {
+		return 0, 0, fmt.Errorf("after date must not be later than before date")
+	}
+	return after, before, nil
+}
+
+func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string, variants []string, after, before int64, limit int) ([]searchMessageResult, error) {
 	patterns := buildSearchPatterns(query, variants)
 	if len(patterns) == 0 {
 		return nil, nil
 	}
 
-	results, err := searchMessagesWithFTS(db, chatID, excludeMessageID, query, variants, patterns, limit)
-	if err != nil {
-		fallbackResults, fallbackErr := searchMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, limit)
+	results, err := searchMessagesWithFTS(db, chatID, excludeMessageID, query, variants, patterns, after, before, limit)
+	if err != nil || len(results) == 0 {
+		fallbackResults, fallbackErr := searchMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, after, before, limit)
 		if fallbackErr != nil {
-			return nil, err
+			if err != nil {
+				return nil, err
+			}
+			return nil, fallbackErr
 		}
-		results = fallbackResults
+		if len(fallbackResults) > 0 || err != nil {
+			results = fallbackResults
+		}
 	}
 
-	metadataResults, metadataErr := searchImageMetadataWithLike(db, chatID, excludeMessageID, query, variants, patterns, limit)
+	metadataResults, metadataErr := searchImageMetadataWithLike(db, chatID, excludeMessageID, query, variants, patterns, after, before, limit)
 	if metadataErr == nil && len(metadataResults) > 0 {
 		results = mergeSearchResults(results, metadataResults, limit)
 	}
 	return results, nil
 }
 
-func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
+func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, after, before int64, limit int) ([]searchMessageResult, error) {
 	if err := database.EnsureMessageSearchIndex(db); err != nil {
 		return nil, err
 	}
@@ -175,14 +217,14 @@ func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query
 	ranked := make([]rankedSearchMessageResult, 0)
 	strictMatchQuery := buildStrictFTSQuery(query, variants)
 	if strictMatchQuery != "" && strictMatchQuery != matchQuery {
-		strictRanked, err := queryRankedMessagesWithFTS(db, chatID, excludeMessageID, strictMatchQuery, query, variants, patterns, limit)
+		strictRanked, err := queryRankedMessagesWithFTS(db, chatID, excludeMessageID, strictMatchQuery, query, variants, patterns, after, before, limit)
 		if err != nil {
 			return nil, err
 		}
 		ranked = append(ranked, strictRanked...)
 	}
 
-	broadRanked, err := queryRankedMessagesWithFTS(db, chatID, excludeMessageID, matchQuery, query, variants, patterns, limit)
+	broadRanked, err := queryRankedMessagesWithFTS(db, chatID, excludeMessageID, matchQuery, query, variants, patterns, after, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -191,10 +233,18 @@ func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query
 	return finalizeRankedSearchResults(dedupeRankedSearchResults(ranked), limit), nil
 }
 
-func queryRankedMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, matchQuery, query string, variants, patterns []string, limit int) ([]rankedSearchMessageResult, error) {
+func queryRankedMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, matchQuery, query string, variants, patterns []string, after, before int64, limit int) ([]rankedSearchMessageResult, error) {
 	args := make([]any, 0, 4)
 	args = append(args, matchQuery, chatID)
 	queryFilter := "WHERE messages_fts MATCH ? AND m.chat_id = ?"
+	if after > 0 {
+		queryFilter += " AND m.unixtime >= ?"
+		args = append(args, after)
+	}
+	if before > 0 {
+		queryFilter += " AND m.unixtime < ?"
+		args = append(args, before)
+	}
 	if excludeMessageID > 0 {
 		queryFilter += " AND m.id != ?"
 		args = append(args, excludeMessageID)
@@ -222,12 +272,12 @@ func queryRankedMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, 
 	return ranked, nil
 }
 
-func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
+func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, after, before int64, limit int) ([]searchMessageResult, error) {
 	ranked := make([]rankedSearchMessageResult, 0)
 
 	strictWhereParts, strictArgs := buildStrictLikeFilters(query, variants, "LOWER(COALESCE(NULLIF(m.text, ''), m.caption, ''))")
 	if len(strictWhereParts) > 0 {
-		strictRanked, err := queryRankedMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, strictWhereParts, strictArgs, limit)
+		strictRanked, err := queryRankedMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, strictWhereParts, strictArgs, after, before, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -241,7 +291,7 @@ func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, quer
 		args = append(args, "%"+pattern+"%")
 	}
 
-	broadRanked, err := queryRankedMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, whereParts, args, limit)
+	broadRanked, err := queryRankedMessagesWithLike(db, chatID, excludeMessageID, query, variants, patterns, whereParts, args, after, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -250,11 +300,17 @@ func searchMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, quer
 	return finalizeRankedSearchResults(dedupeRankedSearchResults(ranked), limit), nil
 }
 
-func queryRankedMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, whereParts []string, matchArgs []any, limit int) ([]rankedSearchMessageResult, error) {
-	args := make([]any, 0, len(matchArgs)+3)
+func queryRankedMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, whereParts []string, matchArgs []any, after, before int64, limit int) ([]rankedSearchMessageResult, error) {
+	args := make([]any, 0, len(matchArgs)+5)
 	args = append(args, chatID)
 	if excludeMessageID > 0 {
 		args = append(args, excludeMessageID)
+	}
+	if after > 0 {
+		args = append(args, after)
+	}
+	if before > 0 {
+		args = append(args, before)
 	}
 	args = append(args, matchArgs...)
 	args = append(args, searchCandidateLimit)
@@ -262,6 +318,12 @@ func queryRankedMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int,
 	queryFilter := "WHERE m.chat_id = ?"
 	if excludeMessageID > 0 {
 		queryFilter += " AND m.id != ?"
+	}
+	if after > 0 {
+		queryFilter += " AND m.unixtime >= ?"
+	}
+	if before > 0 {
+		queryFilter += " AND m.unixtime < ?"
 	}
 
 	rows, err := db.Query(`
@@ -284,12 +346,18 @@ func queryRankedMessagesWithLike(db *sql.DB, chatID int64, excludeMessageID int,
 	return ranked, nil
 }
 
-func searchImageMetadataWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, limit int) ([]searchMessageResult, error) {
+func searchImageMetadataWithLike(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, after, before int64, limit int) ([]searchMessageResult, error) {
 	whereParts := make([]string, 0, len(patterns))
-	args := make([]any, 0, len(patterns)+3)
+	args := make([]any, 0, len(patterns)+5)
 	args = append(args, chatID)
 	if excludeMessageID > 0 {
 		args = append(args, excludeMessageID)
+	}
+	if after > 0 {
+		args = append(args, after)
+	}
+	if before > 0 {
+		args = append(args, before)
 	}
 	for _, pattern := range patterns {
 		whereParts = append(whereParts, "LOWER(COALESCE(mm.description, '') || ' ' || COALESCE(mm.visible_text, '') || ' ' || COALESCE(mm.tags, '')) LIKE ?")
@@ -300,6 +368,12 @@ func searchImageMetadataWithLike(db *sql.DB, chatID int64, excludeMessageID int,
 	queryFilter := "WHERE mm.chat_id = ? AND mm.status = 'done'"
 	if excludeMessageID > 0 {
 		queryFilter += " AND mm.message_id != ?"
+	}
+	if after > 0 {
+		queryFilter += " AND m.unixtime >= ?"
+	}
+	if before > 0 {
+		queryFilter += " AND m.unixtime < ?"
 	}
 
 	rows, err := db.Query(`

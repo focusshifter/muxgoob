@@ -46,6 +46,40 @@ func TestSearchMessagesToolReturnsRecentMatches(t *testing.T) {
 	}
 }
 
+func TestSearchMessagesToolFiltersByDateRange(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	insertUser(t, db, 1, "alice", "Alice", "One")
+	insertMessage(t, db, 1, 100, 1, time.Date(2017, time.January, 2, 12, 0, 0, 0, time.UTC).Unix(), "planning Japan")
+	insertMessage(t, db, 2, 100, 1, time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC).Unix(), "planning Japan again")
+
+	tool := NewSearchMessagesTool(db, 100, 0)
+	result, err := tool.Execute(context.Background(), `{"query":"Japan","after":"2017-01-01","before":"2017-12-31"}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload searchMessagesResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if payload.Count != 1 || payload.Results[0].Timestamp != time.Date(2017, time.January, 2, 12, 0, 0, 0, time.UTC).Unix() {
+		t.Fatalf("unexpected date-filtered results: %#v", payload)
+	}
+}
+
+func TestSearchMessagesToolRejectsInvalidDateRange(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	_, err := NewSearchMessagesTool(db, 100, 0).Execute(context.Background(), `{"query":"test","after":"2026-13-01"}`)
+	if err == nil {
+		t.Fatal("expected invalid date to be rejected")
+	}
+}
+
 func TestSearchMessagesToolExpandsMechwarriorVariants(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()

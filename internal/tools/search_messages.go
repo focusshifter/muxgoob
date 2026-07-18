@@ -45,6 +45,7 @@ type searchMessagesArgs struct {
 	Variants []string `json:"variants"`
 	After    string   `json:"after"`
 	Before   string   `json:"before"`
+	Sort     string   `json:"sort"`
 	Limit    int      `json:"limit"`
 }
 
@@ -97,6 +98,11 @@ func (t *SearchMessagesTool) Definition() openai.Tool {
 						"type":        "string",
 						"description": "Optional inclusive upper date bound in YYYY-MM-DD, interpreted as UTC.",
 					},
+					"sort": map[string]any{
+						"type":        "string",
+						"enum":        []string{"relevance", "oldest"},
+						"description": "Sort mode. Default relevance returns the best topic matches. Use oldest when asked when a topic was first discussed or mentioned; it searches the entire retained history chronologically, not a relevance-limited sample.",
+					},
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum number of results to return. Defaults to 20 and caps at 50.",
@@ -139,12 +145,20 @@ func (t *SearchMessagesTool) Execute(_ context.Context, args string) (string, er
 		parsedArgs.Limit = maxMessageLimit
 	}
 
+	parsedArgs.Sort = strings.ToLower(strings.TrimSpace(parsedArgs.Sort))
+	if parsedArgs.Sort == "" {
+		parsedArgs.Sort = "relevance"
+	}
+	if parsedArgs.Sort != "relevance" && parsedArgs.Sort != "oldest" {
+		return "", fmt.Errorf("invalid sort %q: use relevance or oldest", parsedArgs.Sort)
+	}
+
 	after, before, err := parseSearchDateRange(parsedArgs.After, parsedArgs.Before)
 	if err != nil {
 		return "", err
 	}
 
-	results, err := searchMessages(t.db, t.chatID, t.excludeMessageID, parsedArgs.Query, parsedArgs.Variants, after, before, parsedArgs.Limit)
+	results, err := searchMessages(t.db, t.chatID, t.excludeMessageID, parsedArgs.Query, parsedArgs.Variants, after, before, parsedArgs.Sort, parsedArgs.Limit)
 	if err != nil {
 		return "", err
 	}
@@ -177,10 +191,13 @@ func parseSearchDateRange(afterText, beforeText string) (after, before int64, er
 	return after, before, nil
 }
 
-func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string, variants []string, after, before int64, limit int) ([]searchMessageResult, error) {
+func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string, variants []string, after, before int64, sortMode string, limit int) ([]searchMessageResult, error) {
 	patterns := buildSearchPatterns(query, variants)
 	if len(patterns) == 0 {
 		return nil, nil
+	}
+	if sortMode == "oldest" {
+		return searchMessagesOldest(db, chatID, excludeMessageID, query, variants, patterns, after, before, limit)
 	}
 
 	results, err := searchMessagesWithFTS(db, chatID, excludeMessageID, query, variants, patterns, after, before, limit)
@@ -202,6 +219,92 @@ func searchMessages(db *sql.DB, chatID int64, excludeMessageID int, query string
 		results = mergeSearchResults(results, metadataResults, limit)
 	}
 	return results, nil
+}
+
+func searchMessagesOldest(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, after, before int64, limit int) ([]searchMessageResult, error) {
+	if err := database.EnsureMessageSearchIndex(db); err == nil {
+		if matchQuery := buildFTSQuery(query, variants); matchQuery != "" {
+			results, queryErr := queryOldestMessagesFTS(db, chatID, excludeMessageID, matchQuery, after, before, limit)
+			if queryErr == nil && len(results) > 0 {
+				return results, nil
+			}
+		}
+	}
+	return queryOldestMessagesLike(db, chatID, excludeMessageID, patterns, after, before, limit)
+}
+
+func queryOldestMessagesFTS(db *sql.DB, chatID int64, excludeMessageID int, matchQuery string, after, before int64, limit int) ([]searchMessageResult, error) {
+	args := []any{matchQuery, chatID}
+	filter := "WHERE messages_fts MATCH ? AND m.chat_id = ?"
+	if excludeMessageID > 0 {
+		filter += " AND m.id != ?"
+		args = append(args, excludeMessageID)
+	}
+	if after > 0 {
+		filter += " AND m.unixtime >= ?"
+		args = append(args, after)
+	}
+	if before > 0 {
+		filter += " AND m.unixtime < ?"
+		args = append(args, before)
+	}
+	args = append(args, limit)
+	return scanSearchMessageRows(db.Query(`
+		SELECT COALESCE(NULLIF(u.username, ''), TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), CAST(m.sender_id AS TEXT)),
+		       COALESCE(NULLIF(m.text, ''), m.caption, ''), m.unixtime
+		FROM messages_fts
+		JOIN messages m ON m.rowid = messages_fts.rowid
+		LEFT JOIN users u ON u.id = m.sender_id
+		`+filter+`
+		ORDER BY m.unixtime ASC, m.id ASC
+		LIMIT ?`, args...))
+}
+
+func queryOldestMessagesLike(db *sql.DB, chatID int64, excludeMessageID int, patterns []string, after, before int64, limit int) ([]searchMessageResult, error) {
+	args := []any{chatID}
+	filter := "WHERE m.chat_id = ?"
+	if excludeMessageID > 0 {
+		filter += " AND m.id != ?"
+		args = append(args, excludeMessageID)
+	}
+	if after > 0 {
+		filter += " AND m.unixtime >= ?"
+		args = append(args, after)
+	}
+	if before > 0 {
+		filter += " AND m.unixtime < ?"
+		args = append(args, before)
+	}
+	terms := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		terms = append(terms, "LOWER(COALESCE(NULLIF(m.text, ''), m.caption, '')) LIKE ?")
+		args = append(args, "%"+strings.ToLower(pattern)+"%")
+	}
+	args = append(args, limit)
+	return scanSearchMessageRows(db.Query(`
+		SELECT COALESCE(NULLIF(u.username, ''), TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), CAST(m.sender_id AS TEXT)),
+		       COALESCE(NULLIF(m.text, ''), m.caption, ''), m.unixtime
+		FROM messages m
+		LEFT JOIN users u ON u.id = m.sender_id
+		`+filter+` AND (`+strings.Join(terms, " OR ")+`)
+		ORDER BY m.unixtime ASC, m.id ASC
+		LIMIT ?`, args...))
+}
+
+func scanSearchMessageRows(rows *sql.Rows, err error) ([]searchMessageResult, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := make([]searchMessageResult, 0)
+	for rows.Next() {
+		var result searchMessageResult
+		if err := rows.Scan(&result.Sender, &result.Text, &result.Timestamp); err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, rows.Err()
 }
 
 func searchMessagesWithFTS(db *sql.DB, chatID int64, excludeMessageID int, query string, variants, patterns []string, after, before int64, limit int) ([]searchMessageResult, error) {

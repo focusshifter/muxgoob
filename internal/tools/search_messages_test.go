@@ -69,6 +69,29 @@ func TestSearchMessagesToolFiltersByDateRange(t *testing.T) {
 	}
 }
 
+func TestSearchMessagesToolSortsOldestAcrossFullHistory(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	insertUser(t, db, 1, "ivan", "Ivan", "")
+	oldest := time.Date(2017, time.June, 5, 9, 0, 0, 0, time.UTC).Unix()
+	insertMessage(t, db, 1, 100, 1, oldest, "аниме обсуждение в 2017")
+	insertMessage(t, db, 2, 100, 1, time.Date(2026, time.June, 13, 9, 0, 0, 0, time.UTC).Unix(), "аниме обсуждение в 2026")
+
+	result, err := NewSearchMessagesTool(db, 100, 0).Execute(context.Background(), `{"query":"аниме","sort":"oldest","limit":1}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload searchMessagesResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if payload.Count != 1 || payload.Results[0].Timestamp != oldest {
+		t.Fatalf("expected oldest match, got %#v", payload)
+	}
+}
+
 func TestSearchMessagesToolRejectsInvalidDateRange(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()

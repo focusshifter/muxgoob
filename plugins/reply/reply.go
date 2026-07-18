@@ -1134,7 +1134,7 @@ var askChatGpt = func(message *telebot.Message) string {
 		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
 		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
 		"Use getChatHistoryBounds for questions asking for the first, oldest, earliest, latest, or total stored chat history; do not infer chronological bounds from a topic search.",
-		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill.",
+		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill. For questions about when a topic was first discussed or mentioned, call searchMessages with sort set to oldest.",
 		"For questions about prior discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering. For chronological bounds, call getChatHistoryBounds instead.",
 		"Treat the prefill as recent context only, not authoritative chat history.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",

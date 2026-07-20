@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/asdine/storm"
@@ -67,7 +70,20 @@ func main() {
 	bot.Handle(telebot.OnText, handleIncomingMessage)
 	bot.Handle(telebot.OnPhoto, handleIncomingMessage)
 
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	go func() {
+		sig := <-signals
+		log.Printf("[muxgoob] Received %s; stopping Telegram polling and draining work", sig)
+		bot.Stop()
+	}()
+
 	bot.Start()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	registry.Shutdown(shutdownCtx)
+	log.Printf("[muxgoob] Graceful shutdown complete")
 }
 
 func handleIncomingMessage(message *telebot.Message) {

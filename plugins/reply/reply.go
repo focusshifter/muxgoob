@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/sashabaranov/go-openai"
@@ -729,6 +730,58 @@ func addMentionedUsers(chatID int64, message *telebot.Message, addUser func(user
 			addUser(user)
 		}
 	}
+	for _, user := range lookupNamedChatUsersInText(chatID, message.Text) {
+		addUser(user)
+	}
+}
+
+func lookupNamedChatUsersInText(chatID int64, text string) []*telebot.User {
+	if sqliteDb == nil || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	tokens := strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	})
+	if len(tokens) == 0 {
+		return nil
+	}
+	words := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		if len([]rune(token)) >= 3 {
+			words[token] = struct{}{}
+		}
+	}
+	if len(words) == 0 {
+		return nil
+	}
+
+	rows, err := sqliteDb.Query(`
+		SELECT DISTINCT u.id, COALESCE(u.username, ''), COALESCE(u.first_name, ''), COALESCE(u.last_name, '')
+		FROM users u JOIN messages m ON m.sender_id = u.id
+		WHERE m.chat_id = ?`, chatID)
+	if err != nil {
+		log.Printf("[reply] Error looking up plain-text participant names: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var users []*telebot.User
+	for rows.Next() {
+		var user telebot.User
+		if err := rows.Scan(&user.ID, &user.Username, &user.FirstName, &user.LastName); err != nil {
+			continue
+		}
+		for _, name := range []string{user.Username, user.FirstName, user.LastName} {
+			if _, ok := words[strings.ToLower(strings.TrimSpace(name))]; ok {
+				users = append(users, &user)
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("[reply] Error iterating plain-text participant names: %v", err)
+	}
+	return users
 }
 
 func hasExplicitMention(message *telebot.Message) bool {
@@ -740,7 +793,10 @@ func hasExplicitMention(message *telebot.Message) bool {
 			return true
 		}
 	}
-	return mentionExp.MatchString(message.Text)
+	if mentionExp.MatchString(message.Text) {
+		return true
+	}
+	return message.Chat != nil && len(lookupNamedChatUsersInText(message.Chat.ID, message.Text)) > 0
 }
 
 func lookupChatUserByUsername(chatID int64, username string) *telebot.User {

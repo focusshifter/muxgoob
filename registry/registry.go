@@ -1,10 +1,12 @@
 package registry
 
 import (
+	"context"
 	"log"
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -17,10 +19,21 @@ var Plugins = map[string]MuxPlugin{}
 var Bot *BotWrapper
 var Config Configuration
 
+var (
+	dispatchMu       sync.Mutex
+	dispatchWG       sync.WaitGroup
+	dispatchStopping bool
+)
+
 // MuxPlugin is a basic plugin interface
 type MuxPlugin interface {
 	Start(interface{})
 	Process(message *telebot.Message)
+}
+
+// ShutdownPlugin is optionally implemented by plugins that own background workers.
+type ShutdownPlugin interface {
+	Shutdown(context.Context)
 }
 
 type Trigger struct {
@@ -127,7 +140,46 @@ func RegisterPlugin(p MuxPlugin) {
 // DispatchMessage runs all registered plugins for an incoming or scheduled message.
 // Plugins run independently so a slow plugin does not block the rest of the bot.
 func DispatchMessage(message *telebot.Message) {
+	dispatchMu.Lock()
+	defer dispatchMu.Unlock()
+	if dispatchStopping {
+		return
+	}
 	for _, plugin := range Plugins {
-		go plugin.Process(message)
+		dispatchWG.Add(1)
+		go func(plugin MuxPlugin) {
+			defer dispatchWG.Done()
+			plugin.Process(message)
+		}(plugin)
+	}
+}
+
+// Shutdown stops plugins that own background workers and waits for in-flight
+// message handlers before databases are closed.
+func Shutdown(ctx context.Context) {
+	dispatchMu.Lock()
+	dispatchStopping = true
+	plugins := make([]MuxPlugin, 0, len(Plugins))
+	for _, plugin := range Plugins {
+		plugins = append(plugins, plugin)
+	}
+	dispatchMu.Unlock()
+
+	for _, plugin := range plugins {
+		if stoppable, ok := plugin.(ShutdownPlugin); ok {
+			stoppable.Shutdown(ctx)
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		dispatchWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Printf("[registry] Drained in-flight message handlers")
+	case <-ctx.Done():
+		log.Printf("[registry] Shutdown deadline reached with message handlers still running: %v", ctx.Err())
 	}
 }

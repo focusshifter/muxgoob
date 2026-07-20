@@ -1658,6 +1658,30 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	}
 }
 
+func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT);
+		CREATE TABLE IF NOT EXISTS messages (id INTEGER, chat_id INTEGER, sender_id INTEGER);
+		INSERT INTO users (id, username, first_name, last_name) VALUES (7, 'ivanov', 'Иван', '');
+		INSERT INTO messages (id, chat_id, sender_id) VALUES (1, 123, 7);`)
+	if err != nil {
+		t.Fatalf("create nickname test data: %v", err)
+	}
+	originalDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalDB }()
+
+	users := lookupNamedChatUsersInText(123, "губи, нарисуй иван в космосе")
+	if len(users) != 1 || users[0].ID != 7 {
+		t.Fatalf("expected plain-text Иван to resolve participant, got %#v", users)
+	}
+	if !hasExplicitMention(&telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: "нарисуй иван"}) {
+		t.Fatal("plain-text nickname must trigger personfacts lookup")
+	}
+}
+
 func TestImagePromptLoadsFactsForExplicitMentions(t *testing.T) {
 	message := &telebot.Message{Text: "губи, нарисуй @ivan в космосе"}
 	if !hasExplicitMention(message) {

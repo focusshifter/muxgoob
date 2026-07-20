@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -59,6 +60,19 @@ func (p *CronPlugin) Start(interface{}) {
 		log.Printf("[cron] Failed to load jobs: %v", err)
 	}
 	p.scheduler.cron.Start()
+}
+
+func (p *CronPlugin) Shutdown(ctx context.Context) {
+	if p == nil || p.scheduler == nil || p.scheduler.cron == nil {
+		return
+	}
+	stopped := p.scheduler.cron.Stop()
+	select {
+	case <-stopped.Done():
+		log.Printf("[cron] Scheduler stopped")
+	case <-ctx.Done():
+		log.Printf("[cron] Scheduler did not stop before shutdown deadline: %v", ctx.Err())
+	}
 }
 
 func newPluginForTest() *CronPlugin {

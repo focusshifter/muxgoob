@@ -1658,6 +1658,17 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	}
 }
 
+func TestImagePromptLoadsFactsForExplicitMentions(t *testing.T) {
+	message := &telebot.Message{Text: "губи, нарисуй @ivan в космосе"}
+	if !hasExplicitMention(message) {
+		t.Fatal("expected @username to be treated as an explicit mention")
+	}
+	prompt := buildImageMentionPrompt(message.Text, "ivan: носит красную куртку")
+	if !strings.Contains(prompt, "@ivan") || !strings.Contains(prompt, "носит красную куртку") {
+		t.Fatalf("mentioned facts missing from prompt: %q", prompt)
+	}
+}
+
 func TestShouldForceSearchMessages(t *testing.T) {
 	testCases := []struct {
 		name     string

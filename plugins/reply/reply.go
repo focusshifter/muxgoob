@@ -731,6 +731,18 @@ func addMentionedUsers(chatID int64, message *telebot.Message, addUser func(user
 	}
 }
 
+func hasExplicitMention(message *telebot.Message) bool {
+	if message == nil {
+		return false
+	}
+	for _, entity := range message.Entities {
+		if entity.Type == telebot.EntityTMention && entity.User != nil {
+			return true
+		}
+	}
+	return mentionExp.MatchString(message.Text)
+}
+
 func lookupChatUserByUsername(chatID int64, username string) *telebot.User {
 	if sqliteDb == nil || strings.TrimSpace(username) == "" {
 		return nil
@@ -810,6 +822,13 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 		prompt.WriteString(strings.Join(contextLines, "\n"))
 	}
 	return prompt.String()
+}
+
+func buildImageMentionPrompt(question, personFacts string) string {
+	if strings.TrimSpace(personFacts) == "" {
+		return question
+	}
+	return strings.TrimSpace(question) + "\n\nExplicitly mentioned chat-member facts (use only when relevant to the requested scene; do not invent visual traits from them):\n" + strings.TrimSpace(personFacts)
 }
 
 func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {
@@ -1232,6 +1251,9 @@ var askChatGpt = func(message *telebot.Message) string {
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
 			personFacts := buildPersonFactsContext(message.Chat.ID, relevantSceneMessages, message, botID)
 			userMessage = buildImageScenePrompt(relevantSceneMessages, question, botID, message, members, personFacts)
+		} else if message.Chat != nil && hasExplicitMention(message) {
+			personFacts := buildPersonFactsContext(message.Chat.ID, nil, message, botID)
+			userMessage = buildImageMentionPrompt(question, personFacts)
 		} else {
 			// A new image request must not inherit prior image prompts, captions, or chat lore.
 			userMessage = fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)

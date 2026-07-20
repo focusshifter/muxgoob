@@ -753,8 +753,8 @@ func lookupChatUserByUsername(chatID int64, username string) *telebot.User {
 
 const maxImageSceneContextMessages = 12
 
-func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string) string {
-	contextLines := make([]string, 0, maxImageSceneContextMessages)
+func imageSceneRelevantMessages(messages []telebot.Message, botID int, currentMessage *telebot.Message) []telebot.Message {
+	relevant := make([]telebot.Message, 0, maxImageSceneContextMessages)
 	for _, message := range messages {
 		if currentMessage != nil && message.ID == currentMessage.ID {
 			continue
@@ -769,6 +769,18 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 		if text == "" || shouldIsolateImageGenerationPrompt(text) {
 			continue
 		}
+		relevant = append(relevant, message)
+	}
+	if len(relevant) > maxImageSceneContextMessages {
+		relevant = relevant[len(relevant)-maxImageSceneContextMessages:]
+	}
+	return relevant
+}
+
+func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, personFacts string) string {
+	contextLines := make([]string, 0, maxImageSceneContextMessages)
+	for _, message := range imageSceneRelevantMessages(messages, botID, currentMessage) {
+		text := messagePromptText(&message)
 		name := "participant"
 		if message.Sender != nil {
 			name = message.Sender.Username
@@ -778,9 +790,6 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 		}
 		contextLines = append(contextLines, fmt.Sprintf("%s: %s", name, text))
 	}
-	if len(contextLines) > maxImageSceneContextMessages {
-		contextLines = contextLines[len(contextLines)-maxImageSceneContextMessages:]
-	}
 
 	var prompt strings.Builder
 	prompt.WriteString("Current image request (authoritative):\n")
@@ -789,6 +798,11 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 	if len(members) > 0 {
 		prompt.WriteString("Chat participants (use only if the request asks for participants): ")
 		prompt.WriteString(strings.Join(members, ", "))
+		prompt.WriteString("\n")
+	}
+	if strings.TrimSpace(personFacts) != "" {
+		prompt.WriteString("Relevant participant facts (use only if they help this scene; do not turn them into visual instructions unless requested):\n")
+		prompt.WriteString(strings.TrimSpace(personFacts))
 		prompt.WriteString("\n")
 	}
 	if len(contextLines) > 0 {
@@ -1215,7 +1229,9 @@ var askChatGpt = func(message *telebot.Message) string {
 	if shouldIsolateImageGenerationPrompt(question) {
 		if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
-			userMessage = buildImageScenePrompt(imageHistory, question, botID, message, members)
+			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
+			personFacts := buildPersonFactsContext(message.Chat.ID, relevantSceneMessages, message, botID)
+			userMessage = buildImageScenePrompt(relevantSceneMessages, question, botID, message, members, personFacts)
 		} else {
 			// A new image request must not inherit prior image prompts, captions, or chat lore.
 			userMessage = fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)

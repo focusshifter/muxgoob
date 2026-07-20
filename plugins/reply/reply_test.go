@@ -1652,8 +1652,8 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 		{ID: 2, Sender: &telebot.User{Username: "bob"}, Text: "нарисуй пингвина в шапке"},
 		{ID: 3, Sender: &telebot.User{Username: "bot", ID: 99}, Text: "сгенерированная картинка"},
 		{ID: 4, Sender: current.Sender, Text: question},
-	}, question, 99, current, []string{"alice", "bob"})
-	if !strings.Contains(prompt, "Капитан отменил релиз") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
+	}, question, 99, current, []string{"alice", "bob"}, "alice: любит 35mm плёнку")
+	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "любит 35mm плёнку") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
 		t.Fatalf("unexpected scene context: %q", prompt)
 	}
 }

@@ -1652,8 +1652,8 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 		{ID: 2, Sender: &telebot.User{Username: "bob"}, Text: "нарисуй пингвина в шапке"},
 		{ID: 3, Sender: &telebot.User{Username: "bot", ID: 99}, Text: "сгенерированная картинка"},
 		{ID: 4, Sender: current.Sender, Text: question},
-	}, question, 99, current, []string{"alice", "bob"}, "alice: любит 35mm плёнку")
-	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "любит 35mm плёнку") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
+	}, question, 99, current, []string{"alice", "bob"}, "alice: любит 35mm плёнку", "чибики всегда двухмерные")
+	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "любит 35mm плёнку") || !strings.Contains(prompt, "чибики всегда двухмерные") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
 		t.Fatalf("unexpected scene context: %q", prompt)
 	}
 }
@@ -1678,6 +1678,22 @@ func TestReactToImageRequestUsesOneAllowedReaction(t *testing.T) {
 		}
 	}
 	t.Fatalf("unexpected image reaction %q", gotEmoji)
+}
+
+func TestImageStableContextUsesOnlyRememberedBullets(t *testing.T) {
+	prompt := `Reply style:
+- dry sarcasm
+
+Stable context:
+- Чибики всегда крутые и двухмерные.
+- Иван Пенге всегда сердится и носит вязаную шапочку пингвина.
+
+Avoid:
+- formal answers`
+	memory := imageStableContext(prompt)
+	if !strings.Contains(memory, "Чибики всегда") || !strings.Contains(memory, "шапочку пингвина") || strings.Contains(memory, "dry sarcasm") || strings.Contains(memory, "formal") {
+		t.Fatalf("unexpected image stable context: %q", memory)
+	}
 }
 
 func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
@@ -1709,8 +1725,8 @@ func TestImagePromptLoadsFactsForExplicitMentions(t *testing.T) {
 	if !hasExplicitMention(message) {
 		t.Fatal("expected @username to be treated as an explicit mention")
 	}
-	prompt := buildImageMentionPrompt(message.Text, "ivan: носит красную куртку")
-	if !strings.Contains(prompt, "@ivan") || !strings.Contains(prompt, "носит красную куртку") {
+	prompt := buildImageMentionPrompt(message.Text, "ivan: носит красную куртку", "иван всегда в шапочке пингвина")
+	if !strings.Contains(prompt, "@ivan") || !strings.Contains(prompt, "носит красную куртку") || !strings.Contains(prompt, "шапочке пингвина") {
 		t.Fatalf("mentioned facts missing from prompt: %q", prompt)
 	}
 }

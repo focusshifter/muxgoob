@@ -24,6 +24,7 @@ import (
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
+	"github.com/focusshifter/muxgoob/utils/facts"
 )
 
 // RandomGenerator defines an interface for random number generation
@@ -857,7 +858,23 @@ func imageSceneRelevantMessages(messages []telebot.Message, botID int, currentMe
 	return relevant
 }
 
-func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, personFacts string) string {
+func imageStableContext(chatPrompt string) string {
+	parsed := facts.ParseChatPrompt(chatPrompt)
+	if len(parsed.StableContext) == 0 {
+		return ""
+	}
+	return strings.Join(parsed.StableContext, "\n")
+}
+
+func appendImageStableContext(prompt string, stableContext string) string {
+	stableContext = strings.TrimSpace(stableContext)
+	if stableContext == "" {
+		return prompt
+	}
+	return strings.TrimSpace(prompt) + "\n\nPersistent chat memory (apply relevant character, visual, and lore constraints from these remembered facts; do not replace them with assumptions based only on names):\n" + stableContext
+}
+
+func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, personFacts string, stableContext string) string {
 	contextLines := make([]string, 0, maxImageSceneContextMessages)
 	for _, message := range imageSceneRelevantMessages(messages, botID, currentMessage) {
 		text := messagePromptText(&message)
@@ -889,14 +906,15 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 		prompt.WriteString("Recent text-only chat context:\n")
 		prompt.WriteString(strings.Join(contextLines, "\n"))
 	}
-	return prompt.String()
+	return appendImageStableContext(prompt.String(), stableContext)
 }
 
-func buildImageMentionPrompt(question, personFacts string) string {
-	if strings.TrimSpace(personFacts) == "" {
-		return question
+func buildImageMentionPrompt(question, personFacts string, stableContext string) string {
+	prompt := strings.TrimSpace(question)
+	if strings.TrimSpace(personFacts) != "" {
+		prompt += "\n\nExplicitly mentioned chat-member facts (use only when relevant to the requested scene; do not invent visual traits from them):\n" + strings.TrimSpace(personFacts)
 	}
-	return strings.TrimSpace(question) + "\n\nExplicitly mentioned chat-member facts (use only when relevant to the requested scene; do not invent visual traits from them):\n" + strings.TrimSpace(personFacts)
+	return appendImageStableContext(prompt, stableContext)
 }
 
 func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {
@@ -1263,6 +1281,8 @@ var askChatGpt = func(message *telebot.Message) string {
 		return ""
 	}
 
+	imageMemory := imageStableContext(systemMessage)
+
 	pollTool := chattools.NewSendPollTool(message.Chat.ID)
 	var imageTool *chattools.GenerateImageTool
 	tools := []chattools.Tool{
@@ -1321,13 +1341,13 @@ var askChatGpt = func(message *telebot.Message) string {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
 			personFacts := buildPersonFactsContext(message.Chat.ID, relevantSceneMessages, message, botID)
-			userMessage = buildImageScenePrompt(relevantSceneMessages, question, botID, message, members, personFacts)
+			userMessage = buildImageScenePrompt(relevantSceneMessages, question, botID, message, members, personFacts, imageMemory)
 		} else if message.Chat != nil && hasExplicitMention(message) {
 			personFacts := buildPersonFactsContext(message.Chat.ID, nil, message, botID)
-			userMessage = buildImageMentionPrompt(question, personFacts)
+			userMessage = buildImageMentionPrompt(question, personFacts, imageMemory)
 		} else {
-			// A new image request must not inherit prior image prompts, captions, or chat lore.
-			userMessage = fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
+			// Keep old visual chatter isolated, but retain explicitly remembered chat lore.
+			userMessage = buildImageMentionPrompt(question, "", imageMemory)
 		}
 	} else if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference

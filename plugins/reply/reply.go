@@ -69,7 +69,7 @@ func appendImageGenerationToolIfEnabled(chatID int64, tools []chattools.Tool, to
 	tools = append(tools, imageTool)
 	toolSystemParts = append(toolSystemParts,
 		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
-		"For a new image request, use only the active request as visual source; never carry over subjects, scenes, styles, or image metadata from previous chat messages. Preserve all explicit visual constraints, especially composition, lighting, color grade, era, and negative constraints.",
+		"For a new image request, use only the active request as visual source unless the user explicitly asks for chat history, chat events, or chat participants. In that opt-in case, use only relevant factual text context; never carry over prior image prompts, generated images, captions, styles, or image metadata. Preserve all explicit visual constraints, especially composition, lighting, color grade, era, and negative constraints.",
 		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
 		"After generateImage succeeds, do not send any follow-up confirmation text.",
 	)
@@ -327,6 +327,12 @@ var directImageRequestPattern = regexp.MustCompile(`(?i)(^|[\s,.:;!?])(нари�
 
 func shouldIsolateImageGenerationPrompt(question string) bool {
 	return directImageRequestPattern.MatchString(strings.TrimSpace(question))
+}
+
+var imageSceneContextPattern = regexp.MustCompile(`(?i)(на\s+основании\s+(?:истории|чата)|опираясь\s+на\s+(?:истори|событи|чат)|по\s+(?:истории|событиям)\s+чата|с\s+участниками\s+чата|based\s+on\s+(?:the\s+)?(?:chat|conversation|history)|using\s+(?:the\s+)?chat\s+history|with\s+(?:the\s+)?chat\s+participants)`)
+
+func shouldUseImageSceneContext(question string) bool {
+	return imageSceneContextPattern.MatchString(strings.TrimSpace(question))
 }
 
 var retrospectiveQuestionPatterns = []*regexp.Regexp{
@@ -745,6 +751,53 @@ func lookupChatUserByUsername(chatID int64, username string) *telebot.User {
 	return &telebot.User{ID: id, Username: resolvedUsername, FirstName: firstName, LastName: lastName}
 }
 
+const maxImageSceneContextMessages = 12
+
+func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string) string {
+	contextLines := make([]string, 0, maxImageSceneContextMessages)
+	for _, message := range messages {
+		if currentMessage != nil && message.ID == currentMessage.ID {
+			continue
+		}
+		if message.Sender != nil && botID != 0 && message.Sender.ID == botID {
+			continue
+		}
+		if message.Photo != nil {
+			continue
+		}
+		text := messagePromptText(&message)
+		if text == "" || shouldIsolateImageGenerationPrompt(text) {
+			continue
+		}
+		name := "participant"
+		if message.Sender != nil {
+			name = message.Sender.Username
+			if name == "" {
+				name = strings.TrimSpace(message.Sender.FirstName + " " + message.Sender.LastName)
+			}
+		}
+		contextLines = append(contextLines, fmt.Sprintf("%s: %s", name, text))
+	}
+	if len(contextLines) > maxImageSceneContextMessages {
+		contextLines = contextLines[len(contextLines)-maxImageSceneContextMessages:]
+	}
+
+	var prompt strings.Builder
+	prompt.WriteString("Current image request (authoritative):\n")
+	prompt.WriteString(strings.TrimSpace(question))
+	prompt.WriteString("\n\nThe user explicitly requested scene context from this chat. Use only factual details that help this specific scene; ignore unrelated discussion and every prior image prompt, caption, image, style, or color grade.\n")
+	if len(members) > 0 {
+		prompt.WriteString("Chat participants (use only if the request asks for participants): ")
+		prompt.WriteString(strings.Join(members, ", "))
+		prompt.WriteString("\n")
+	}
+	if len(contextLines) > 0 {
+		prompt.WriteString("Recent text-only chat context:\n")
+		prompt.WriteString(strings.Join(contextLines, "\n"))
+	}
+	return prompt.String()
+}
+
 func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {
 	var prefill strings.Builder
 
@@ -1160,8 +1213,13 @@ var askChatGpt = func(message *telebot.Message) string {
 	members := fetchPrefillMembers(message.Chat.ID)
 
 	if shouldIsolateImageGenerationPrompt(question) {
-		// A new image request must not inherit prior image prompts, captions, or chat lore.
-		userMessage = fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
+		if shouldUseImageSceneContext(question) && message.Chat != nil {
+			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
+			userMessage = buildImageScenePrompt(imageHistory, question, botID, message, members)
+		} else {
+			// A new image request must not inherit prior image prompts, captions, or chat lore.
+			userMessage = fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
+		}
 	} else if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference
 		if message.Chat == nil {

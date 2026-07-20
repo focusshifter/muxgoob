@@ -1622,6 +1622,21 @@ func TestMaybeBuildImageInspectionContextSkipsFallbackWhenReplyToPhotoMissing(t 
 	}
 }
 
+func TestShouldIsolateImageGenerationPrompt(t *testing.T) {
+	for _, question := range []string{
+		"губи, нарисуй сцену из криминального чтива",
+		"сгенерируй картинку с пингвином",
+		"draw a rainy cyberpunk street",
+	} {
+		if !shouldIsolateImageGenerationPrompt(question) {
+			t.Fatalf("should isolate image prompt %q", question)
+		}
+	}
+	if shouldIsolateImageGenerationPrompt("какая картинка была выше?") {
+		t.Fatal("image discussion must keep normal chat history")
+	}
+}
+
 func TestShouldForceSearchMessages(t *testing.T) {
 	testCases := []struct {
 		name     string

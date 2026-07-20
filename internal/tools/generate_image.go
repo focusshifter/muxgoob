@@ -64,13 +64,13 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name:        "generateImage",
-			Description: "Generate an image with OpenAI Codex OAuth using GPT Image (default gpt-image-2) and send it directly to the current Telegram chat. Use this when the user asks to draw, generate, create, or render a picture/image/photo/sticker/мем/картинку. After using this tool successfully, do not send follow-up text.",
+			Description: "Generate an image with OpenAI Codex OAuth using GPT Image (default gpt-image-2) and send it directly to the current Telegram chat. Use this when the user asks to draw, generate, create, or render a picture/image/photo/sticker/мем/картинку. Build the prompt exclusively from the active image request: never blend a prior image request, caption, or unrelated chat context. After using this tool successfully, do not send follow-up text.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"prompt": map[string]any{
 						"type":        "string",
-						"description": "Detailed image prompt. Preserve the user's language and requested style/content. This is only for image generation and will not be printed to the chat.",
+						"description": "Detailed image prompt. Preserve every requested subject, composition, style, lighting, color grade, era, and negative constraint from the active user request; do not silently compress or substitute them. This is only for image generation and will not be printed to the chat.",
 					},
 					"caption": map[string]any{
 						"type":        "string",

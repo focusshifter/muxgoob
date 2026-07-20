@@ -69,6 +69,7 @@ func appendImageGenerationToolIfEnabled(chatID int64, tools []chattools.Tool, to
 	tools = append(tools, imageTool)
 	toolSystemParts = append(toolSystemParts,
 		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
+		"For a new image request, use only the active request as visual source; never carry over subjects, scenes, styles, or image metadata from previous chat messages. Preserve all explicit visual constraints, especially composition, lighting, color grade, era, and negative constraints.",
 		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
 		"After generateImage succeeds, do not send any follow-up confirmation text.",
 	)
@@ -320,6 +321,12 @@ func messagePromptText(message *telebot.Message) string {
 		return text
 	}
 	return strings.TrimSpace(message.Caption)
+}
+
+var directImageRequestPattern = regexp.MustCompile(`(?i)(^|[\s,.:;!?])(нарисуй|рисуй|сгенерируй|создай|сделай\s+(?:картинк|изображени|мем)|draw|generate|create|render)(?:$|[\s,.:;!?])`)
+
+func shouldIsolateImageGenerationPrompt(question string) bool {
+	return directImageRequestPattern.MatchString(strings.TrimSpace(question))
 }
 
 var retrospectiveQuestionPatterns = []*regexp.Regexp{
@@ -1152,7 +1159,10 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	members := fetchPrefillMembers(message.Chat.ID)
 
-	if registry.Config.ChatGptUseHistory {
+	if shouldIsolateImageGenerationPrompt(question) {
+		// A new image request must not inherit prior image prompts, captions, or chat lore.
+		userMessage = fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
+	} else if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference
 		if message.Chat == nil {
 			log.Printf("[reply] Message.Chat is nil when retrieving history")

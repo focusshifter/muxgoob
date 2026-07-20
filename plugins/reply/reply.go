@@ -713,6 +713,73 @@ func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMe
 	return strings.TrimSpace(out.String())
 }
 
+const maxImageIdentityFacts = 4
+
+func compactPersonFactsForImage(raw string) string {
+	dossier := facts.ParseDossier(raw)
+	if len(dossier.Identity) == 0 {
+		return ""
+	}
+	identity := dossier.Identity
+	if len(identity) > maxImageIdentityFacts {
+		identity = identity[:maxImageIdentityFacts]
+	}
+	var out strings.Builder
+	out.WriteString("Identity:")
+	for _, fact := range identity {
+		fact = strings.TrimSpace(fact)
+		if fact != "" {
+			out.WriteString("\n- ")
+			out.WriteString(fact)
+		}
+	}
+	return out.String()
+}
+
+func buildImagePersonFactsContext(chatID int64, currentMessage *telebot.Message, botID int) string {
+	if currentMessage == nil {
+		return ""
+	}
+	users := make([]*telebot.User, 0)
+	seen := make(map[int64]struct{})
+	addUser := func(user *telebot.User) {
+		if user == nil || user.ID == 0 || user.ID == botID {
+			return
+		}
+		id := int64(user.ID)
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		users = append(users, user)
+	}
+	addMentionedUsers(chatID, currentMessage, addUser)
+	if len(users) == 0 {
+		return ""
+	}
+	ids := make([]int64, 0, len(users))
+	for _, user := range users {
+		ids = append(ids, int64(user.ID))
+	}
+	factMap, err := promptmgr.GetPersonFactsMulti(chatID, ids)
+	if err != nil {
+		log.Printf("[reply] Error retrieving image person facts: %v", err)
+		return ""
+	}
+	var out strings.Builder
+	for _, user := range users {
+		factsText := compactPersonFactsForImage(factMap[int64(user.ID)])
+		if factsText == "" {
+			continue
+		}
+		out.WriteString(userDisplayName(user))
+		out.WriteString(":\n")
+		out.WriteString(factsText)
+		out.WriteString("\n")
+	}
+	return strings.TrimSpace(out.String())
+}
+
 func addMentionedUsers(chatID int64, message *telebot.Message, addUser func(user *telebot.User)) {
 	if message == nil {
 		return
@@ -748,6 +815,59 @@ func addMentionedUsers(chatID int64, message *telebot.Message, addUser func(user
 	}
 }
 
+var quotedPersonAliasExp = regexp.MustCompile(`[«"]([^»"]{3,64})[»"]`)
+
+func personFactAliases(chatID, userID int64) []string {
+	if sqliteDb == nil || userID == 0 {
+		return nil
+	}
+	var raw string
+	err := sqliteDb.QueryRow(`SELECT facts FROM person_facts WHERE chat_id = ? AND user_id = ? ORDER BY version DESC LIMIT 1`, chatID, userID).Scan(&raw)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	aliases := make([]string, 0)
+	for _, identity := range facts.ParseDossier(raw).Identity {
+		for _, match := range quotedPersonAliasExp.FindAllStringSubmatch(identity, -1) {
+			if len(match) > 1 {
+				aliases = append(aliases, strings.TrimSpace(match[1]))
+			}
+		}
+	}
+	return aliases
+}
+
+func russianNameStem(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	for _, suffix := range []string{"ами", "ями", "ого", "ему", "ому", "ыми", "ими", "ом", "ем", "ах", "ях", "ой", "ей", "ам", "ям", "ов", "ев", "а", "я", "у", "ю", "ы", "и", "е"} {
+		if strings.HasSuffix(value, suffix) {
+			stem := strings.TrimSuffix(value, suffix)
+			if len([]rune(stem)) >= 3 {
+				return stem
+			}
+		}
+	}
+	return value
+}
+
+func nameMatchesRequestToken(token, candidate string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	if token == "" || candidate == "" {
+		return false
+	}
+	if token == candidate {
+		return true
+	}
+	if strings.IndexFunc(token+candidate, func(r rune) bool { return r >= 'А' && r <= 'я' || r == 'ё' || r == 'Ё' }) >= 0 {
+		return russianNameStem(token) == russianNameStem(candidate)
+	}
+	return false
+}
+
 func lookupNamedChatUsersInText(chatID int64, text string) []*telebot.User {
 	if sqliteDb == nil || strings.TrimSpace(text) == "" {
 		return nil
@@ -776,23 +896,41 @@ func lookupNamedChatUsersInText(chatID int64, text string) []*telebot.User {
 		log.Printf("[reply] Error looking up plain-text participant names: %v", err)
 		return nil
 	}
-	defer rows.Close()
 
-	var users []*telebot.User
+	var candidates []telebot.User
 	for rows.Next() {
 		var user telebot.User
 		if err := rows.Scan(&user.ID, &user.Username, &user.FirstName, &user.LastName); err != nil {
 			continue
 		}
-		for _, name := range []string{user.Username, user.FirstName, user.LastName} {
-			if _, ok := words[strings.ToLower(strings.TrimSpace(name))]; ok {
-				users = append(users, &user)
-				break
-			}
-		}
+		candidates = append(candidates, user)
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("[reply] Error iterating plain-text participant names: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		log.Printf("[reply] Error closing plain-text participant lookup: %v", err)
+	}
+
+	var users []*telebot.User
+	for _, user := range candidates {
+		names := append([]string{user.Username, user.FirstName, user.LastName}, personFactAliases(chatID, int64(user.ID))...)
+		matched := false
+		for _, name := range names {
+			for token := range words {
+				if nameMatchesRequestToken(token, name) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if matched {
+			resolved := user
+			users = append(users, &resolved)
+		}
 	}
 	return users
 }
@@ -1340,10 +1478,10 @@ var askChatGpt = func(message *telebot.Message) string {
 		if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
-			personFacts := buildPersonFactsContext(message.Chat.ID, relevantSceneMessages, message, botID)
+			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
 			userMessage = buildImageScenePrompt(relevantSceneMessages, question, botID, message, members, personFacts, imageMemory)
 		} else if message.Chat != nil && hasExplicitMention(message) {
-			personFacts := buildPersonFactsContext(message.Chat.ID, nil, message, botID)
+			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
 			userMessage = buildImageMentionPrompt(question, personFacts, imageMemory)
 		} else {
 			// Keep old visual chatter isolated, but retain explicitly remembered chat lore.

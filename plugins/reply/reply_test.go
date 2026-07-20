@@ -1696,14 +1696,35 @@ Avoid:
 	}
 }
 
+func TestCompactPersonFactsForImageKeepsOnlyIdentity(t *testing.T) {
+	factsText := `Identity:
+- Вейлор — эмо-гном.
+- Предпочитает «Вейлор».
+
+Interests:
+- Spotify, metal, keyboards, Forza, YouTube.`
+	got := compactPersonFactsForImage(factsText)
+	if !strings.Contains(got, "эмо-гном") || !strings.Contains(got, "Предпочитает") || strings.Contains(got, "Spotify") || strings.Contains(got, "Interests") {
+		t.Fatalf("unexpected compact image facts: %q", got)
+	}
+}
+
 func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 	_, err := mockDB.Exec(`
 		CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT);
 		CREATE TABLE IF NOT EXISTS messages (id INTEGER, chat_id INTEGER, sender_id INTEGER);
+		CREATE TABLE IF NOT EXISTS person_facts (chat_id INTEGER, user_id INTEGER, version INTEGER, facts TEXT);
 		INSERT INTO users (id, username, first_name, last_name) VALUES (7, 'ivanov', 'Иван', '');
-		INSERT INTO messages (id, chat_id, sender_id) VALUES (1, 123, 7);`)
+		INSERT INTO users (id, username, first_name, last_name) VALUES (8, 'Vhailor', '', '');
+		INSERT INTO messages (id, chat_id, sender_id) VALUES (1, 123, 7);
+		INSERT INTO messages (id, chat_id, sender_id) VALUES (2, 123, 8);
+		INSERT INTO person_facts (chat_id, user_id, version, facts) VALUES (123, 8, 1, 'Identity:
+- Prefers «Вейлор» over «Вялор».
+
+Interests:
+- heavy music.');`)
 	if err != nil {
 		t.Fatalf("create nickname test data: %v", err)
 	}
@@ -1711,11 +1732,11 @@ func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 	sqliteDb = mockDB
 	defer func() { sqliteDb = originalDB }()
 
-	users := lookupNamedChatUsersInText(123, "губи, нарисуй иван в космосе")
-	if len(users) != 1 || users[0].ID != 7 {
-		t.Fatalf("expected plain-text Иван to resolve participant, got %#v", users)
+	users := lookupNamedChatUsersInText(123, "губи, нарисуй ивана пенге и вейлора")
+	if len(users) != 2 || users[0].ID != 7 || users[1].ID != 8 {
+		t.Fatalf("expected inflected Иван and person-fact alias Вейлор to resolve participants, got %#v", users)
 	}
-	if !hasExplicitMention(&telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: "нарисуй иван"}) {
+	if !hasExplicitMention(&telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: "нарисуй ивана и вейлора"}) {
 		t.Fatal("plain-text nickname must trigger personfacts lookup")
 	}
 }

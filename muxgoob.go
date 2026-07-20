@@ -31,6 +31,8 @@ import (
 
 var token string
 
+const gracefulShutdownTimeout = 10 * time.Minute
+
 func main() {
 	log.Println("[muxgoob] Rise and shine, Mux")
 
@@ -80,7 +82,7 @@ func main() {
 	}()
 
 	bot.Start()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 	defer cancel()
 	registry.Shutdown(shutdownCtx)
 	log.Printf("[muxgoob] Graceful shutdown complete")

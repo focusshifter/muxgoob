@@ -41,10 +41,12 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	var sentPath string
 	var sentCaption string
 	var actions []telebot.ChatAction
+	started := 0
 	tool := &GenerateImageTool{
 		chatID:    123,
 		generator: stub,
 		outputDir: t.TempDir(),
+		onStart:   func() { started++ },
 		notify: func(chatID int64, action telebot.ChatAction) error {
 			if chatID != 123 {
 				t.Fatalf("expected notify chat id 123, got %d", chatID)
@@ -65,6 +67,9 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	result, err := tool.Execute(context.Background(), `{"prompt":"нарисуй кота","caption":"цивик вышел подрифтить","size":"2048x1152","quality":"low","output_format":"png"}`)
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
+	}
+	if started != 1 {
+		t.Fatalf("expected one generation-start callback, got %d", started)
 	}
 	if len(stub.requests) != 1 {
 		t.Fatalf("expected one generation request, got %d", len(stub.requests))

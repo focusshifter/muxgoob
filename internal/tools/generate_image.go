@@ -34,6 +34,7 @@ type GenerateImageTool struct {
 	send      func(chatID int64, imagePath string, caption string) error
 	notify    func(chatID int64, action telebot.ChatAction) error
 	outputDir string
+	onStart   func()
 }
 
 type generateImageArgs struct {
@@ -57,6 +58,12 @@ type generateImageResult struct {
 
 func NewGenerateImageTool(chatID int64) *GenerateImageTool {
 	return &GenerateImageTool{chatID: chatID, generator: openaicodex.NewClient()}
+}
+
+func (t *GenerateImageTool) SetOnStart(fn func()) {
+	if t != nil {
+		t.onStart = fn
+	}
 }
 
 func (t *GenerateImageTool) Definition() openai.Tool {
@@ -126,6 +133,10 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	}
 	if outputFormat != "png" && outputFormat != "jpeg" && outputFormat != "jpg" && outputFormat != "webp" {
 		return "", fmt.Errorf("unsupported output_format %q", outputFormat)
+	}
+
+	if onStart := t.onStart; onStart != nil {
+		onStart()
 	}
 
 	generator := t.generator

@@ -324,6 +324,18 @@ func messagePromptText(message *telebot.Message) string {
 	return strings.TrimSpace(message.Caption)
 }
 
+var imageRequestReactions = []string{"👀", "🔥", "🎨", "🫡", "✨"}
+
+func reactToImageRequest(message *telebot.Message) {
+	if message == nil || registry.Bot == nil || len(imageRequestReactions) == 0 {
+		return
+	}
+	emoji := imageRequestReactions[rand.Intn(len(imageRequestReactions))]
+	if err := registry.Bot.React(message, emoji); err != nil {
+		log.Printf("[reply] Could not react to image request: %v", err)
+	}
+}
+
 var directImageRequestPattern = regexp.MustCompile(`(?i)(^|[\s,.:;!?])(нарисуй|рисуй|сгенерируй|создай|сделай\s+(?:картинк|изображени|мем)|draw|generate|create|render)(?:$|[\s,.:;!?])`)
 
 func shouldIsolateImageGenerationPrompt(question string) bool {
@@ -1270,6 +1282,9 @@ var askChatGpt = func(message *telebot.Message) string {
 	}
 	if registry.GetImageGenerationEnabled(message.Chat.ID) {
 		tools, toolSystemParts, imageTool = appendImageGenerationToolIfEnabled(message.Chat.ID, tools, toolSystemParts)
+		if imageTool != nil {
+			imageTool.SetOnStart(func() { reactToImageRequest(message) })
+		}
 	}
 	forceSearch := shouldForceSearchMessages(question)
 	forceHistoryBounds := shouldForceHistoryBounds(question)

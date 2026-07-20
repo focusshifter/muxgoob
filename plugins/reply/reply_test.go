@@ -1658,6 +1658,28 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	}
 }
 
+func TestReactToImageRequestUsesOneAllowedReaction(t *testing.T) {
+	originalBot := registry.Bot
+	defer func() { registry.Bot = originalBot }()
+	var gotMessage *telebot.Message
+	var gotEmoji string
+	registry.Bot = &registry.BotWrapper{ReactFunc: func(message *telebot.Message, emoji string) error {
+		gotMessage, gotEmoji = message, emoji
+		return nil
+	}}
+	message := &telebot.Message{ID: 42, Chat: &telebot.Chat{ID: 123}}
+	reactToImageRequest(message)
+	if gotMessage != message {
+		t.Fatalf("expected reaction on original request, got %#v", gotMessage)
+	}
+	for _, emoji := range imageRequestReactions {
+		if gotEmoji == emoji {
+			return
+		}
+	}
+	t.Fatalf("unexpected image reaction %q", gotEmoji)
+}
+
 func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

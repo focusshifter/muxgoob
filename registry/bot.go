@@ -20,9 +20,48 @@ type BotWrapper struct {
 	ReplyFunc    func(message *telebot.Message, what interface{}, options ...interface{}) (*telebot.Message, error)
 	NotifyFunc   func(to telebot.Recipient, action telebot.ChatAction) error
 	SendPollFunc func(to telebot.Recipient, question string, options []string, isAnonymous bool, allowsMultipleAnswers bool) (*telebot.Message, error)
+	ReactFunc    func(message *telebot.Message, emoji string) error
 }
 
 const telegramMessageChunkSize = 4000
+
+type telegramAPIResponse struct {
+	OK          bool   `json:"ok"`
+	Description string `json:"description"`
+}
+
+// React adds one emoji reaction to a message. Telegram may reject emojis that
+// the chat does not allow; callers treat that as best-effort.
+func (b *BotWrapper) React(message *telebot.Message, emoji string) error {
+	if b == nil || message == nil || message.Chat == nil {
+		return errors.New("reaction requires a message with a chat")
+	}
+	if b.ReactFunc != nil {
+		return b.ReactFunc(message, emoji)
+	}
+	if b.Bot == nil {
+		return errors.New("bot is not initialized")
+	}
+	response, err := b.Bot.Raw("setMessageReaction", map[string]interface{}{
+		"chat_id":    message.Chat.ID,
+		"message_id": message.ID,
+		"reaction": []map[string]string{{
+			"type":  "emoji",
+			"emoji": emoji,
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	var result telegramAPIResponse
+	if err := json.Unmarshal(response, &result); err != nil {
+		return fmt.Errorf("decode setMessageReaction response: %w", err)
+	}
+	if !result.OK {
+		return fmt.Errorf("setMessageReaction failed: %s", result.Description)
+	}
+	return nil
+}
 
 // Send sends a message and saves it to the database.
 // String payloads longer than Telegram's limit are split into multiple messages.

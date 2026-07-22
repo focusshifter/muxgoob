@@ -1502,7 +1502,8 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	members := fetchPrefillMembers(message.Chat.ID)
 
-	if shouldIsolateImageGenerationPrompt(question) {
+	isImageGenerationRequest := shouldIsolateImageGenerationPrompt(question)
+	if isImageGenerationRequest {
 		if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
@@ -1531,8 +1532,13 @@ var askChatGpt = func(message *telebot.Message) string {
 		userMessage = buildNoAssPrefill(nil, question, systemMessage, personFacts, botID, message, members)
 	}
 
+	completionContext := context.Background()
+	if isImageGenerationRequest {
+		completionContext = openaicodex.WithoutFallback(completionContext)
+	}
+
 	resp, err := chattools.RunLoop(
-		context.Background(),
+		completionContext,
 		client,
 		openai.ChatCompletionRequest{
 			Model:            model,

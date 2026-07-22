@@ -40,6 +40,20 @@ type Client struct {
 	fallbackClient ChatCompletionCreator
 }
 
+type fallbackDisabledContextKey struct{}
+
+// WithoutFallback marks a completion context as ineligible for provider fallback.
+// Image-generation requests use it so a Codex failure cannot be converted into a
+// text-only OpenRouter completion.
+func WithoutFallback(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fallbackDisabledContextKey{}, true)
+}
+
+func fallbackEnabled(ctx context.Context, client *Client) bool {
+	disabled, _ := ctx.Value(fallbackDisabledContextKey{}).(bool)
+	return client.fallbackClient != nil && !disabled
+}
+
 func NewClient(opts ...Option) *Client {
 	client := &Client{
 		baseURL:     defaultBaseURL,
@@ -241,7 +255,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 
 	authPath, accessToken, err := c.loadAuthFile()
 	if err != nil {
-		if c.fallbackClient != nil {
+		if fallbackEnabled(ctx, c) {
 			fallback := fallbackRequest(request)
 			log.Printf("[openaicodex] auth unavailable, falling back to openrouter model=%s", fallback.Model)
 			resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
@@ -269,7 +283,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 
 		httpResp, err := c.httpClient.Do(httpReq)
 		if err != nil {
-			if c.fallbackClient != nil {
+			if fallbackEnabled(ctx, c) {
 				fallback := fallbackRequest(request)
 				log.Printf("[openaicodex] transport error, falling back to openrouter model=%s err=%v", fallback.Model, err)
 				resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
@@ -291,7 +305,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 				}
 				log.Printf("[openaicodex] token refresh failed: %v", refreshErr)
 			}
-			if c.fallbackClient != nil {
+			if fallbackEnabled(ctx, c) {
 				fallback := fallbackRequest(request)
 				log.Printf("[openaicodex] backend error status=%d, falling back to openrouter model=%s body=%s", httpResp.StatusCode, fallback.Model, strings.TrimSpace(string(respBody)))
 				resp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
@@ -311,7 +325,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 				log.Printf("[openaicodex] empty stop response on attempt=%d, retrying once", attempt)
 				continue
 			}
-			if c.fallbackClient != nil {
+			if fallbackEnabled(ctx, c) {
 				fallback := fallbackRequest(request)
 				log.Printf("[openaicodex] empty stop after retry, falling back to openrouter model=%s", fallback.Model)
 				fallbackResp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)

@@ -2,6 +2,7 @@ package reply
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1655,6 +1656,17 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	}, question, 99, current, []string{"alice", "bob"}, "alice: любит 35mm плёнку", "чибики всегда двухмерные")
 	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "любит 35mm плёнку") || !strings.Contains(prompt, "чибики всегда двухмерные") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
 		t.Fatalf("unexpected scene context: %q", prompt)
+	}
+}
+
+func TestAllowedImageRequestReactionsRespectsChatConfiguration(t *testing.T) {
+	got := allowedImageRequestReactions([]string{"❤️", "🎉", "💩"}, true)
+	want := []string{"❤️", "🎉"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowed reactions = %#v, want %#v", got, want)
+	}
+	if got := allowedImageRequestReactions(nil, false); !reflect.DeepEqual(got, imageRequestReactions) {
+		t.Fatalf("unrestricted reactions = %#v, want %#v", got, imageRequestReactions)
 	}
 }
 

@@ -397,6 +397,37 @@ func TestClientCreateChatCompletionRetriesOnEmptyStopContent(t *testing.T) {
 	}
 }
 
+func TestClientCreateChatCompletionFallsBackAfterTwoEmptyStopResponses(t *testing.T) {
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"created_at\":123,\"model\":\"gpt-5.4\"}}\n\n")
+	}))
+	defer server.Close()
+
+	codexHome := t.TempDir()
+	writeAuthFile(t, codexHome, "test-access-token")
+	fallback := &fallbackClientStub{resp: openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{{Message: openai.ChatCompletionMessage{Content: "fallback after empty"}}}}}
+	client := NewClient(WithBaseURL(server.URL), WithCodexHome(codexHome), WithFallbackClient(fallback))
+	resp, err := client.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{
+		Model:    "openai/gpt-5.6-terra",
+		Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleUser, Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateChatCompletion error: %v", err)
+	}
+	if attempt != 2 || len(fallback.requests) != 1 {
+		t.Fatalf("expected two Codex attempts then one fallback, attempts=%d fallback=%d", attempt, len(fallback.requests))
+	}
+	if len(resp.Choices) != 1 || resp.Choices[0].Message.Content != "fallback after empty" {
+		t.Fatalf("expected fallback response, got %#v", resp)
+	}
+}
+
 func TestClientCreateChatCompletionAddsNativeWebSearchForOnlineModel(t *testing.T) {
 	var got capturedRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

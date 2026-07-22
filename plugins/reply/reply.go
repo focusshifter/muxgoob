@@ -325,13 +325,41 @@ func messagePromptText(message *telebot.Message) string {
 	return strings.TrimSpace(message.Caption)
 }
 
-var imageRequestReactions = []string{"👀", "🔥", "🎨", "🫡", "✨"}
+// imageRequestReactions contains standard Telegram emoji reactions. It is filtered
+// against each chat's available_reactions before sending when the chat restricts them.
+var imageRequestReactions = []string{"👍", "❤️", "🔥", "🎉", "👏", "😁", "🤔", "👀"}
+
+func allowedImageRequestReactions(available []string, constrained bool) []string {
+	if !constrained {
+		return imageRequestReactions
+	}
+	allowed := make(map[string]struct{}, len(available))
+	for _, emoji := range available {
+		allowed[emoji] = struct{}{}
+	}
+	choices := make([]string, 0, len(imageRequestReactions))
+	for _, emoji := range imageRequestReactions {
+		if _, ok := allowed[emoji]; ok {
+			choices = append(choices, emoji)
+		}
+	}
+	return choices
+}
 
 func reactToImageRequest(message *telebot.Message) {
-	if message == nil || registry.Bot == nil || len(imageRequestReactions) == 0 {
+	if message == nil || message.Chat == nil || registry.Bot == nil || len(imageRequestReactions) == 0 {
 		return
 	}
-	emoji := imageRequestReactions[rand.Intn(len(imageRequestReactions))]
+	available, constrained, err := registry.Bot.AvailableReactionEmojis(message.Chat.ID)
+	if err != nil {
+		log.Printf("[reply] Could not retrieve available reactions; using Telegram standard list: %v", err)
+	}
+	choices := allowedImageRequestReactions(available, constrained)
+	if len(choices) == 0 {
+		log.Printf("[reply] Chat %d allows no configured image reactions; skipping reaction", message.Chat.ID)
+		return
+	}
+	emoji := choices[rand.Intn(len(choices))]
 	if err := registry.Bot.React(message, emoji); err != nil {
 		log.Printf("[reply] Could not react to image request: %v", err)
 	}

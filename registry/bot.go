@@ -30,6 +30,52 @@ type telegramAPIResponse struct {
 	Description string `json:"description"`
 }
 
+type telegramReactionType struct {
+	Type  string `json:"type"`
+	Emoji string `json:"emoji"`
+}
+
+type telegramChatInfoResponse struct {
+	OK          bool   `json:"ok"`
+	Description string `json:"description"`
+	Result      struct {
+		AvailableReactions json.RawMessage `json:"available_reactions"`
+	} `json:"result"`
+}
+
+// AvailableReactionEmojis returns the chat's explicitly allowed emoji reactions.
+// constrained is false when Telegram omits available_reactions, which means every
+// standard emoji reaction is allowed in that chat.
+func (b *BotWrapper) AvailableReactionEmojis(chatID int64) (emojis []string, constrained bool, err error) {
+	if b == nil || b.Bot == nil {
+		return nil, false, errors.New("bot is not initialized")
+	}
+	response, err := b.Bot.Raw("getChat", map[string]interface{}{"chat_id": chatID})
+	if err != nil {
+		return nil, false, err
+	}
+	var result telegramChatInfoResponse
+	if err := json.Unmarshal(response, &result); err != nil {
+		return nil, false, fmt.Errorf("decode getChat response: %w", err)
+	}
+	if !result.OK {
+		return nil, false, fmt.Errorf("getChat failed: %s", result.Description)
+	}
+	if len(result.Result.AvailableReactions) == 0 || string(result.Result.AvailableReactions) == "null" {
+		return nil, false, nil
+	}
+	var reactions []telegramReactionType
+	if err := json.Unmarshal(result.Result.AvailableReactions, &reactions); err != nil {
+		return nil, false, fmt.Errorf("decode available_reactions: %w", err)
+	}
+	for _, reaction := range reactions {
+		if reaction.Type == "emoji" && reaction.Emoji != "" {
+			emojis = append(emojis, reaction.Emoji)
+		}
+	}
+	return emojis, true, nil
+}
+
 // React adds one emoji reaction to a message. Telegram may reject emojis that
 // the chat does not allow; callers treat that as best-effort.
 func (b *BotWrapper) React(message *telebot.Message, emoji string) error {

@@ -306,9 +306,18 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 		if parseErr != nil {
 			return openai.ChatCompletionResponse{}, parseErr
 		}
-		if shouldRetryEmptyStop(resp) && attempt < 2 {
-			log.Printf("[openaicodex] empty stop response on attempt=%d, retrying once", attempt)
-			continue
+		if shouldRetryEmptyStop(resp) {
+			if attempt < 2 {
+				log.Printf("[openaicodex] empty stop response on attempt=%d, retrying once", attempt)
+				continue
+			}
+			if c.fallbackClient != nil {
+				fallback := fallbackRequest(request)
+				log.Printf("[openaicodex] empty stop after retry, falling back to openrouter model=%s", fallback.Model)
+				fallbackResp, fallbackErr := c.fallbackClient.CreateChatCompletion(ctx, fallback)
+				log.Printf("[openaicodex] fallback completed model=%s choices=%d err=%v", fallback.Model, len(fallbackResp.Choices), fallbackErr)
+				return fallbackResp, fallbackErr
+			}
 		}
 		return resp, nil
 	}

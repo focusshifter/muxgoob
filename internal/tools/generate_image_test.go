@@ -80,8 +80,8 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	if sentPath == "" {
 		t.Fatal("expected image to be sent")
 	}
-	if len(actions) < 2 || actions[0] != telebot.Typing || actions[len(actions)-1] != telebot.UploadingPhoto {
-		t.Fatalf("expected typing then uploading photo actions, got %#v", actions)
+	if len(actions) < 2 || actions[0] != telebot.UploadingPhoto || actions[len(actions)-1] != telebot.UploadingPhoto {
+		t.Fatalf("expected uploading photo actions, got %#v", actions)
 	}
 	written, err := os.ReadFile(sentPath)
 	if err != nil {

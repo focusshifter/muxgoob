@@ -143,7 +143,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if generator == nil {
 		generator = openaicodex.NewClient()
 	}
-	stopTyping := t.startActionKeepalive(ctx, telebot.Typing, 2*time.Second)
+	stopUploading := t.startActionKeepalive(ctx, telebot.UploadingPhoto, 2*time.Second)
 	request := openaicodex.ImageGenerationRequest{
 		Prompt:       prompt,
 		Model:        model,
@@ -152,7 +152,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 		OutputFormat: outputFormat,
 	}
 	result, err := generateImageWithRetry(ctx, generator, request)
-	stopTyping()
+	stopUploading()
 	if err != nil {
 		return "", err
 	}

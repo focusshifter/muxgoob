@@ -1740,8 +1740,8 @@ func TestImageAuthorReferenceLoadsSenderIdentity(t *testing.T) {
 		Sender: &telebot.User{ID: 8, Username: "Vhailor"},
 		Text:   "Губи, нарисуй, как я выиграл гонку на моей Ferrari",
 	}
-	if !referencesMessageAuthor(message) || !hasExplicitMention(message) {
-		t.Fatal("first-person image request must resolve to its author")
+	if hasExplicitMention(message) {
+		t.Fatal("author identity must not depend on treating first-person wording as a named mention")
 	}
 	personFacts := buildImagePersonFactsContext(123, message, 0)
 	if !strings.Contains(personFacts, "Vhailor") || !strings.Contains(personFacts, "эмо-гном") {

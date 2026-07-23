@@ -764,12 +764,6 @@ func compactPersonFactsForImage(raw string) string {
 	return out.String()
 }
 
-var firstPersonReferenceExp = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_])(я|меня|мне|мной|мой|моя|моё|мои|моих|моему|моей|i|me|my)($|[^\p{L}\p{N}_])`)
-
-func referencesMessageAuthor(message *telebot.Message) bool {
-	return message != nil && message.Sender != nil && firstPersonReferenceExp.MatchString(message.Text)
-}
-
 func buildImagePersonFactsContext(chatID int64, currentMessage *telebot.Message, botID int) string {
 	if currentMessage == nil {
 		return ""
@@ -787,9 +781,9 @@ func buildImagePersonFactsContext(chatID int64, currentMessage *telebot.Message,
 		seen[id] = struct{}{}
 		users = append(users, user)
 	}
-	if referencesMessageAuthor(currentMessage) {
-		addUser(currentMessage.Sender)
-	}
+	// Every image request carries the request author's compact Identity. The model,
+	// not a keyword matcher, resolves first-person language in the request.
+	addUser(currentMessage.Sender)
 	addMentionedUsers(chatID, currentMessage, addUser)
 	if len(users) == 0 {
 		return ""
@@ -984,9 +978,6 @@ func hasExplicitMention(message *telebot.Message) bool {
 	if mentionExp.MatchString(message.Text) {
 		return true
 	}
-	if referencesMessageAuthor(message) {
-		return true
-	}
 	return message.Chat != nil && len(lookupNamedChatUsersInText(message.Chat.ID, message.Text)) > 0
 }
 
@@ -1053,14 +1044,14 @@ func appendImageStableContext(prompt string, stableContext string) string {
 }
 
 func imageQuestionWithAuthorReference(question string, message *telebot.Message) string {
-	if !referencesMessageAuthor(message) {
+	if message == nil || message.Sender == nil {
 		return question
 	}
 	name := userDisplayName(message.Sender)
 	if name == "" {
 		name = "the requesting chat member"
 	}
-	return strings.TrimSpace(question) + "\n\nFirst-person references (\"я\", \"мой\", etc.) mean the requesting chat member " + name + ". If the scene depicts that person, portray " + name + " as the named subject, not as an anonymous or generic driver; apply their supplied Identity facts when relevant."
+	return strings.TrimSpace(question) + "\n\nRequest author: " + name + ". Interpret any first-person reference in this request as this author. If the scene depicts the author, portray " + name + " as the named subject, not as an anonymous or generic driver; apply their supplied Identity facts when relevant."
 }
 
 func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, personFacts string, stableContext string) string {
@@ -1533,7 +1524,8 @@ var askChatGpt = func(message *telebot.Message) string {
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
 			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
 			userMessage = buildImageScenePrompt(relevantSceneMessages, imageQuestion, botID, message, members, personFacts, imageMemory)
-		} else if message.Chat != nil && hasExplicitMention(message) {
+		} else if message.Chat != nil {
+			// Include the request author for every image request; named subjects are added too.
 			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
 			userMessage = buildImageMentionPrompt(imageQuestion, personFacts, imageMemory)
 		} else {

@@ -269,7 +269,7 @@ func (c *Client) CreateChatCompletion(ctx context.Context, request openai.ChatCo
 	if err != nil {
 		return openai.ChatCompletionResponse{}, fmt.Errorf("marshal codex request: %w", err)
 	}
-	log.Printf("[openaicodex] request configured_model=%s payload_model=%s input_items=%d tools=%d fallback=%t", request.Model, payload.Model, len(payload.Input), len(payload.Tools), c.fallbackClient != nil)
+	log.Printf("[openaicodex] request configured_model=%s payload_model=%s input_items=%d tools=%d fallback_enabled=%t", request.Model, payload.Model, len(payload.Input), len(payload.Tools), fallbackEnabled(ctx, c))
 
 	url := strings.TrimRight(c.baseURL, "/") + "/responses"
 	for attempt := 1; attempt <= 2; attempt++ {

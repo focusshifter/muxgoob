@@ -1721,6 +1721,38 @@ Interests:
 	}
 }
 
+func TestImageAuthorReferenceLoadsSenderIdentity(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	originalDatabaseDB := database.DB
+	database.DB = mockDB
+	defer func() { database.DB = originalDatabaseDB }()
+	_, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS person_facts (chat_id INTEGER, user_id INTEGER, version INTEGER, facts TEXT);
+		INSERT INTO person_facts (chat_id, user_id, version, facts) VALUES (123, 8, 1, 'Identity:
+- Вейлор — эмо-гном.
+- Предпочитает «Вейлор».');`)
+	if err != nil {
+		t.Fatalf("create author facts: %v", err)
+	}
+	message := &telebot.Message{
+		Chat:   &telebot.Chat{ID: 123},
+		Sender: &telebot.User{ID: 8, Username: "Vhailor"},
+		Text:   "Губи, нарисуй, как я выиграл гонку на моей Ferrari",
+	}
+	if !referencesMessageAuthor(message) || !hasExplicitMention(message) {
+		t.Fatal("first-person image request must resolve to its author")
+	}
+	personFacts := buildImagePersonFactsContext(123, message, 0)
+	if !strings.Contains(personFacts, "Vhailor") || !strings.Contains(personFacts, "эмо-гном") {
+		t.Fatalf("author identity facts missing: %q", personFacts)
+	}
+	prompt := imageQuestionWithAuthorReference(message.Text, message)
+	if !strings.Contains(prompt, "Vhailor") || !strings.Contains(prompt, "not as an anonymous or generic driver") {
+		t.Fatalf("author depiction instruction missing: %q", prompt)
+	}
+}
+
 func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

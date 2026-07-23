@@ -764,6 +764,12 @@ func compactPersonFactsForImage(raw string) string {
 	return out.String()
 }
 
+var firstPersonReferenceExp = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_])(я|меня|мне|мной|мой|моя|моё|мои|моих|моему|моей|i|me|my)($|[^\p{L}\p{N}_])`)
+
+func referencesMessageAuthor(message *telebot.Message) bool {
+	return message != nil && message.Sender != nil && firstPersonReferenceExp.MatchString(message.Text)
+}
+
 func buildImagePersonFactsContext(chatID int64, currentMessage *telebot.Message, botID int) string {
 	if currentMessage == nil {
 		return ""
@@ -780,6 +786,9 @@ func buildImagePersonFactsContext(chatID int64, currentMessage *telebot.Message,
 		}
 		seen[id] = struct{}{}
 		users = append(users, user)
+	}
+	if referencesMessageAuthor(currentMessage) {
+		addUser(currentMessage.Sender)
 	}
 	addMentionedUsers(chatID, currentMessage, addUser)
 	if len(users) == 0 {
@@ -975,6 +984,9 @@ func hasExplicitMention(message *telebot.Message) bool {
 	if mentionExp.MatchString(message.Text) {
 		return true
 	}
+	if referencesMessageAuthor(message) {
+		return true
+	}
 	return message.Chat != nil && len(lookupNamedChatUsersInText(message.Chat.ID, message.Text)) > 0
 }
 
@@ -1038,6 +1050,17 @@ func appendImageStableContext(prompt string, stableContext string) string {
 		return prompt
 	}
 	return strings.TrimSpace(prompt) + "\n\nPersistent chat memory (apply relevant character, visual, and lore constraints from these remembered facts; do not replace them with assumptions based only on names):\n" + stableContext
+}
+
+func imageQuestionWithAuthorReference(question string, message *telebot.Message) string {
+	if !referencesMessageAuthor(message) {
+		return question
+	}
+	name := userDisplayName(message.Sender)
+	if name == "" {
+		name = "the requesting chat member"
+	}
+	return strings.TrimSpace(question) + "\n\nFirst-person references (\"я\", \"мой\", etc.) mean the requesting chat member " + name + ". If the scene depicts that person, portray " + name + " as the named subject, not as an anonymous or generic driver; apply their supplied Identity facts when relevant."
 }
 
 func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, personFacts string, stableContext string) string {
@@ -1504,17 +1527,18 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	isImageGenerationRequest := shouldIsolateImageGenerationPrompt(question)
 	if isImageGenerationRequest {
+		imageQuestion := imageQuestionWithAuthorReference(question, message)
 		if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
 			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
-			userMessage = buildImageScenePrompt(relevantSceneMessages, question, botID, message, members, personFacts, imageMemory)
+			userMessage = buildImageScenePrompt(relevantSceneMessages, imageQuestion, botID, message, members, personFacts, imageMemory)
 		} else if message.Chat != nil && hasExplicitMention(message) {
 			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
-			userMessage = buildImageMentionPrompt(question, personFacts, imageMemory)
+			userMessage = buildImageMentionPrompt(imageQuestion, personFacts, imageMemory)
 		} else {
 			// Keep old visual chatter isolated, but retain explicitly remembered chat lore.
-			userMessage = buildImageMentionPrompt(question, "", imageMemory)
+			userMessage = buildImageMentionPrompt(imageQuestion, "", imageMemory)
 		}
 	} else if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tucnak/telebot"
 
@@ -1656,6 +1657,19 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	}, question, 99, current, []string{"alice", "bob"}, "alice: любит 35mm плёнку", "чибики всегда двухмерные")
 	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "любит 35mm плёнку") || !strings.Contains(prompt, "чибики всегда двухмерные") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
 		t.Fatalf("unexpected scene context: %q", prompt)
+	}
+}
+
+func TestCurrentDateTimeContextUsesConfiguredLocation(t *testing.T) {
+	location, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		t.Fatalf("load location: %v", err)
+	}
+	context := currentDateTimeContext(time.Date(2026, time.July, 23, 12, 34, 56, 0, time.UTC), location)
+	for _, expected := range []string{"Thursday, 23 July 2026 15:34:56 MSK", "Europe/Moscow", "UTC+03:00", "today, tomorrow, yesterday"} {
+		if !strings.Contains(context, expected) {
+			t.Fatalf("current time context missing %q: %q", expected, context)
+		}
 	}
 }
 

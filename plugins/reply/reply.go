@@ -314,6 +314,14 @@ func isActionOnlyReply(replyText string) bool {
 	return replyText == actionOnlyReplyToken
 }
 
+func currentDateTimeContext(now time.Time, location *time.Location) string {
+	if location == nil {
+		location = time.Local
+	}
+	current := now.In(location)
+	return fmt.Sprintf("Current date and time: %s (%s, UTC%s). Interpret relative dates such as today, tomorrow, yesterday, this week, and next week from this timestamp; do not assume a different date.", current.Format("Monday, 02 January 2006 15:04:05 MST"), location.String(), current.Format("-07:00"))
+}
+
 func messagePromptText(message *telebot.Message) string {
 	if message == nil {
 		return ""
@@ -1490,6 +1498,7 @@ var askChatGpt = func(message *telebot.Message) string {
 	forceHistoryBounds := shouldForceHistoryBounds(question)
 	toolRegistry := chattools.NewRegistry(tools...)
 	toolSystemParts = append(toolSystemParts,
+		currentDateTimeContext(time.Now(), registry.Config.TimeLoc),
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",

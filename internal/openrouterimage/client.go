@@ -64,6 +64,9 @@ type imageRequest struct {
 	Quality      string `json:"quality,omitempty"`
 	OutputFormat string `json:"output_format,omitempty"`
 	N            int    `json:"n"`
+	Provider     struct {
+		AllowFallbacks bool `json:"allow_fallbacks"`
+	} `json:"provider"`
 }
 
 type imageResponse struct {
@@ -85,14 +88,18 @@ func (c *Client) GenerateImage(ctx context.Context, request openaicodex.ImageGen
 	if model == "" {
 		return openaicodex.ImageGenerationResponse{}, fmt.Errorf("OpenRouter image model is not configured")
 	}
-	payload, err := json.Marshal(imageRequest{
+	payloadRequest := imageRequest{
 		Model:        model,
 		Prompt:       prompt,
 		Size:         strings.TrimSpace(request.Size),
 		Quality:      strings.TrimSpace(request.Quality),
 		OutputFormat: strings.TrimSpace(request.OutputFormat),
 		N:            1,
-	})
+	}
+	// A configured OpenRouter image model is an explicit choice. Do not silently
+	// route a failed image generation through another upstream provider.
+	payloadRequest.Provider.AllowFallbacks = false
+	payload, err := json.Marshal(payloadRequest)
 	if err != nil {
 		return openaicodex.ImageGenerationResponse{}, fmt.Errorf("marshal OpenRouter image request: %w", err)
 	}

@@ -25,7 +25,7 @@ func TestClientGenerateImage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read request: %v", err)
 		}
-		for _, expected := range []string{`"model":"black-forest-labs/flux.2-pro"`, `"prompt":"a silver Ferrari"`, `"size":"1024x1024"`, `"n":1`} {
+		for _, expected := range []string{`"model":"black-forest-labs/flux.2-pro"`, `"prompt":"a silver Ferrari"`, `"size":"1024x1024"`, `"n":1`, `"allow_fallbacks":false`} {
 			if !strings.Contains(string(body), expected) {
 				t.Fatalf("request missing %s: %s", expected, body)
 			}

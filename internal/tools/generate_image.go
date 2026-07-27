@@ -15,6 +15,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
+	"github.com/focusshifter/muxgoob/internal/openrouterimage"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
@@ -57,7 +58,23 @@ type generateImageResult struct {
 }
 
 func NewGenerateImageTool(chatID int64) *GenerateImageTool {
-	return &GenerateImageTool{chatID: chatID, generator: openaicodex.NewClient()}
+	return &GenerateImageTool{chatID: chatID, generator: imageGeneratorForChat(chatID)}
+}
+
+func imageGeneratorForChat(chatID int64) ImageGenerator {
+	provider := strings.ToLower(strings.TrimSpace(registry.GetImageAiProvider(&chatID)))
+	if provider == "openrouter" {
+		return openrouterimage.NewClient(registry.Config.OpenrouterApiKey)
+	}
+	return openaicodex.NewClient()
+}
+
+func imageModelForChat(chatID int64) string {
+	model := strings.TrimSpace(registry.GetImageAiModel(&chatID))
+	if model == "" {
+		return "gpt-image-2"
+	}
+	return model
 }
 
 func (t *GenerateImageTool) SetOnStart(fn func()) {
@@ -71,7 +88,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name:        "generateImage",
-			Description: "Generate an image with OpenAI Codex OAuth using GPT Image (default gpt-image-2) and send it directly to the current Telegram chat. Use this when the user asks to draw, generate, create, or render a picture/image/photo/sticker/мем/картинку. Build the prompt from the active image request, except when the user explicitly asks for chat history, events, or participants: then use only the relevant factual chat context supplied with the request. Never blend prior image requests, captions, or unrelated chat context. After using this tool successfully, do not send follow-up text.",
+			Description: "Generate an image with the administrator-configured image provider and model, then send it directly to the current Telegram chat. Use this when the user asks to draw, generate, create, or render a picture/image/photo/sticker/мем/картинку. Build the prompt from the active image request, except when the user explicitly asks for chat history, events, or participants: then use only the relevant factual chat context supplied with the request. Never blend prior image requests, captions, or unrelated chat context. After using this tool successfully, do not send follow-up text.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -82,10 +99,6 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 					"caption": map[string]any{
 						"type":        "string",
 						"description": "Optional short Telegram caption related to the generated image, in the user's tone/language. Do not put the full prompt here. Leave empty if no natural caption is useful.",
-					},
-					"model": map[string]any{
-						"type":        "string",
-						"description": "Optional model override. Default: gpt-image-2. For true transparent OpenAI backgrounds use gpt-image-1.5 instead.",
 					},
 					"size": map[string]any{
 						"type":        "string",
@@ -115,10 +128,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
 	}
-	model := cleanImageOption(parsedArgs.Model)
-	if model == "" {
-		model = "gpt-image-2"
-	}
+	model := imageModelForChat(t.chatID)
 	size := telegramImageSize(cleanImageOption(parsedArgs.Size))
 	if size == "" {
 		size = defaultGeneratedImageSize
@@ -141,7 +151,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 
 	generator := t.generator
 	if generator == nil {
-		generator = openaicodex.NewClient()
+		generator = imageGeneratorForChat(t.chatID)
 	}
 	stopUploading := t.startActionKeepalive(ctx, telebot.UploadingPhoto, 2*time.Second)
 	request := openaicodex.ImageGenerationRequest{

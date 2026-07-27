@@ -16,6 +16,7 @@ const (
 	AiProviderKey             = "ai_provider"
 	AiModelKey                = "ai_model"
 	ImageAiModelKey           = "image_ai_model"
+	ImageAiProviderKey        = "image_ai_provider"
 	ImageGenerationEnabledKey = "image_generation_enabled"
 )
 
@@ -66,6 +67,9 @@ func EnsurePluginSettingsTable() error {
 
 // GetPluginSetting retrieves a setting from the database with fallback to default value
 func GetPluginSetting(chatID *int64, pluginName string, key string, defaultValue string) string {
+	if database.DB == nil {
+		return defaultValue
+	}
 	var value string
 	var err error
 
@@ -160,6 +164,12 @@ func GetImageAiModel(chatID *int64) string {
 	return GetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, Config.ImageAiModel)
 }
 
+// GetImageAiProvider returns the image provider from database or falls back to config.yml.
+// openai-codex preserves the historic Codex image-generation behavior.
+func GetImageAiProvider(chatID *int64) string {
+	return GetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, Config.ImageAiProvider)
+}
+
 // SetAiProvider sets the AI provider in the database
 func SetAiProvider(chatID *int64, provider string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, AiProviderKey, provider)
@@ -173,6 +183,11 @@ func SetAiModel(chatID *int64, model string) error {
 // SetImageAiModel sets the image AI model in the database
 func SetImageAiModel(chatID *int64, model string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, model)
+}
+
+// SetImageAiProvider sets the image provider in the database.
+func SetImageAiProvider(chatID *int64, provider string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, provider)
 }
 
 // GetImageGenerationEnabled returns whether the generateImage tool is allowed for a chat.

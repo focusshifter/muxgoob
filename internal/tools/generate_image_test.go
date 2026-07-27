@@ -9,7 +9,10 @@ import (
 
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
+	"github.com/focusshifter/muxgoob/registry"
+	"github.com/focusshifter/muxgoob/utils/testutils"
 )
 
 type imageGeneratorStub struct {
@@ -102,6 +105,35 @@ func TestGenerateImageToolExecuteGeneratesAndSendsImage(t *testing.T) {
 	}
 	if !payload.Sent || payload.Model != "gpt-image-2" || payload.Size != "1024x1024" || payload.Path != sentPath {
 		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestGenerateImageToolUsesChatConfiguredImageModel(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	previousDB := database.DB
+	database.DB = mockDB
+	defer func() { database.DB = previousDB }()
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatalf("create settings table: %v", err)
+	}
+	chatID := int64(123)
+	if err := registry.SetImageAiModel(&chatID, "black-forest-labs/flux.2-pro"); err != nil {
+		t.Fatalf("set image model: %v", err)
+	}
+	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{Model: "black-forest-labs/flux.2-pro", Image: []byte("png"), Extension: "png"}}
+	tool := &GenerateImageTool{
+		chatID:    chatID,
+		generator: stub,
+		outputDir: t.TempDir(),
+		notify:    func(int64, telebot.ChatAction) error { return nil },
+		send:      func(int64, string, string) error { return nil },
+	}
+	if _, err := tool.Execute(context.Background(), `{"prompt":"a racing Ferrari","model":"gpt-image-2"}`); err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if len(stub.requests) != 1 || stub.requests[0].Model != "black-forest-labs/flux.2-pro" {
+		t.Fatalf("expected configured image model, got %#v", stub.requests)
 	}
 }
 

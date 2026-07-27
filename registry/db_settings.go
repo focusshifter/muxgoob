@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/focusshifter/muxgoob/database"
 )
@@ -167,7 +168,11 @@ func GetImageAiModel(chatID *int64) string {
 // GetImageAiProvider returns the image provider from database or falls back to config.yml.
 // openai-codex preserves the historic Codex image-generation behavior.
 func GetImageAiProvider(chatID *int64) string {
-	return GetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, Config.ImageAiProvider)
+	defaultProvider := strings.TrimSpace(Config.ImageAiProvider)
+	if defaultProvider == "" {
+		defaultProvider = "openai-codex"
+	}
+	return GetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, defaultProvider)
 }
 
 // SetAiProvider sets the AI provider in the database

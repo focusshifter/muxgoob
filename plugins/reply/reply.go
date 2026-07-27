@@ -1394,6 +1394,42 @@ func fetchPrefillMembers(chatID int64) []string {
 	return payload.Users
 }
 
+func imagePromptComposer(chatID *int64) (chattools.ChatCompletionCreator, string, bool) {
+	if registry.GetImagePromptProvider(chatID) != "openrouter" {
+		return nil, "", false
+	}
+	model := strings.TrimSpace(registry.GetImagePromptModel(chatID))
+	if model == "" || strings.TrimSpace(registry.Config.OpenrouterApiKey) == "" {
+		return nil, "", false
+	}
+	config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
+	config.BaseURL = "https://openrouter.ai/api/v1"
+	return openai.NewClientWithConfig(config), model, true
+}
+
+func imagePromptComposerSystemMessage() string {
+	return strings.Join([]string{
+		"You compose direct image-generation requests.",
+		"Use generateImage for a compatible request and put a complete, concrete visual prompt in its prompt field.",
+		"Preserve relevant supplied identity, scene, style, and composition details without inventing personal details.",
+		"Do not claim that an image was generated unless generateImage succeeds.",
+		"Do not try to bypass any image provider's safety controls; if the requested content cannot be generated, offer a brief allowed alternative.",
+	}, " ")
+}
+
+func runImagePromptComposer(ctx context.Context, client chattools.ChatCompletionCreator, model, userMessage string, imageTool *chattools.GenerateImageTool) (string, error) {
+	toolRegistry := chattools.NewRegistry(imageTool)
+	return chattools.RunLoop(ctx, client, openai.ChatCompletionRequest{
+		Model:       model,
+		Temperature: 0.3,
+		Tools:       toolRegistry.Definitions(),
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: imagePromptComposerSystemMessage()},
+			{Role: openai.ChatMessageRoleUser, Content: userMessage},
+		},
+	}, toolRegistry, 5)
+}
+
 // askChatGpt is a variable function that can be replaced in tests
 var askChatGpt = func(message *telebot.Message) string {
 	// Safety check for test environment
@@ -1516,8 +1552,6 @@ var askChatGpt = func(message *telebot.Message) string {
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)
 
-	log.Print(formatChatGPTRequestLog(effectiveProvider, model, message.Chat.ID, len(question), len(toolRegistry.Definitions())))
-
 	botID := 0
 	if registry.Bot != nil && registry.Bot.Bot != nil {
 		botID = registry.Bot.Bot.Me.ID
@@ -1557,41 +1591,75 @@ var askChatGpt = func(message *telebot.Message) string {
 		userMessage = buildNoAssPrefill(nil, question, systemMessage, personFacts, botID, message, members)
 	}
 
+	imagePromptMode := "off"
+	composerClient, composerModel, composerConfigured := imagePromptComposer(chatID)
+	if isImageGenerationRequest && imageTool != nil {
+		imagePromptMode = registry.GetImagePromptMode(chatID)
+	}
+	if imagePromptMode == "direct" && !composerConfigured {
+		log.Printf("[reply] Image prompt composer is in direct mode but OpenRouter provider/model is not configured")
+		return ""
+	}
+
 	completionContext := context.Background()
 	if isImageGenerationRequest {
 		completionContext = openaicodex.WithoutFallback(completionContext)
 	}
 
-	resp, err := chattools.RunLoop(
-		completionContext,
-		client,
-		openai.ChatCompletionRequest{
-			Model:            model,
-			Temperature:      0.3,
-			TopP:             1.0,
-			FrequencyPenalty: 0.2,
-			PresencePenalty:  0.1,
-			Tools:            toolRegistry.Definitions(),
-			ToolChoice:       initialToolChoice(forceSearch, forceHistoryBounds),
-			Messages: []openai.ChatCompletionMessage{
-				{
-					Role:    openai.ChatMessageRoleSystem,
-					Content: toolSystemMessage,
-				},
-				{
-					Role:    openai.ChatMessageRoleUser,
-					Content: userMessage,
+	var resp string
+	if imagePromptMode == "direct" {
+		log.Print(formatChatGPTRequestLog("openrouter-image-prompt", composerModel, message.Chat.ID, len(question), 1))
+		resp, err = runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, imageTool)
+	} else {
+		log.Print(formatChatGPTRequestLog(effectiveProvider, model, message.Chat.ID, len(question), len(toolRegistry.Definitions())))
+		resp, err = chattools.RunLoop(
+			completionContext,
+			client,
+			openai.ChatCompletionRequest{
+				Model:            model,
+				Temperature:      0.3,
+				TopP:             1.0,
+				FrequencyPenalty: 0.2,
+				PresencePenalty:  0.1,
+				Tools:            toolRegistry.Definitions(),
+				ToolChoice:       initialToolChoice(forceSearch, forceHistoryBounds),
+				Messages: []openai.ChatCompletionMessage{
+					{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: toolSystemMessage,
+					},
+					{
+						Role:    openai.ChatMessageRoleUser,
+						Content: userMessage,
+					},
 				},
 			},
-		},
-		toolRegistry,
-		5,
-	)
+			toolRegistry,
+			5,
+		)
+	}
 
 	if err != nil {
 		log.Printf("ChatCompletion error: %v", err)
-		return ""
+		if imagePromptMode != "fallback" || !composerConfigured {
+			return ""
+		}
 	}
+
+	if imagePromptMode == "fallback" && !imageTool.WasSent() {
+		if !composerConfigured {
+			log.Printf("[reply] Image prompt composer fallback is enabled but OpenRouter provider/model is not configured")
+		} else {
+			log.Print(formatChatGPTRequestLog("openrouter-image-prompt-fallback", composerModel, message.Chat.ID, len(question), 1))
+			fallbackResp, fallbackErr := runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, imageTool)
+			if fallbackErr != nil {
+				log.Printf("[reply] Image prompt composer fallback error: %v", fallbackErr)
+			} else if fallbackResp != "" {
+				resp = fallbackResp
+			}
+		}
+	}
+
 	if pollTool.WasSent() || imageTool.WasSent() {
 		return actionOnlyReplyToken
 	}

@@ -18,6 +18,9 @@ const (
 	AiModelKey                = "ai_model"
 	ImageAiModelKey           = "image_ai_model"
 	ImageAiProviderKey        = "image_ai_provider"
+	ImagePromptProviderKey    = "image_prompt_provider"
+	ImagePromptModelKey       = "image_prompt_model"
+	ImagePromptModeKey        = "image_prompt_mode"
 	ImageGenerationEnabledKey = "image_generation_enabled"
 )
 
@@ -175,6 +178,27 @@ func GetImageAiProvider(chatID *int64) string {
 	return GetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, defaultProvider)
 }
 
+// GetImagePromptProvider returns the text provider that composes prompts for direct image requests.
+func GetImagePromptProvider(chatID *int64) string {
+	return GetPluginSetting(chatID, ConfigPluginName, ImagePromptProviderKey, Config.ImagePromptProvider)
+}
+
+// GetImagePromptModel returns the text model that composes prompts for direct image requests.
+func GetImagePromptModel(chatID *int64) string {
+	return GetPluginSetting(chatID, ConfigPluginName, ImagePromptModelKey, Config.ImagePromptModel)
+}
+
+// GetImagePromptMode returns off, direct, or fallback. Invalid values are treated as off.
+func GetImagePromptMode(chatID *int64) string {
+	mode := strings.ToLower(strings.TrimSpace(GetPluginSetting(chatID, ConfigPluginName, ImagePromptModeKey, Config.ImagePromptMode)))
+	switch mode {
+	case "direct", "fallback":
+		return mode
+	default:
+		return "off"
+	}
+}
+
 // SetAiProvider sets the AI provider in the database
 func SetAiProvider(chatID *int64, provider string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, AiProviderKey, provider)
@@ -193,6 +217,21 @@ func SetImageAiModel(chatID *int64, model string) error {
 // SetImageAiProvider sets the image provider in the database.
 func SetImageAiProvider(chatID *int64, provider string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, provider)
+}
+
+// SetImagePromptProvider sets the text provider that composes direct image prompts.
+func SetImagePromptProvider(chatID *int64, provider string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImagePromptProviderKey, provider)
+}
+
+// SetImagePromptModel sets the text model that composes direct image prompts.
+func SetImagePromptModel(chatID *int64, model string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImagePromptModelKey, model)
+}
+
+// SetImagePromptMode sets how the image prompt composer is used.
+func SetImagePromptMode(chatID *int64, mode string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImagePromptModeKey, mode)
 }
 
 // GetImageGenerationEnabled returns whether the generateImage tool is allowed for a chat.

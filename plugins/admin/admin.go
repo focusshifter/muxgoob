@@ -99,12 +99,39 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
 	switch parts[1] {
 	case "provider":
+		if len(parts) >= 3 && parts[2] == "image-prompt" {
+			if len(parts) < 4 {
+				bot.Send(message.Chat, "Usage: !ai provider image-prompt openrouter [chat_id]")
+				return
+			}
+			provider := parts[3]
+			if provider != "openrouter" {
+				bot.Send(message.Chat, "Invalid image prompt provider. Use 'openrouter'")
+				return
+			}
+			var chatID *int64
+			if len(parts) >= 5 {
+				if parsedID, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
+					chatID = &parsedID
+				}
+			}
+			if err := registry.SetImagePromptProvider(chatID, provider); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error setting image prompt provider: %v", err))
+				return
+			}
+			if chatID != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Image prompt provider for chat %d set to: %s", *chatID, provider))
+			} else {
+				bot.Send(message.Chat, fmt.Sprintf("Global image prompt provider set to: %s", provider))
+			}
+			return
+		}
 		if len(parts) >= 3 && parts[2] == "image" {
 			if len(parts) < 4 {
 				bot.Send(message.Chat, "Usage: !ai provider image [openai-codex|openrouter] [chat_id]")
@@ -166,6 +193,29 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	case "model":
 		if len(parts) < 3 {
 			bot.Send(message.Chat, "Please specify a model name")
+			return
+		}
+		if parts[2] == "image-prompt" {
+			if len(parts) < 4 {
+				bot.Send(message.Chat, "Please specify an image prompt model name")
+				return
+			}
+			var chatID *int64
+			if len(parts) >= 5 {
+				if parsedID, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
+					chatID = &parsedID
+				}
+			}
+			model := parts[3]
+			if err := registry.SetImagePromptModel(chatID, model); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error setting image prompt model: %v", err))
+				return
+			}
+			if chatID != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Image prompt model for chat %d set to: %s", *chatID, model))
+			} else {
+				bot.Send(message.Chat, fmt.Sprintf("Global image prompt model set to: %s", model))
+			}
 			return
 		}
 		if parts[2] == "selfprompt" {
@@ -240,6 +290,32 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			bot.Send(message.Chat, fmt.Sprintf("Global AI model set to: %s", model))
 		}
 
+	case "image-prompt":
+		if len(parts) < 3 || parts[2] != "mode" || len(parts) < 4 {
+			bot.Send(message.Chat, "Usage: !ai image-prompt mode [off|direct|fallback] [chat_id]")
+			return
+		}
+		mode := parts[3]
+		if mode != "off" && mode != "direct" && mode != "fallback" {
+			bot.Send(message.Chat, "Invalid image prompt mode. Use 'off', 'direct', or 'fallback'")
+			return
+		}
+		var chatID *int64
+		if len(parts) >= 5 {
+			if parsedID, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
+				chatID = &parsedID
+			}
+		}
+		if err := registry.SetImagePromptMode(chatID, mode); err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error setting image prompt mode: %v", err))
+			return
+		}
+		if chatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Image prompt mode for chat %d set to: %s", *chatID, mode))
+		} else {
+			bot.Send(message.Chat, fmt.Sprintf("Global image prompt mode set to: %s", mode))
+		}
+
 	case "images":
 		if len(parts) < 4 {
 			bot.Send(message.Chat, "Usage:\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>")
@@ -285,6 +361,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		model := registry.GetAiModel(chatID)
 		imageProvider := registry.GetImageAiProvider(chatID)
 		imageModel := registry.GetImageAiModel(chatID)
+		imagePromptProvider := registry.GetImagePromptProvider(chatID)
+		imagePromptModel := registry.GetImagePromptModel(chatID)
+		imagePromptMode := registry.GetImagePromptMode(chatID)
 		imageGenerationStatus := "disabled"
 		if chatID != nil && registry.GetImageGenerationEnabled(*chatID) {
 			imageGenerationStatus = "enabled"
@@ -296,9 +375,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 
 		var response string
 		if chatID != nil {
-			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, imageGenerationStatus, selfpromptModel)
+			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage prompt composer: %s / %s (%s)\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, imagePromptProvider, imagePromptModel, imagePromptMode, imageGenerationStatus, selfpromptModel)
 		} else {
-			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, selfpromptModel)
+			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage prompt composer: %s / %s (%s)\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, imagePromptProvider, imagePromptModel, imagePromptMode, selfpromptModel)
 		}
 		if provider == "openai-codex" {
 			response += "\nCodex auth: " + openaicodex.NewClient().AuthStatus()

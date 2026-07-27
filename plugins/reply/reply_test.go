@@ -1660,6 +1660,15 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	}
 }
 
+func TestImagePromptComposerSystemMessage(t *testing.T) {
+	message := imagePromptComposerSystemMessage()
+	for _, required := range []string{"generateImage", "Do not try to bypass", "image-generation"} {
+		if !strings.Contains(message, required) {
+			t.Fatalf("composer system message missing %q: %s", required, message)
+		}
+	}
+}
+
 func TestCurrentDateTimeContextUsesConfiguredLocation(t *testing.T) {
 	location, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {

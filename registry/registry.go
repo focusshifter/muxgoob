@@ -98,6 +98,9 @@ type Configuration struct {
 	AiModel                    string                 `yaml:"ai_model"`
 	ImageAiModel               string                 `yaml:"image_ai_model"`
 	ImageAiProvider            string                 `yaml:"image_ai_provider"`
+	ImagePromptProvider        string                 `yaml:"image_prompt_provider"`
+	ImagePromptModel           string                 `yaml:"image_prompt_model"`
+	ImagePromptMode            string                 `yaml:"image_prompt_mode"`
 	ImageMetadataEnabled       *bool                  `yaml:"image_metadata_enabled"`
 	ImageMetadataMaxPerMinute  int                    `yaml:"image_metadata_max_per_minute"`
 	SelfPromptConfig           SelfPromptConfig       `yaml:"selfprompt"`

@@ -1661,11 +1661,28 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 }
 
 func TestImagePromptComposerSystemMessage(t *testing.T) {
-	message := imagePromptComposerSystemMessage()
+	message := imagePromptComposerSystemMessage("")
 	for _, required := range []string{"generateImage", "Do not try to bypass", "image-generation"} {
 		if !strings.Contains(message, required) {
 			t.Fatalf("composer system message missing %q: %s", required, message)
 		}
+	}
+}
+
+func TestSuperAdminDirectiveOnlyForConfiguredOwner(t *testing.T) {
+	originalOwner := registry.Config.OwnerUsername
+	registry.Config.OwnerUsername = "SuperAdmin"
+	defer func() { registry.Config.OwnerUsername = originalOwner }()
+
+	ownerMessage := &telebot.Message{Sender: &telebot.User{Username: "superadmin"}}
+	if directive := superAdminDirective(ownerMessage); !strings.Contains(directive, "AUTHENTICATED BOT SUPERADMIN") {
+		t.Fatalf("owner directive = %q", directive)
+	}
+	if directive := superAdminDirective(&telebot.Message{Sender: &telebot.User{Username: "chat_admin"}}); directive != "" {
+		t.Fatalf("non-owner directive = %q, want empty", directive)
+	}
+	if directive := superAdminDirective(&telebot.Message{}); directive != "" {
+		t.Fatalf("message without sender directive = %q, want empty", directive)
 	}
 }
 

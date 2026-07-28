@@ -109,7 +109,11 @@ func describeAndStoreImageMetadata(message *telebot.Message) error {
 	if metadata.Model == "" {
 		metadata.Model = defaultImageAiModel
 	}
-	return saveImageMetadata(sqliteDb, message.Chat.ID, message.ID, fileID, metadata)
+	if err := saveImageMetadata(sqliteDb, message.Chat.ID, message.ID, fileID, metadata); err != nil {
+		return err
+	}
+	log.Printf("[reply/image-metadata] saved chat=%d msg=%d file=%s model=%s description=%q visible_text=%q meme_or_joke=%q tags=%q", message.Chat.ID, message.ID, fileID, metadata.Model, metadata.Description, metadata.VisibleText, metadata.MemeOrJoke, strings.Join(metadata.Tags, ","))
+	return nil
 }
 
 func imageMetadataExists(db *sql.DB, chatID int64, messageID int, fileID string) bool {

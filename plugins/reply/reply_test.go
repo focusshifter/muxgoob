@@ -1,7 +1,9 @@
 package reply
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"reflect"
 	"strings"
 	"testing"
@@ -1979,6 +1981,11 @@ func TestDescribeAndStoreImageMetadataPersistsVisionDescription(t *testing.T) {
 	}
 	defer func() { describeImageForMetadata = originalDescribe }()
 
+	var metadataLog bytes.Buffer
+	previousLogWriter := log.Writer()
+	log.SetOutput(&metadataLog)
+	defer log.SetOutput(previousLogWriter)
+
 	message := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{ID: 1, Username: "alice"}, Photo: &telebot.Photo{File: telebot.File{FileID: "file-cat"}, Width: 800, Height: 600}}
 	if err := describeAndStoreImageMetadata(message); err != nil {
 		t.Fatalf("describeAndStoreImageMetadata returned error: %v", err)
@@ -1990,6 +1997,11 @@ func TestDescribeAndStoreImageMetadataPersistsVisionDescription(t *testing.T) {
 	}
 	if description != "рыжий кот выглядит виноватым после пука" || model != "test-model" || !strings.Contains(tags, "кот") {
 		t.Fatalf("unexpected metadata description=%q model=%q tags=%q", description, model, tags)
+	}
+	for _, expected := range []string{"[reply/image-metadata] saved", "description=\"рыжий кот выглядит виноватым после пука\"", "tags=\"кот,мем\""} {
+		if !strings.Contains(metadataLog.String(), expected) {
+			t.Fatalf("metadata success log missing %q: %s", expected, metadataLog.String())
+		}
 	}
 }
 

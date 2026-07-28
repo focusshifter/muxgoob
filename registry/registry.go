@@ -97,6 +97,7 @@ type Configuration struct {
 	AiProvider                 string                 `yaml:"ai_provider"`
 	AiModel                    string                 `yaml:"ai_model"`
 	ImageAiModel               string                 `yaml:"image_ai_model"`
+	ImageVisionModel           string                 `yaml:"image_vision_model"`
 	ImageAiProvider            string                 `yaml:"image_ai_provider"`
 	ImageAiSize                string                 `yaml:"image_ai_size"`
 	ImagePromptProvider        string                 `yaml:"image_prompt_provider"`

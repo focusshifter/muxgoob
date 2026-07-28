@@ -170,7 +170,7 @@ func realDescribeImageForMetadata(message *telebot.Message, target *ResolvedImag
 	}
 
 	chatID := message.Chat.ID
-	model := strings.TrimSpace(registry.GetImageAiModel(&chatID))
+	model := strings.TrimSpace(registry.GetImageVisionModel(&chatID))
 	if model == "" {
 		model = defaultImageAiModel
 	}

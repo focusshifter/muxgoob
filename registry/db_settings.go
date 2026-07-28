@@ -17,6 +17,7 @@ const (
 	AiProviderKey             = "ai_provider"
 	AiModelKey                = "ai_model"
 	ImageAiModelKey           = "image_ai_model"
+	ImageVisionModelKey       = "image_vision_model"
 	ImageAiProviderKey        = "image_ai_provider"
 	ImageAiSizeKey            = "image_ai_size"
 	ImagePromptProviderKey    = "image_prompt_provider"
@@ -169,6 +170,16 @@ func GetImageAiModel(chatID *int64) string {
 	return GetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, Config.ImageAiModel)
 }
 
+// GetImageVisionModel returns the chat-completions model used to inspect incoming images.
+// It is intentionally independent from ImageAiModel, which selects an image generator.
+func GetImageVisionModel(chatID *int64) string {
+	defaultModel := strings.TrimSpace(Config.ImageVisionModel)
+	if defaultModel == "" {
+		defaultModel = "google/gemini-3.1-flash-lite-preview"
+	}
+	return GetPluginSetting(chatID, ConfigPluginName, ImageVisionModelKey, defaultModel)
+}
+
 // GetImageAiProvider returns the image provider from database or falls back to config.yml.
 // openai-codex preserves the historic Codex image-generation behavior.
 func GetImageAiProvider(chatID *int64) string {
@@ -228,6 +239,11 @@ func ClearAiModelOverride(chatID int64) error {
 // SetImageAiModel sets the image AI model in the database
 func SetImageAiModel(chatID *int64, model string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, ImageAiModelKey, model)
+}
+
+// SetImageVisionModel sets the vision-capable chat-completions model for image inspection.
+func SetImageVisionModel(chatID *int64, model string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImageVisionModelKey, model)
 }
 
 // SetImageAiProvider sets the image provider in the database.

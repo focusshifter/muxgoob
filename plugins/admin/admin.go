@@ -99,7 +99,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model global <chat_id>\n!ai model image <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model global <chat_id>\n!ai model image <model_name> [chat_id]\n!ai model vision <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
@@ -260,6 +260,29 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			}
 			return
 		}
+		if parts[2] == "vision" {
+			if len(parts) < 4 {
+				bot.Send(message.Chat, "Please specify a vision model name")
+				return
+			}
+			var chatID *int64
+			if len(parts) >= 5 {
+				if parsedID, err := strconv.ParseInt(parts[4], 10, 64); err == nil {
+					chatID = &parsedID
+				}
+			}
+			model := parts[3]
+			if err := registry.SetImageVisionModel(chatID, model); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error setting vision model: %v", err))
+				return
+			}
+			if chatID != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Vision model for chat %d set to: %s", *chatID, model))
+			} else {
+				bot.Send(message.Chat, fmt.Sprintf("Global vision model set to: %s", model))
+			}
+			return
+		}
 		if parts[2] == "image" {
 			if len(parts) < 4 {
 				bot.Send(message.Chat, "Please specify an image model name")
@@ -408,6 +431,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		model := registry.GetAiModel(chatID)
 		imageProvider := registry.GetImageAiProvider(chatID)
 		imageModel := registry.GetImageAiModel(chatID)
+		visionModel := registry.GetImageVisionModel(chatID)
 		imageSize := registry.GetImageAiSize(chatID)
 		if imageSize == "" {
 			imageSize = "auto"
@@ -426,9 +450,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 
 		var response string
 		if chatID != nil {
-			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, imageGenerationStatus, selfpromptModel)
+			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nVision model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, visionModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, imageGenerationStatus, selfpromptModel)
 		} else {
-			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, selfpromptModel)
+			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nVision model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, visionModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, selfpromptModel)
 		}
 		if provider == "openai-codex" {
 			response += "\nCodex auth: " + openaicodex.NewClient().AuthStatus()

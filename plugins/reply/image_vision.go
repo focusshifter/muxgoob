@@ -76,7 +76,7 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 
 	chatID := message.Chat.ID
 	chatIDPtr := &chatID
-	model := strings.TrimSpace(registry.GetImageAiModel(chatIDPtr))
+	model := strings.TrimSpace(registry.GetImageVisionModel(chatIDPtr))
 	if model == "" {
 		model = defaultImageAiModel
 	}

@@ -99,7 +99,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
@@ -290,6 +290,36 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			bot.Send(message.Chat, fmt.Sprintf("Global AI model set to: %s", model))
 		}
 
+	case "image":
+		if len(parts) < 4 || parts[2] != "size" {
+			bot.Send(message.Chat, "Usage: !ai image size <WIDTHxHEIGHT|auto> [chat_id]")
+			return
+		}
+		size, err := normalizeImageSizeSetting(parts[3])
+		if err != nil {
+			bot.Send(message.Chat, "Invalid image size. Use positive WIDTHxHEIGHT, for example 2048x2048, or 'auto'")
+			return
+		}
+		var chatID *int64
+		if len(parts) >= 5 {
+			if parsedID, parseErr := strconv.ParseInt(parts[4], 10, 64); parseErr == nil {
+				chatID = &parsedID
+			}
+		}
+		if err := registry.SetImageAiSize(chatID, size); err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error setting image size: %v", err))
+			return
+		}
+		shownSize := size
+		if shownSize == "" {
+			shownSize = "auto"
+		}
+		if chatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Image size for chat %d set to: %s", *chatID, shownSize))
+		} else {
+			bot.Send(message.Chat, fmt.Sprintf("Global image size set to: %s", shownSize))
+		}
+
 	case "image-prompt":
 		if len(parts) < 3 || parts[2] != "mode" || len(parts) < 4 {
 			bot.Send(message.Chat, "Usage: !ai image-prompt mode [off|direct|fallback] [chat_id]")
@@ -361,6 +391,10 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		model := registry.GetAiModel(chatID)
 		imageProvider := registry.GetImageAiProvider(chatID)
 		imageModel := registry.GetImageAiModel(chatID)
+		imageSize := registry.GetImageAiSize(chatID)
+		if imageSize == "" {
+			imageSize = "auto"
+		}
 		imagePromptProvider := registry.GetImagePromptProvider(chatID)
 		imagePromptModel := registry.GetImagePromptModel(chatID)
 		imagePromptMode := registry.GetImagePromptMode(chatID)
@@ -375,9 +409,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 
 		var response string
 		if chatID != nil {
-			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage prompt composer: %s / %s (%s)\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, imagePromptProvider, imagePromptModel, imagePromptMode, imageGenerationStatus, selfpromptModel)
+			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, imageGenerationStatus, selfpromptModel)
 		} else {
-			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage prompt composer: %s / %s (%s)\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, imagePromptProvider, imagePromptModel, imagePromptMode, selfpromptModel)
+			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, selfpromptModel)
 		}
 		if provider == "openai-codex" {
 			response += "\nCodex auth: " + openaicodex.NewClient().AuthStatus()
@@ -388,6 +422,23 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	default:
 		bot.Send(message.Chat, "Unknown AI command. Available commands: provider, model, get")
 	}
+}
+
+func normalizeImageSizeSetting(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "auto" {
+		return "", nil
+	}
+	parts := strings.Split(value, "x")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("expected WIDTHxHEIGHT")
+	}
+	width, widthErr := strconv.Atoi(parts[0])
+	height, heightErr := strconv.Atoi(parts[1])
+	if widthErr != nil || heightErr != nil || width < 1 || height < 1 || width > 8192 || height > 8192 {
+		return "", fmt.Errorf("invalid dimensions")
+	}
+	return fmt.Sprintf("%dx%d", width, height), nil
 }
 
 // handleSpotifyCommands processes commands related to Spotify plugin settings

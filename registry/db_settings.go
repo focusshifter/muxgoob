@@ -18,6 +18,7 @@ const (
 	AiModelKey                = "ai_model"
 	ImageAiModelKey           = "image_ai_model"
 	ImageAiProviderKey        = "image_ai_provider"
+	ImageAiSizeKey            = "image_ai_size"
 	ImagePromptProviderKey    = "image_prompt_provider"
 	ImagePromptModelKey       = "image_prompt_model"
 	ImagePromptModeKey        = "image_prompt_mode"
@@ -178,6 +179,12 @@ func GetImageAiProvider(chatID *int64) string {
 	return GetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, defaultProvider)
 }
 
+// GetImageAiSize returns an optional preferred pixel size such as 2048x2048.
+// An empty value means that Gooby chooses a compatible default for the model.
+func GetImageAiSize(chatID *int64) string {
+	return GetPluginSetting(chatID, ConfigPluginName, ImageAiSizeKey, Config.ImageAiSize)
+}
+
 // GetImagePromptProvider returns the text provider that composes prompts for direct image requests.
 func GetImagePromptProvider(chatID *int64) string {
 	return GetPluginSetting(chatID, ConfigPluginName, ImagePromptProviderKey, Config.ImagePromptProvider)
@@ -217,6 +224,11 @@ func SetImageAiModel(chatID *int64, model string) error {
 // SetImageAiProvider sets the image provider in the database.
 func SetImageAiProvider(chatID *int64, provider string) error {
 	return SetPluginSetting(chatID, ConfigPluginName, ImageAiProviderKey, provider)
+}
+
+// SetImageAiSize sets an optional preferred pixel size. An empty string enables auto size.
+func SetImageAiSize(chatID *int64, size string) error {
+	return SetPluginSetting(chatID, ConfigPluginName, ImageAiSizeKey, size)
 }
 
 // SetImagePromptProvider sets the text provider that composes direct image prompts.

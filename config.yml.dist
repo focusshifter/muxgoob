@@ -27,6 +27,8 @@ ai_model: deepseek/deepseek-chat
 # Image provider: openai-codex (Codex OAuth) or openrouter (OpenRouter Image API).
 image_ai_provider: openai-codex
 image_ai_model: gpt-image-2
+# Optional pixel size (for example 2048x2048); leave empty for a model-aware default.
+image_ai_size:
 # Optional OpenRouter text model for composing direct image prompts before generation.
 # Modes: off (default), direct (always use the composer), fallback (retry only when no image was sent).
 image_prompt_provider: openrouter

@@ -28,6 +28,7 @@ func TestHandleAiCommandsSetsChatImagePromptComposer(t *testing.T) {
 		"!ai provider image-prompt openrouter -100123",
 		"!ai model image-prompt nousresearch/hermes-4-70b -100123",
 		"!ai image-prompt mode direct -100123",
+		"!ai image size 2560x1440 -100123",
 	} {
 		plugin.handleAiCommands(&telebot.Message{Text: command, Chat: chat})
 	}
@@ -39,5 +40,8 @@ func TestHandleAiCommandsSetsChatImagePromptComposer(t *testing.T) {
 	}
 	if got := registry.GetImagePromptMode(&chatID); got != "direct" {
 		t.Fatalf("mode = %q", got)
+	}
+	if got := registry.GetImageAiSize(&chatID); got != "2560x1440" {
+		t.Fatalf("image size = %q", got)
 	}
 }

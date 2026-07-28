@@ -42,7 +42,6 @@ type generateImageArgs struct {
 	Prompt       string `json:"prompt"`
 	Caption      string `json:"caption,omitempty"`
 	Model        string `json:"model,omitempty"`
-	Size         string `json:"size,omitempty"`
 	Quality      string `json:"quality,omitempty"`
 	OutputFormat string `json:"output_format,omitempty"`
 }
@@ -100,10 +99,6 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 						"type":        "string",
 						"description": "Optional short Telegram caption related to the generated image, in the user's tone/language. Do not put the full prompt here. Leave empty if no natural caption is useful.",
 					},
-					"size": map[string]any{
-						"type":        "string",
-						"description": "Generation size. Default 1024x1024, the minimum supported by the image backend. Do not request smaller or larger sizes unless the user explicitly asks for high resolution.",
-					},
 					"quality": map[string]any{
 						"type":        "string",
 						"description": "Optional quality: low, medium, high, or auto. Default low for fast Telegram chat images; use medium/high only when the user explicitly asks for high quality, extra detail, or high resolution.",
@@ -129,7 +124,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 		return "", fmt.Errorf("prompt is required")
 	}
 	model := imageModelForChat(t.chatID)
-	size := imageSizeForModel(model, cleanImageOption(parsedArgs.Size))
+	size := imageSizeForModel(model, registry.GetImageAiSize(&t.chatID))
 	if size == "" {
 		size = defaultGeneratedImageSize
 	}
@@ -308,19 +303,14 @@ func cleanImageOption(value string) string {
 }
 
 func imageSizeForModel(model, requestedSize string) string {
-	// Seedream 4.5 rejects the historic 1024x1024 default: it requires at
-	// least 3,686,400 output pixels. 2048x2048 is the smallest standard square
-	// size above that limit and is accepted by the OpenRouter endpoint.
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "bytedance-seed/seedream-4.5") {
-		return "2048x2048"
+	requestedSize = cleanImageOption(requestedSize)
+	if requestedSize == "" {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "bytedance-seed/seedream-4.5") {
+			return "2048x2048"
+		}
+		return defaultGeneratedImageSize
 	}
-	return telegramImageSize(requestedSize)
-}
-
-func telegramImageSize(size string) string {
-	// The Codex image backend rejects 512x512 as too small for gpt-image-2.
-	// Generate at the minimum accepted size and send it unchanged.
-	return defaultGeneratedImageSize
+	return requestedSize
 }
 
 func truncateCaption(caption string) string {

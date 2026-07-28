@@ -121,6 +121,9 @@ func TestGenerateImageToolUsesChatConfiguredImageModel(t *testing.T) {
 	if err := registry.SetImageAiModel(&chatID, "black-forest-labs/flux.2-pro"); err != nil {
 		t.Fatalf("set image model: %v", err)
 	}
+	if err := registry.SetImageAiSize(&chatID, "2048x1152"); err != nil {
+		t.Fatalf("set image size: %v", err)
+	}
 	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{Model: "black-forest-labs/flux.2-pro", Image: []byte("png"), Extension: "png"}}
 	tool := &GenerateImageTool{
 		chatID:    chatID,
@@ -132,17 +135,20 @@ func TestGenerateImageToolUsesChatConfiguredImageModel(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), `{"prompt":"a racing Ferrari","model":"gpt-image-2"}`); err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	if len(stub.requests) != 1 || stub.requests[0].Model != "black-forest-labs/flux.2-pro" {
-		t.Fatalf("expected configured image model, got %#v", stub.requests)
+	if len(stub.requests) != 1 || stub.requests[0].Model != "black-forest-labs/flux.2-pro" || stub.requests[0].Size != "2048x1152" {
+		t.Fatalf("expected configured image model and size, got %#v", stub.requests)
 	}
 }
 
-func TestImageSizeForModelUsesSeedreamMinimum(t *testing.T) {
-	if got := imageSizeForModel("bytedance-seed/seedream-4.5", "1024x1024"); got != "2048x2048" {
-		t.Fatalf("Seedream size = %q, want 2048x2048", got)
+func TestImageSizeForModelUsesAutoDefaultAndConfiguredSize(t *testing.T) {
+	if got := imageSizeForModel("bytedance-seed/seedream-4.5", ""); got != "2048x2048" {
+		t.Fatalf("Seedream auto size = %q, want 2048x2048", got)
 	}
-	if got := imageSizeForModel("gpt-image-2", "2048x2048"); got != "1024x1024" {
-		t.Fatalf("GPT image size = %q, want 1024x1024", got)
+	if got := imageSizeForModel("gpt-image-2", ""); got != "1024x1024" {
+		t.Fatalf("GPT auto size = %q, want 1024x1024", got)
+	}
+	if got := imageSizeForModel("bytedance-seed/seedream-4.5", "2560x1440"); got != "2560x1440" {
+		t.Fatalf("configured Seedream size = %q, want 2560x1440", got)
 	}
 }
 

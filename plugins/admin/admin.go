@@ -99,7 +99,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model image <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model global <chat_id>\n!ai model image <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
@@ -193,6 +193,23 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	case "model":
 		if len(parts) < 3 {
 			bot.Send(message.Chat, "Please specify a model name")
+			return
+		}
+		if parts[2] == "global" || parts[2] == "reset" {
+			if len(parts) < 4 {
+				bot.Send(message.Chat, "Usage: !ai model global <chat_id>")
+				return
+			}
+			chatID, err := strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				bot.Send(message.Chat, "Please specify a valid chat ID")
+				return
+			}
+			if err := registry.ClearAiModelOverride(chatID); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error clearing AI model override: %v", err))
+				return
+			}
+			bot.Send(message.Chat, fmt.Sprintf("AI model override for chat %d cleared; it now uses the global model: %s", chatID, registry.GetAiModel(nil)))
 			return
 		}
 		if parts[2] == "image-prompt" {

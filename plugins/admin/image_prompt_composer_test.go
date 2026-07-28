@@ -45,3 +45,28 @@ func TestHandleAiCommandsSetsChatImagePromptComposer(t *testing.T) {
 		t.Fatalf("image size = %q", got)
 	}
 }
+
+func TestAiModelGlobalClearsChatOverride(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	previousDB := database.DB
+	database.DB = mockDB
+	defer func() { database.DB = previousDB }()
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatal(err)
+	}
+	registry.SetTestBot(&testutils.MockBotWrapper{})
+	plugin := &AdminPlugin{}
+	chatID := int64(-100456)
+	chat := &telebot.Chat{ID: chatID}
+	if err := registry.SetAiModel(nil, "global-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetAiModel(&chatID, "local-model"); err != nil {
+		t.Fatal(err)
+	}
+	plugin.handleAiCommands(&telebot.Message{Text: "!ai model global -100456", Chat: chat})
+	if got := registry.GetAiModel(&chatID); got != "global-model" {
+		t.Fatalf("model = %q, want global-model", got)
+	}
+}

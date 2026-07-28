@@ -137,6 +137,15 @@ func TestGenerateImageToolUsesChatConfiguredImageModel(t *testing.T) {
 	}
 }
 
+func TestImageSizeForModelUsesSeedreamMinimum(t *testing.T) {
+	if got := imageSizeForModel("bytedance-seed/seedream-4.5", "1024x1024"); got != "2048x2048" {
+		t.Fatalf("Seedream size = %q, want 2048x2048", got)
+	}
+	if got := imageSizeForModel("gpt-image-2", "2048x2048"); got != "1024x1024" {
+		t.Fatalf("GPT image size = %q, want 1024x1024", got)
+	}
+}
+
 func TestGenerateImageToolDefaultsToLowQuality(t *testing.T) {
 	stub := &imageGeneratorStub{resp: openaicodex.ImageGenerationResponse{
 		Model:     "gpt-image-2",

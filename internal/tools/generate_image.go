@@ -129,7 +129,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 		return "", fmt.Errorf("prompt is required")
 	}
 	model := imageModelForChat(t.chatID)
-	size := telegramImageSize(cleanImageOption(parsedArgs.Size))
+	size := imageSizeForModel(model, cleanImageOption(parsedArgs.Size))
 	if size == "" {
 		size = defaultGeneratedImageSize
 	}
@@ -305,6 +305,16 @@ func cleanImageOption(value string) string {
 		}
 	}, value)
 	return strings.TrimSpace(cleaned)
+}
+
+func imageSizeForModel(model, requestedSize string) string {
+	// Seedream 4.5 rejects the historic 1024x1024 default: it requires at
+	// least 3,686,400 output pixels. 2048x2048 is the smallest standard square
+	// size above that limit and is accepted by the OpenRouter endpoint.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "bytedance-seed/seedream-4.5") {
+		return "2048x2048"
+	}
+	return telegramImageSize(requestedSize)
 }
 
 func telegramImageSize(size string) string {

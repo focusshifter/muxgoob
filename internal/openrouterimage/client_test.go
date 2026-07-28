@@ -51,6 +51,32 @@ func TestClientGenerateImage(t *testing.T) {
 	}
 }
 
+func TestClientGenerateImageConvertsSourcefulSizeToAspectRatio(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, expected := range []string{`"aspect_ratio":"16:9"`, `"resolution":"2K"`} {
+			if !strings.Contains(string(body), expected) {
+				t.Fatalf("request missing %s: %s", expected, body)
+			}
+		}
+		if strings.Contains(string(body), `"size":`) {
+			t.Fatalf("Sourceful request must not contain size: %s", body)
+		}
+		_, _ = writer.Write([]byte(`{"data":[{"b64_json":"cG5n","media_type":"image/png"}]}`))
+	}))
+	defer server.Close()
+
+	_, err := NewClient("test-key", WithBaseURL(server.URL)).GenerateImage(context.Background(), openaicodex.ImageGenerationRequest{
+		Prompt: "a racing Ferrari", Model: "sourceful/riverflow-v2.5-pro", Size: "2560x1440",
+	})
+	if err != nil {
+		t.Fatalf("GenerateImage returned error: %v", err)
+	}
+}
+
 func TestClientGenerateImageRejectsEmptyData(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

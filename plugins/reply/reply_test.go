@@ -479,30 +479,21 @@ func TestReplyPlugin_Process(t *testing.T) {
 	}
 }
 
-func TestShouldSkipPureReactionToBotImage(t *testing.T) {
-	parent := &telebot.Message{
-		ID:     10,
-		Chat:   &telebot.Chat{ID: 123},
-		Sender: &telebot.User{Username: "test_bot"},
-		Photo:  &telebot.Photo{},
+func TestBotImageReplyInstruction(t *testing.T) {
+	originalBot := registry.Bot
+	defer func() { registry.Bot = originalBot }()
+	registry.Bot = &registry.BotWrapper{Bot: &telebot.Bot{Me: &telebot.User{ID: 42, Username: "test_bot"}}}
+
+	parent := &telebot.Message{ID: 10, Chat: &telebot.Chat{ID: 123}, Sender: &telebot.User{ID: 42, Username: "test_bot"}, Photo: &telebot.Photo{}}
+	message := &telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: "Нихуясе.", ReplyTo: parent}
+	instruction := botImageReplyInstruction(message)
+	if !strings.Contains(instruction, actionOnlyReplyToken) || !strings.Contains(instruction, "conversational intent") {
+		t.Fatalf("unexpected bot image instruction: %q", instruction)
 	}
-	for _, tc := range []struct {
-		text string
-		want bool
-	}{
-		{text: "Нихуясе.", want: true},
-		{text: "вау, бля", want: true},
-		{text: "охуенно получилось", want: true},
-		{text: "губи, что это?", want: false},
-		{text: "почему Сербия?", want: false},
-		{text: "сделай ещё одну", want: false},
-	} {
-		t.Run(tc.text, func(t *testing.T) {
-			message := &telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: tc.text, ReplyTo: parent}
-			if got := shouldSkipPureReactionToBotImage(message); got != tc.want {
-				t.Fatalf("shouldSkipPureReactionToBotImage(%q) = %v, want %v", tc.text, got, tc.want)
-			}
-		})
+
+	message.ReplyTo = &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: parent.Sender}
+	if got := botImageReplyInstruction(message); got != "" {
+		t.Fatalf("non-image bot reply instruction = %q, want empty", got)
 	}
 }
 

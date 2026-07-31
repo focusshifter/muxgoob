@@ -225,10 +225,6 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 			log.Printf("[reply] Bot.Me is not nil, username: %s", bot.Me.Username)
 			if message.ReplyTo.Sender.Username == bot.Me.Username {
-				if shouldSkipPureReactionToBotImage(message) {
-					log.Printf("[reply] Skipping pure reaction to bot image chat=%d msg=%d text=%q", message.Chat.ID, message.ID, messagePromptText(message))
-					return
-				}
 				// Use the injected chat client
 				log.Printf("[reply] Username matches, sending typing notification")
 				bot.Notify(message.Chat, telebot.Typing)
@@ -318,38 +314,23 @@ func isActionOnlyReply(replyText string) bool {
 	return replyText == actionOnlyReplyToken
 }
 
-var pureImageReactionWords = map[string]struct{}{
-	"ахах": {}, "ахаха": {}, "ахуеть": {}, "ахуенно": {}, "вау": {}, "ебать": {}, "жесть": {},
-	"имба": {}, "кайф": {}, "лол": {}, "нихуясе": {}, "огонь": {}, "охуеть": {}, "охуенно": {},
-	"пиздец": {}, "ржака": {}, "топ": {}, "wow": {},
+func isReplyToBotImage(message *telebot.Message) bool {
+	if message == nil || message.ReplyTo == nil || message.ReplyTo.Sender == nil || !replyReferencesPhoto(sqliteDb, message) {
+		return false
+	}
+	if registry.Bot == nil || registry.Bot.Bot == nil || registry.Bot.Bot.Me == nil {
+		return false
+	}
+	bot := registry.Bot.Bot.Me
+	parent := message.ReplyTo.Sender
+	return (bot.ID != 0 && parent.ID == bot.ID) || (bot.Username != "" && parent.Username == bot.Username)
 }
 
-var imageReactionQuestionWords = map[string]struct{}{
-	"где": {}, "зачем": {}, "как": {}, "какой": {}, "когда": {}, "кто": {}, "можешь": {}, "нарисуй": {},
-	"почему": {}, "сделай": {}, "что": {},
-}
-
-// shouldSkipPureReactionToBotImage avoids treating short emotional acknowledgements
-// of Gooby's own image as a request for a conversational reply.
-func shouldSkipPureReactionToBotImage(message *telebot.Message) bool {
-	if message == nil || message.ReplyTo == nil || !replyReferencesPhoto(sqliteDb, message) {
-		return false
+func botImageReplyInstruction(message *telebot.Message) string {
+	if !isReplyToBotImage(message) {
+		return ""
 	}
-	text := strings.TrimSpace(strings.ToLower(messagePromptText(message)))
-	if text == "" || strings.Contains(text, "?") || commandExp.MatchString(text) || questionExp.MatchString(text) {
-		return false
-	}
-	words := strings.FieldsFunc(text, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
-	if len(words) == 0 || len(words) > 5 {
-		return false
-	}
-	for _, word := range words {
-		if _, isQuestion := imageReactionQuestionWords[word]; isQuestion {
-			return false
-		}
-	}
-	_, isReaction := pureImageReactionWords[words[0]]
-	return isReaction
+	return "The current message is a reply to an image you generated. Decide from conversational intent whether an answer is warranted. If it is merely a reaction, acknowledgement, laughter, praise, or other non-requesting comment, return exactly " + actionOnlyReplyToken + " with no other text. If it contains a question, request, or needs engagement, answer normally."
 }
 
 func currentDateTimeContext(now time.Time, location *time.Location) string {
@@ -1604,6 +1585,9 @@ var askChatGpt = func(message *telebot.Message) string {
 		"Treat the prefill as recent context only, not authoritative chat history.",
 		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
 	)
+	if instruction := botImageReplyInstruction(message); instruction != "" {
+		toolSystemParts = append(toolSystemParts, instruction)
+	}
 	toolSystemMessage := strings.Join(toolSystemParts, " ")
 
 	userMessage := fmt.Sprintf(registry.Config.ChatGptUserPrompt, question)

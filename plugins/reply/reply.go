@@ -225,6 +225,10 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 			log.Printf("[reply] Bot.Me is not nil, username: %s", bot.Me.Username)
 			if message.ReplyTo.Sender.Username == bot.Me.Username {
+				if shouldSkipPureReactionToBotImage(message) {
+					log.Printf("[reply] Skipping pure reaction to bot image chat=%d msg=%d text=%q", message.Chat.ID, message.ID, messagePromptText(message))
+					return
+				}
 				// Use the injected chat client
 				log.Printf("[reply] Username matches, sending typing notification")
 				bot.Notify(message.Chat, telebot.Typing)
@@ -312,6 +316,40 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 func isActionOnlyReply(replyText string) bool {
 	return replyText == actionOnlyReplyToken
+}
+
+var pureImageReactionWords = map[string]struct{}{
+	"ахах": {}, "ахаха": {}, "ахуеть": {}, "ахуенно": {}, "вау": {}, "ебать": {}, "жесть": {},
+	"имба": {}, "кайф": {}, "лол": {}, "нихуясе": {}, "огонь": {}, "охуеть": {}, "охуенно": {},
+	"пиздец": {}, "ржака": {}, "топ": {}, "wow": {},
+}
+
+var imageReactionQuestionWords = map[string]struct{}{
+	"где": {}, "зачем": {}, "как": {}, "какой": {}, "когда": {}, "кто": {}, "можешь": {}, "нарисуй": {},
+	"почему": {}, "сделай": {}, "что": {},
+}
+
+// shouldSkipPureReactionToBotImage avoids treating short emotional acknowledgements
+// of Gooby's own image as a request for a conversational reply.
+func shouldSkipPureReactionToBotImage(message *telebot.Message) bool {
+	if message == nil || message.ReplyTo == nil || !replyReferencesPhoto(sqliteDb, message) {
+		return false
+	}
+	text := strings.TrimSpace(strings.ToLower(messagePromptText(message)))
+	if text == "" || strings.Contains(text, "?") || commandExp.MatchString(text) || questionExp.MatchString(text) {
+		return false
+	}
+	words := strings.FieldsFunc(text, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	if len(words) == 0 || len(words) > 5 {
+		return false
+	}
+	for _, word := range words {
+		if _, isQuestion := imageReactionQuestionWords[word]; isQuestion {
+			return false
+		}
+	}
+	_, isReaction := pureImageReactionWords[words[0]]
+	return isReaction
 }
 
 func currentDateTimeContext(now time.Time, location *time.Location) string {

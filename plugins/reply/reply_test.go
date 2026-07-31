@@ -479,6 +479,33 @@ func TestReplyPlugin_Process(t *testing.T) {
 	}
 }
 
+func TestShouldSkipPureReactionToBotImage(t *testing.T) {
+	parent := &telebot.Message{
+		ID:     10,
+		Chat:   &telebot.Chat{ID: 123},
+		Sender: &telebot.User{Username: "test_bot"},
+		Photo:  &telebot.Photo{},
+	}
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{text: "Нихуясе.", want: true},
+		{text: "вау, бля", want: true},
+		{text: "охуенно получилось", want: true},
+		{text: "губи, что это?", want: false},
+		{text: "почему Сербия?", want: false},
+		{text: "сделай ещё одну", want: false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			message := &telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: tc.text, ReplyTo: parent}
+			if got := shouldSkipPureReactionToBotImage(message); got != tc.want {
+				t.Fatalf("shouldSkipPureReactionToBotImage(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRetrieveHistoryForChat_IncludesReplyParents(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

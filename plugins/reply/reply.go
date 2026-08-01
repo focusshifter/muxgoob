@@ -398,7 +398,7 @@ func shouldIsolateImageGenerationPrompt(question string) bool {
 	return directImageRequestPattern.MatchString(strings.TrimSpace(question))
 }
 
-var imageSceneContextPattern = regexp.MustCompile(`(?i)(на\s+основании\s+(?:истории|чата)|опираясь\s+на\s+(?:истори|событи|чат)|по\s+(?:истории|событиям)\s+чата|с\s+участниками\s+чата|based\s+on\s+(?:the\s+)?(?:chat|conversation|history)|using\s+(?:the\s+)?chat\s+history|with\s+(?:the\s+)?chat\s+participants)`)
+var imageSceneContextPattern = regexp.MustCompile(`(?i)(на\s+основании\s+(?:истории|чата)|опираясь\s+на\s+(?:истори|событи|чат)|по\s+(?:истории|событиям)\s+чата|с\s+участниками\s+чата|(?:ситуаци\w*|сцен\w*|событи\w*).{0,48}(?:лог\w*|переписк\w*|чат\w*).{0,24}(?:выше|ниже|до\s+этого)|(?:лог\w*|переписк\w*|сообщени\w*).{0,24}(?:выше|ниже|до\s+этого)|based\s+on\s+(?:the\s+)?(?:chat|conversation|history)|using\s+(?:the\s+)?chat\s+history|with\s+(?:the\s+)?chat\s+participants)`)
 
 func shouldUseImageSceneContext(question string) bool {
 	return imageSceneContextPattern.MatchString(strings.TrimSpace(question))

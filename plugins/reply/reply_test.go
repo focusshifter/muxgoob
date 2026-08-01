@@ -1660,10 +1660,16 @@ func TestShouldIsolateImageGenerationPrompt(t *testing.T) {
 }
 
 func TestImageSceneContextOptInAndFiltering(t *testing.T) {
-	question := "губи, нарисуй мем с участниками чата, опираясь на события в чате за прошедший день"
-	if !shouldUseImageSceneContext(question) {
-		t.Fatal("expected explicit chat-history image request to opt in")
+	for _, question := range []string{
+		"губи, нарисуй мем с участниками чата, опираясь на события в чате за прошедший день",
+		"губи, нарисуй ситуацию, описанную логом выше, все чибики и ебланы",
+		"нарисуй то, что произошло в сообщениях выше",
+	} {
+		if !shouldUseImageSceneContext(question) {
+			t.Fatalf("expected explicit chat-history image request to opt in: %q", question)
+		}
 	}
+	question := "губи, нарисуй мем с участниками чата, опираясь на события в чате за прошедший день"
 	if shouldUseImageSceneContext("губи, нарисуй пингвина в шапке") {
 		t.Fatal("ordinary image request must not opt in to chat context")
 	}

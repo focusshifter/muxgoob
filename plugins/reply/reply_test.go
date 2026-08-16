@@ -94,6 +94,8 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 		return actionOnlyReplyToken
 	} else if text == "губи, смотри, мем" {
 		return "This is a mock ChatGPT response"
+	} else if text == "ребят, @test_bot, нарисуй мем из лога выше" {
+		return "This is a mock ChatGPT response"
 	}
 
 	return ""
@@ -226,6 +228,21 @@ func TestReplyPlugin_Process(t *testing.T) {
 			},
 			expectedCalls: false,
 			expectedReply: "",
+			rngValue:      0,
+		},
+		{
+			name: "Direct @handle mention",
+			message: &telebot.Message{
+				Text: "ребят, @test_bot, нарисуй мем из лога выше",
+				Sender: &telebot.User{
+					Username: "test_user",
+				},
+				Chat: &telebot.Chat{
+					ID: 123,
+				},
+			},
+			expectedCalls: true,
+			expectedReply: "This is a mock ChatGPT response",
 			rngValue:      0,
 		},
 		{
@@ -438,6 +455,7 @@ func TestReplyPlugin_Process(t *testing.T) {
 
 			// Check typing notification - should be sent for ChatGPT responses only
 			shouldType := tc.message.ReplyTo != nil && tc.message.ReplyTo.Sender != nil && tc.message.ReplyTo.Sender.Username == "test_bot" || // Reply to bot
+				tc.name == "Direct @handle mention" || // Telegram handle mention
 				tc.name == "Command with 'gooby,'" || // Direct command
 				tc.name == "Command with 'gooby' and space" || // Direct command with space
 				tc.name == "Command with 'gooby,' and line break" || // Command with line break
@@ -494,6 +512,28 @@ func TestBotImageReplyInstruction(t *testing.T) {
 	message.ReplyTo = &telebot.Message{ID: 11, Chat: &telebot.Chat{ID: 123}, Sender: parent.Sender}
 	if got := botImageReplyInstruction(message); got != "" {
 		t.Fatalf("non-image bot reply instruction = %q, want empty", got)
+	}
+}
+
+func TestMentionsBotHandle(t *testing.T) {
+	bot := &telebot.User{Username: "Gooby_Bot"}
+	for _, text := range []string{
+		"@gooby_bot, привет",
+		"ребят, @GOOBY_BOT что думаете?",
+		"(@gooby_bot)",
+	} {
+		if !mentionsBotHandle(text, bot) {
+			t.Fatalf("expected a complete handle mention in %q", text)
+		}
+	}
+	for _, text := range []string{
+		"@gooby_bot_fan привет",
+		"почта@gooby_bot.example",
+		"к@gooby_bot",
+	} {
+		if mentionsBotHandle(text, bot) {
+			t.Fatalf("did not expect a complete handle mention in %q", text)
+		}
 	}
 }
 

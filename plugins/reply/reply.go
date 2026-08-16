@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/sashabaranov/go-openai"
@@ -253,6 +254,13 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			"ТТХ: "+registry.Config.ReplyTechLink,
 			&telebot.SendOptions{DisableWebPagePreview: true, DisableNotification: true})
 
+	case mentionsBotHandle(messageText, bot.Me):
+		bot.Notify(message.Chat, telebot.Typing)
+		replyText := p.chatClient.Ask(message)
+		if replyText != "" && !isActionOnlyReply(replyText) {
+			sendReplyWithLog(bot, message.Chat, replyText, replyOptionsForMessage(message))
+		}
+
 	case questionExp.MatchString(messageText):
 		bot.Notify(message.Chat, telebot.Typing)
 		replyText := p.chatClient.Ask(message)
@@ -350,6 +358,49 @@ func messagePromptText(message *telebot.Message) string {
 		return text
 	}
 	return strings.TrimSpace(message.Caption)
+}
+
+// mentionsBotHandle matches a complete @username mention, rather than a substring
+// (for example, @gooby_bot matches but @gooby_bot_fan does not).
+func mentionsBotHandle(text string, bot *telebot.User) bool {
+	if bot == nil {
+		return false
+	}
+	handle := strings.TrimPrefix(strings.TrimSpace(bot.Username), "@")
+	if handle == "" {
+		return false
+	}
+
+	needle := "@" + strings.ToLower(handle)
+	lowerText := strings.ToLower(text)
+	for start := strings.Index(lowerText, needle); start >= 0; {
+		end := start + len(needle)
+		if isHandleBoundary(lowerText, start, end) {
+			return true
+		}
+		next := strings.Index(lowerText[start+1:], needle)
+		if next < 0 {
+			return false
+		}
+		start += next + 1
+	}
+	return false
+}
+
+func isHandleBoundary(text string, start, end int) bool {
+	if start > 0 {
+		previous, _ := utf8.DecodeLastRuneInString(text[:start])
+		if unicode.IsLetter(previous) || unicode.IsDigit(previous) || previous == '_' {
+			return false
+		}
+	}
+	if end < len(text) {
+		next, _ := utf8.DecodeRuneInString(text[end:])
+		if unicode.IsLetter(next) || unicode.IsDigit(next) || next == '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // imageRequestReactions contains standard Telegram emoji reactions. It is filtered

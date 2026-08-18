@@ -136,6 +136,15 @@ func GetPluginSettingOverrides(chatID int64, pluginName string, key string) (Plu
 	return result, nil
 }
 
+// ClearGlobalPluginSetting removes a global database value so the config fallback applies.
+func ClearGlobalPluginSetting(pluginName string, key string) error {
+	if database.DB == nil {
+		return nil
+	}
+	_, err := database.DB.Exec(`DELETE FROM plugin_settings WHERE chat_id IS NULL AND plugin_name = ? AND key = ?`, pluginName, key)
+	return err
+}
+
 // ClearPluginSettingOverride removes a chat-specific setting so it inherits the
 // global database value or its config fallback.
 func ClearPluginSettingOverride(chatID int64, pluginName string, key string) error {

@@ -38,6 +38,39 @@ func TestCompressionModelSetting(t *testing.T) {
 	}
 }
 
+func TestSetModelMigratesLegacyCompressionModel(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatal(err)
+	}
+	chatID := int64(42)
+	if err := registry.SetPluginSetting(nil, PluginName, legacyCompressionKey, "legacy-global"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetPluginSetting(&chatID, PluginName, legacyCompressionKey, "legacy-chat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetModel(nil, "new-global"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetModel(&chatID, "new-chat"); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range []struct {
+		name   string
+		chatID *int64
+	}{
+		{"global", nil},
+		{"chat", &chatID},
+	} {
+		if got := registry.GetPluginSetting(scope.chatID, PluginName, legacyCompressionKey, ""); got != "" {
+			t.Fatalf("%s legacy compression model was not removed: %q", scope.name, got)
+		}
+	}
+}
+
 func TestShouldConsolidateFacts(t *testing.T) {
 	if shouldConsolidateFacts("Identity:\n- short\n\nInterests:\n- short") {
 		t.Fatal("did not expect short profile to consolidate")

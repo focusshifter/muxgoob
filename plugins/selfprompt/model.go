@@ -31,5 +31,11 @@ func GetModel(chatID *int64) string {
 }
 
 func SetModel(chatID *int64, model string) error {
-	return registry.SetPluginSetting(chatID, PluginName, ModelKey, strings.TrimSpace(model))
+	if err := registry.SetPluginSetting(chatID, PluginName, ModelKey, strings.TrimSpace(model)); err != nil {
+		return err
+	}
+	if chatID == nil {
+		return registry.ClearGlobalPluginSetting(PluginName, legacyCompressionKey)
+	}
+	return registry.ClearPluginSettingOverride(*chatID, PluginName, legacyCompressionKey)
 }

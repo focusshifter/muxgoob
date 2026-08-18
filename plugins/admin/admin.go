@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
+	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	selfpromptplugin "github.com/focusshifter/muxgoob/plugins/selfprompt"
 	"github.com/focusshifter/muxgoob/plugins/spotify"
 	"github.com/focusshifter/muxgoob/registry"
@@ -99,11 +101,28 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model global <chat_id>\n!ai model image <model_name> [chat_id]\n!ai model vision <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model global <chat_id>\n!ai model image <model_name> [chat_id]\n!ai model vision <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
 	switch parts[1] {
+	case "chat":
+		if len(parts) != 3 {
+			bot.Send(message.Chat, "Usage: !ai chat <chat_id>")
+			return
+		}
+		chatID, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			bot.Send(message.Chat, "Invalid chat_id")
+			return
+		}
+		response, err := formatAiChatSettings(chatID)
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error reading AI settings for chat %d: %v", chatID, err))
+			return
+		}
+		bot.Send(message.Chat, response)
+
 	case "provider":
 		if len(parts) >= 3 && parts[2] == "image-prompt" {
 			if len(parts) < 4 {
@@ -463,6 +482,181 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	default:
 		bot.Send(message.Chat, "Unknown AI command. Available commands: provider, model, get")
 	}
+}
+
+func formatAiChatSettings(chatID int64) (string, error) {
+	type setting struct {
+		label, plugin, key, configured, effective string
+	}
+	imageSize := registry.GetImageAiSize(&chatID)
+	if imageSize == "" {
+		imageSize = "auto"
+	}
+	selfpromptModel := selfpromptplugin.GetModel(&chatID)
+	if selfpromptModel == "" {
+		selfpromptModel = "(default AI model)"
+	}
+	settings := []setting{
+		{"AI provider", registry.ConfigPluginName, registry.AiProviderKey, registry.Config.AiProvider, registry.GetAiProvider(&chatID)},
+		{"AI model", registry.ConfigPluginName, registry.AiModelKey, registry.Config.AiModel, registry.GetAiModel(&chatID)},
+		{"Image generation", registry.ConfigPluginName, registry.ImageGenerationEnabledKey, "false (per-chat opt-in)", strconv.FormatBool(registry.GetImageGenerationEnabled(chatID))},
+		{"Image provider", registry.ConfigPluginName, registry.ImageAiProviderKey, configuredImageProvider(), registry.GetImageAiProvider(&chatID)},
+		{"Image model", registry.ConfigPluginName, registry.ImageAiModelKey, registry.Config.ImageAiModel, registry.GetImageAiModel(&chatID)},
+		{"Vision model", registry.ConfigPluginName, registry.ImageVisionModelKey, configuredVisionModel(), registry.GetImageVisionModel(&chatID)},
+		{"Image size", registry.ConfigPluginName, registry.ImageAiSizeKey, configuredImageSize(), imageSize},
+		{"Image prompt provider", registry.ConfigPluginName, registry.ImagePromptProviderKey, registry.Config.ImagePromptProvider, registry.GetImagePromptProvider(&chatID)},
+		{"Image prompt model", registry.ConfigPluginName, registry.ImagePromptModelKey, registry.Config.ImagePromptModel, registry.GetImagePromptModel(&chatID)},
+		{"Image prompt mode", registry.ConfigPluginName, registry.ImagePromptModeKey, registry.Config.ImagePromptMode, registry.GetImagePromptMode(&chatID)},
+		{"Selfprompt model", selfpromptplugin.PluginName, selfpromptplugin.ModelKey, "(default AI model)", selfpromptModel},
+	}
+
+	lines := []string{fmt.Sprintf("AI diagnostics for chat %d", chatID), "Effective value; persisted chat/global override; config fallback:"}
+	for _, item := range settings {
+		overrides, err := registry.GetPluginSettingOverrides(chatID, item.plugin, item.key)
+		if err != nil {
+			return "", err
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s\n  chat: %s | global: %s | config: %s", item.label, showSettingValueOrDefault(item.effective), showSettingValue(overrides.Chat), showSettingValue(overrides.Global), showSettingValueOrDefault(item.configured)))
+	}
+	promptState, err := replyPromptDiagnostic(chatID)
+	if err != nil {
+		return "", err
+	}
+	lines = append(lines, promptState)
+
+	rows, err := database.DB.Query(`SELECT plugin_name, key, value, CASE WHEN chat_id IS NULL THEN 'global' ELSE 'chat' END FROM plugin_settings WHERE chat_id IS NULL OR chat_id = ? ORDER BY plugin_name, key, chat_id`, chatID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var raw []string
+	for rows.Next() {
+		var plugin, key, value, scope string
+		if err := rows.Scan(&plugin, &key, &value, &scope); err != nil {
+			return "", err
+		}
+		raw = append(raw, fmt.Sprintf("%s %s.%s=%s", scope, plugin, key, value))
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if len(raw) == 0 {
+		lines = append(lines, "Persisted plugin rows: (none)")
+	} else {
+		lines = append(lines, "Persisted plugin rows (all):\n"+strings.Join(raw, "\n"))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func showSettingValue(value *string) string {
+	if value == nil {
+		return "(unset)"
+	}
+	return showSettingValueOrDefault(*value)
+}
+
+func showSettingValueOrDefault(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "(empty)"
+	}
+	return value
+}
+
+func configuredImageProvider() string {
+	if strings.TrimSpace(registry.Config.ImageAiProvider) == "" {
+		return "openai-codex"
+	}
+	return registry.Config.ImageAiProvider
+}
+
+func configuredVisionModel() string {
+	if strings.TrimSpace(registry.Config.ImageVisionModel) == "" {
+		return "google/gemini-3.1-flash-lite-preview"
+	}
+	return registry.Config.ImageVisionModel
+}
+
+func configuredImageSize() string {
+	if strings.TrimSpace(registry.Config.ImageAiSize) == "" {
+		return "auto"
+	}
+	return registry.Config.ImageAiSize
+}
+
+type promptSnapshot struct {
+	value   string
+	version int
+	present bool
+}
+
+func replyPromptDiagnostic(chatID int64) (string, error) {
+	var tableName string
+	err := database.DB.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompts'`).Scan(&tableName)
+	if err == sql.ErrNoRows {
+		return "Reply system prompt: prompts table unavailable", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	global, err := latestPromptSnapshot(promptmgr.GLOBAL_CHAT_ID)
+	if err != nil {
+		return "", err
+	}
+	chat, err := latestPromptSnapshot(chatID)
+	if err != nil {
+		return "", err
+	}
+	configGlobal := registry.Config.ChatGptSystemPrompt
+	configChat := ""
+	for _, item := range registry.Config.ChatGptConfigPerChat {
+		if item.ChatID == chatID {
+			configChat = item.SystemPrompt
+			break
+		}
+	}
+	return fmt.Sprintf("Reply system prompt (effective %d chars):\n  DB chat: %s | DB global: %s\n  config chat: %s | config global: %s\nReply history: %t (depth %d)",
+		promptEffectiveLength(global, chat, configGlobal, configChat), promptSnapshotLabel(chat), promptSnapshotLabel(global), promptLengthLabel(configChat), promptLengthLabel(configGlobal), registry.Config.ChatGptUseHistory, registry.Config.ChatGptHistoryDepth), nil
+}
+
+func latestPromptSnapshot(chatID int64) (promptSnapshot, error) {
+	var result promptSnapshot
+	err := database.DB.QueryRow(`SELECT prompt, version FROM prompts WHERE chat_id = ? ORDER BY version DESC LIMIT 1`, chatID).Scan(&result.value, &result.version)
+	if err == sql.ErrNoRows {
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	result.present = true
+	return result, nil
+}
+
+func promptEffectiveLength(global, chat promptSnapshot, configGlobal, configChat string) int {
+	globalPrompt, chatPrompt := strings.TrimSpace(global.value), strings.TrimSpace(chat.value)
+	if !global.present && !chat.present {
+		globalPrompt, chatPrompt = strings.TrimSpace(configGlobal), strings.TrimSpace(configChat)
+	}
+	if globalPrompt == "" {
+		return len(chatPrompt)
+	}
+	if chatPrompt == "" {
+		return len(globalPrompt)
+	}
+	return len(globalPrompt) + 2 + len(chatPrompt)
+}
+
+func promptSnapshotLabel(prompt promptSnapshot) string {
+	if !prompt.present {
+		return "(unset)"
+	}
+	return fmt.Sprintf("v%d, %d chars", prompt.version, len(strings.TrimSpace(prompt.value)))
+}
+
+func promptLengthLabel(prompt string) string {
+	if strings.TrimSpace(prompt) == "" {
+		return "(unset)"
+	}
+	return fmt.Sprintf("%d chars", len(strings.TrimSpace(prompt)))
 }
 
 func normalizeImageSizeSetting(value string) (string, error) {

@@ -149,6 +149,57 @@ func TestAdminPlugin_Process(t *testing.T) {
 	}
 }
 
+func TestAiChatDiagnosticShowsEffectiveAndRawScopes(t *testing.T) {
+	originalConfig := registry.Config
+	defer func() { registry.Config = originalConfig }()
+	registry.Config.AiProvider = "config-provider"
+	registry.Config.AiModel = "config-model"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mockDB.Exec(`CREATE TABLE prompts (chat_id INTEGER, version INTEGER, prompt TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mockDB.Exec(`INSERT INTO prompts (chat_id, version, prompt) VALUES (0, 2, 'global prompt'), (-100123, 3, 'chat prompt')`); err != nil {
+		t.Fatal(err)
+	}
+	chatID := int64(-100123)
+	if err := registry.SetAiModel(nil, "global-gpt-5-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetAiModel(&chatID, "chat-gpt-5.4-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.SetPluginSetting(nil, "other-plugin", "experimental_model", "global-other"); err != nil {
+		t.Fatal(err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	plugin := &AdminPlugin{}
+	plugin.handleAiCommands(&telebot.Message{Text: "!ai chat -100123", Chat: &telebot.Chat{ID: 1}})
+	response, ok := mockBot.SendWhat.(string)
+	if !mockBot.SendCalled || !ok {
+		t.Fatalf("expected diagnostic response, got %#v", mockBot.SendWhat)
+	}
+	for _, want := range []string{
+		"AI diagnostics for chat -100123",
+		"AI model: chat-gpt-5.4-mini",
+		"chat: chat-gpt-5.4-mini | global: global-gpt-5-mini | config: config-model",
+		"global other-plugin.experimental_model=global-other",
+		"Reply system prompt (effective 26 chars):",
+		"DB chat: v3, 11 chars | DB global: v2, 13 chars",
+	} {
+		if !strings.Contains(response, want) {
+			t.Errorf("diagnostic missing %q:\n%s", want, response)
+		}
+	}
+}
+
 func TestAdminPlugin_SpotifyModelCommand(t *testing.T) {
 	originalConfig := registry.Config
 	defer func() {

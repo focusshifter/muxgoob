@@ -106,6 +106,36 @@ func GetPluginSetting(chatID *int64, pluginName string, key string, defaultValue
 	return value
 }
 
+// PluginSettingOverrides contains only persisted values; nil means that scope has no row.
+type PluginSettingOverrides struct {
+	Global *string
+	Chat   *string
+}
+
+// GetPluginSettingOverrides exposes global and chat-specific persisted values without
+// applying config fallback. It is intended for diagnostics/admin UIs.
+func GetPluginSettingOverrides(chatID int64, pluginName string, key string) (PluginSettingOverrides, error) {
+	if database.DB == nil {
+		return PluginSettingOverrides{}, nil
+	}
+	result := PluginSettingOverrides{}
+	var global string
+	err := database.DB.QueryRow(`SELECT value FROM plugin_settings WHERE chat_id IS NULL AND plugin_name = ? AND key = ?`, pluginName, key).Scan(&global)
+	if err == nil {
+		result.Global = &global
+	} else if err != sql.ErrNoRows {
+		return result, err
+	}
+	var chat string
+	err = database.DB.QueryRow(`SELECT value FROM plugin_settings WHERE chat_id = ? AND plugin_name = ? AND key = ?`, chatID, pluginName, key).Scan(&chat)
+	if err == nil {
+		result.Chat = &chat
+	} else if err != sql.ErrNoRows {
+		return result, err
+	}
+	return result, nil
+}
+
 // SetPluginSetting saves a setting to the database
 func SetPluginSetting(chatID *int64, pluginName string, key string, value string) error {
 	// Handle global settings (NULL chat_id) specially

@@ -267,6 +267,64 @@ func TestAdminPlugin_SpotifyModelCommand(t *testing.T) {
 	}
 }
 
+func TestAiModelTargetsUseUniformSetAndResetSyntax(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	if err := registry.EnsurePluginSettingsTable(); err != nil {
+		t.Fatal(err)
+	}
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	plugin := &AdminPlugin{}
+	chatID := int64(456)
+
+	for _, command := range []string{
+		"!ai model reply reply-chat-model 456",
+		"!ai model image image-chat-model 456",
+		"!ai model vision vision-chat-model 456",
+		"!ai model image-prompt image-prompt-chat-model 456",
+		"!ai model selfprompt selfprompt-chat-model 456",
+	} {
+		plugin.handleAiCommands(&telebot.Message{Text: command, Chat: &telebot.Chat{ID: 1}})
+	}
+	if got := registry.GetAiModel(&chatID); got != "reply-chat-model" {
+		t.Fatalf("reply model = %q", got)
+	}
+	if got := registry.GetImageAiModel(&chatID); got != "image-chat-model" {
+		t.Fatalf("image model = %q", got)
+	}
+	if got := registry.GetImageVisionModel(&chatID); got != "vision-chat-model" {
+		t.Fatalf("vision model = %q", got)
+	}
+	if got := registry.GetImagePromptModel(&chatID); got != "image-prompt-chat-model" {
+		t.Fatalf("image prompt model = %q", got)
+	}
+	if got := selfpromptplugin.GetModel(&chatID); got != "selfprompt-chat-model" {
+		t.Fatalf("selfprompt model = %q", got)
+	}
+
+	for _, command := range []string{
+		"!ai model reply global 456",
+		"!ai model image global 456",
+		"!ai model vision global 456",
+		"!ai model image-prompt global 456",
+		"!ai model selfprompt global 456",
+	} {
+		plugin.handleAiCommands(&telebot.Message{Text: command, Chat: &telebot.Chat{ID: 1}})
+	}
+	for _, key := range []string{registry.AiModelKey, registry.ImageAiModelKey, registry.ImageVisionModelKey, registry.ImagePromptModelKey} {
+		overrides, err := registry.GetPluginSettingOverrides(chatID, registry.ConfigPluginName, key)
+		if err != nil || overrides.Chat != nil {
+			t.Fatalf("expected config.%s override cleared, got %+v err=%v", key, overrides, err)
+		}
+	}
+	overrides, err := registry.GetPluginSettingOverrides(chatID, selfpromptplugin.PluginName, selfpromptplugin.ModelKey)
+	if err != nil || overrides.Chat != nil {
+		t.Fatalf("expected selfprompt override cleared, got %+v err=%v", overrides, err)
+	}
+}
+
 func TestAdminPlugin_OpenAICodexProviderCommand(t *testing.T) {
 	originalConfig := registry.Config
 	defer func() {

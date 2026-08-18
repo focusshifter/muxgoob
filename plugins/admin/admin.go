@@ -101,7 +101,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model <model_name> [chat_id]\n!ai model global <chat_id>\n!ai model image <model_name> [chat_id]\n!ai model vision <model_name> [chat_id]\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai model image-prompt <model_name> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai model selfprompt <model_name> [chat_id]\n!ai images enable <chat_id>\n!ai images disable <chat_id>\n!ai images status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model reply <model_name> [chat_id] (aliases: chat, main)\n!ai model image|vision|image-prompt|selfprompt <model_name> [chat_id]\n!ai model <target> global <chat_id> (or reset)\n!ai model <model_name> [chat_id] (legacy reply alias)\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai images enable|disable|status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
@@ -210,6 +210,9 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		}
 
 	case "model":
+		if p.handleNamedModelCommand(message, parts) {
+			return
+		}
 		if len(parts) < 3 {
 			bot.Send(message.Chat, "Please specify a model name")
 			return
@@ -482,6 +485,91 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	default:
 		bot.Send(message.Chat, "Unknown AI command. Available commands: provider, model, get")
 	}
+}
+
+func (p *AdminPlugin) handleNamedModelCommand(message *telebot.Message, parts []string) bool {
+	if len(parts) < 3 {
+		return false
+	}
+	target := parts[2]
+	if target == "chat" || target == "main" {
+		target = "reply"
+	}
+	type targetSpec struct {
+		label, plugin, key string
+		set                func(*int64, string) error
+		effective          func(*int64) string
+	}
+	specs := map[string]targetSpec{
+		"reply":        {"Reply", registry.ConfigPluginName, registry.AiModelKey, registry.SetAiModel, registry.GetAiModel},
+		"image":        {"Image", registry.ConfigPluginName, registry.ImageAiModelKey, registry.SetImageAiModel, registry.GetImageAiModel},
+		"vision":       {"Vision", registry.ConfigPluginName, registry.ImageVisionModelKey, registry.SetImageVisionModel, registry.GetImageVisionModel},
+		"image-prompt": {"Image prompt", registry.ConfigPluginName, registry.ImagePromptModelKey, registry.SetImagePromptModel, registry.GetImagePromptModel},
+		"selfprompt":   {"Selfprompt", selfpromptplugin.PluginName, selfpromptplugin.ModelKey, selfpromptplugin.SetModel, selfpromptplugin.GetModel},
+	}
+	spec, ok := specs[target]
+	if !ok {
+		return false
+	}
+	bot := registry.Bot
+	if len(parts) < 4 {
+		bot.Send(message.Chat, "Usage: !ai model "+target+" <model_name> [chat_id], or !ai model "+target+" global <chat_id>")
+		return true
+	}
+	if parts[3] == "global" || parts[3] == "reset" {
+		if len(parts) != 5 {
+			bot.Send(message.Chat, "Usage: !ai model "+target+" global <chat_id>")
+			return true
+		}
+		chatID, err := strconv.ParseInt(parts[4], 10, 64)
+		if err != nil {
+			bot.Send(message.Chat, "Invalid chat_id")
+			return true
+		}
+		if err := registry.ClearPluginSettingOverride(chatID, spec.plugin, spec.key); err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error clearing %s model override: %v", strings.ToLower(spec.label), err))
+			return true
+		}
+		if target == "selfprompt" {
+			if err := registry.ClearPluginSettingOverride(chatID, selfpromptplugin.PluginName, "compression_model"); err != nil {
+				bot.Send(message.Chat, fmt.Sprintf("Error clearing legacy selfprompt model override: %v", err))
+				return true
+			}
+		}
+		chatIDPtr := &chatID
+		bot.Send(message.Chat, fmt.Sprintf("%s model override for chat %d cleared; it now uses: %s", spec.label, chatID, modelOrDefault(spec.effective(chatIDPtr))))
+		return true
+	}
+	if len(parts) > 5 {
+		bot.Send(message.Chat, "Usage: !ai model "+target+" <model_name> [chat_id]")
+		return true
+	}
+	var chatID *int64
+	if len(parts) == 5 {
+		parsedID, err := strconv.ParseInt(parts[4], 10, 64)
+		if err != nil {
+			bot.Send(message.Chat, "Invalid chat_id")
+			return true
+		}
+		chatID = &parsedID
+	}
+	if err := spec.set(chatID, parts[3]); err != nil {
+		bot.Send(message.Chat, fmt.Sprintf("Error setting %s model: %v", strings.ToLower(spec.label), err))
+		return true
+	}
+	if chatID == nil {
+		bot.Send(message.Chat, fmt.Sprintf("Global %s model set to: %s", strings.ToLower(spec.label), parts[3]))
+	} else {
+		bot.Send(message.Chat, fmt.Sprintf("%s model for chat %d set to: %s", spec.label, *chatID, parts[3]))
+	}
+	return true
+}
+
+func modelOrDefault(model string) string {
+	if strings.TrimSpace(model) == "" {
+		return "(default AI model)"
+	}
+	return model
 }
 
 func formatAiChatSettings(chatID int64) (string, error) {

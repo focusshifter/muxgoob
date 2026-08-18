@@ -136,6 +136,16 @@ func GetPluginSettingOverrides(chatID int64, pluginName string, key string) (Plu
 	return result, nil
 }
 
+// ClearPluginSettingOverride removes a chat-specific setting so it inherits the
+// global database value or its config fallback.
+func ClearPluginSettingOverride(chatID int64, pluginName string, key string) error {
+	if database.DB == nil {
+		return nil
+	}
+	_, err := database.DB.Exec(`DELETE FROM plugin_settings WHERE chat_id = ? AND plugin_name = ? AND key = ?`, chatID, pluginName, key)
+	return err
+}
+
 // SetPluginSetting saves a setting to the database
 func SetPluginSetting(chatID *int64, pluginName string, key string, value string) error {
 	// Handle global settings (NULL chat_id) specially
@@ -259,11 +269,7 @@ func SetAiModel(chatID *int64, model string) error {
 
 // ClearAiModelOverride removes a chat-specific model so the chat inherits the global model.
 func ClearAiModelOverride(chatID int64) error {
-	if database.DB == nil {
-		return nil
-	}
-	_, err := database.DB.Exec(`DELETE FROM plugin_settings WHERE chat_id = ? AND plugin_name = ? AND key = ?`, chatID, ConfigPluginName, AiModelKey)
-	return err
+	return ClearPluginSettingOverride(chatID, ConfigPluginName, AiModelKey)
 }
 
 // SetImageAiModel sets the image AI model in the database

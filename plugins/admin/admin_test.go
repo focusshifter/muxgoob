@@ -285,6 +285,7 @@ func TestAiModelTargetsUseUniformSetAndResetSyntax(t *testing.T) {
 		"!ai model vision vision-chat-model 456",
 		"!ai model image-prompt image-prompt-chat-model 456",
 		"!ai model selfprompt selfprompt-chat-model 456",
+		"!ai model spotify spotify-chat-model 456",
 	} {
 		plugin.handleAiCommands(&telebot.Message{Text: command, Chat: &telebot.Chat{ID: 1}})
 	}
@@ -303,6 +304,9 @@ func TestAiModelTargetsUseUniformSetAndResetSyntax(t *testing.T) {
 	if got := selfpromptplugin.GetModel(&chatID); got != "selfprompt-chat-model" {
 		t.Fatalf("selfprompt model = %q", got)
 	}
+	if got := spotify.GetReviewModel(&chatID); got != "spotify-chat-model" {
+		t.Fatalf("Spotify review model = %q", got)
+	}
 
 	for _, command := range []string{
 		"!ai model reply global 456",
@@ -310,6 +314,7 @@ func TestAiModelTargetsUseUniformSetAndResetSyntax(t *testing.T) {
 		"!ai model vision global 456",
 		"!ai model image-prompt global 456",
 		"!ai model selfprompt global 456",
+		"!ai model spotify global 456",
 	} {
 		plugin.handleAiCommands(&telebot.Message{Text: command, Chat: &telebot.Chat{ID: 1}})
 	}
@@ -322,6 +327,10 @@ func TestAiModelTargetsUseUniformSetAndResetSyntax(t *testing.T) {
 	overrides, err := registry.GetPluginSettingOverrides(chatID, selfpromptplugin.PluginName, selfpromptplugin.ModelKey)
 	if err != nil || overrides.Chat != nil {
 		t.Fatalf("expected selfprompt override cleared, got %+v err=%v", overrides, err)
+	}
+	overrides, err = registry.GetPluginSettingOverrides(chatID, spotify.SpotifyPluginName, spotify.SpotifyReviewModelKey)
+	if err != nil || overrides.Chat != nil {
+		t.Fatalf("expected Spotify review override cleared, got %+v err=%v", overrides, err)
 	}
 }
 

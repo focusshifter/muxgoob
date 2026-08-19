@@ -101,7 +101,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model reply <model_name> [chat_id] (aliases: chat, main)\n!ai model image|vision|image-prompt|selfprompt <model_name> [chat_id]\n!ai model <target> global <chat_id> (or reset)\n!ai model <model_name> [chat_id] (legacy reply alias)\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai images enable|disable|status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model reply <model_name> [chat_id] (aliases: chat, main)\n!ai model image|vision|image-prompt|selfprompt|spotify <model_name> [chat_id]\n!ai model <target> global <chat_id> (or reset)\n!ai model <model_name> [chat_id] (legacy reply alias)\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai images enable|disable|status <chat_id>\n!ai get [chat_id]")
 		return
 	}
 
@@ -506,6 +506,7 @@ func (p *AdminPlugin) handleNamedModelCommand(message *telebot.Message, parts []
 		"vision":       {"Vision", registry.ConfigPluginName, registry.ImageVisionModelKey, registry.SetImageVisionModel, registry.GetImageVisionModel},
 		"image-prompt": {"Image prompt", registry.ConfigPluginName, registry.ImagePromptModelKey, registry.SetImagePromptModel, registry.GetImagePromptModel},
 		"selfprompt":   {"Selfprompt", selfpromptplugin.PluginName, selfpromptplugin.ModelKey, selfpromptplugin.SetModel, selfpromptplugin.GetModel},
+		"spotify":      {"Spotify review", spotify.SpotifyPluginName, spotify.SpotifyReviewModelKey, spotify.SetReviewModel, spotify.GetReviewModel},
 	}
 	spec, ok := specs[target]
 	if !ok {

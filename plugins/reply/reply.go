@@ -200,6 +200,16 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 				sendOpts = &telebot.SendOptions{ReplyTo: targetMessage}
 			}
 
+			replyText = sanitizeReplyText(replyText)
+			if replyText == "" {
+				log.Printf("[reply] Reply was empty after sanitization for chat %d", chatID)
+				return
+			}
+			if sendOpts == nil {
+				sendOpts = &telebot.SendOptions{ParseMode: telebot.ModeMarkdown}
+			} else {
+				sendOpts.ParseMode = telebot.ModeMarkdown
+			}
 			_, err = bot.Send(&telebot.Chat{ID: chatID}, replyText, sendOpts)
 			if err != nil {
 				log.Printf("[reply] Error sending message to chat %d: %v", chatID, err)
@@ -234,8 +244,7 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 				log.Printf("[reply] Chat client returned: %s", replyText)
 				if replyText != "" && !isActionOnlyReply(replyText) {
 					log.Printf("[reply] Sending reply")
-					bot.Send(message.Chat, replyText, &telebot.SendOptions{
-						ReplyTo: message})
+					sendReplyWithLog(bot, message.Chat, replyText, replyOptionsForMessage(message))
 				}
 				return
 			} else {
@@ -514,13 +523,33 @@ func replyOptionsForMessage(message *telebot.Message) *telebot.SendOptions {
 	if message == nil || message.ID == 0 {
 		return nil
 	}
-	return &telebot.SendOptions{ReplyTo: message}
+	return &telebot.SendOptions{ReplyTo: message, ParseMode: telebot.ModeMarkdown}
+}
+
+// sanitizeReplyText removes provider framing tokens that must never reach chat.
+// Telegram's legacy Markdown mode renders standard inline links such as
+// [[1]](https://example.com) as a normal clickable [1] citation.
+func sanitizeReplyText(text string) string {
+	text = strings.ReplaceAll(text, "<|eos|>", "")
+	return strings.TrimSpace(text)
 }
 
 func sendReplyWithLog(bot *registry.BotWrapper, chat *telebot.Chat, text string, opts *telebot.SendOptions) {
 	if bot == nil || chat == nil {
 		log.Printf("[reply] Cannot send reply: bot or chat is nil")
 		return
+	}
+
+	text = sanitizeReplyText(text)
+	if text == "" {
+		return
+	}
+	if opts == nil {
+		opts = &telebot.SendOptions{ParseMode: telebot.ModeMarkdown}
+	} else if opts.ParseMode == "" {
+		copied := *opts
+		copied.ParseMode = telebot.ModeMarkdown
+		opts = &copied
 	}
 
 	_, err := bot.Send(chat, text, opts)

@@ -101,6 +101,36 @@ func (m *MockChatGptClient) Ask(message *telebot.Message) string {
 	return ""
 }
 
+func TestSendReplyWithLogUsesMarkdownAndSanitizesProviderTokens(t *testing.T) {
+	var gotText string
+	var gotOpts *telebot.SendOptions
+	bot := &registry.BotWrapper{SendFunc: func(_ telebot.Recipient, what interface{}, options ...interface{}) (*telebot.Message, error) {
+		text, ok := what.(string)
+		if !ok {
+			t.Fatalf("expected string reply, got %T", what)
+		}
+		gotText = text
+		if len(options) != 1 {
+			t.Fatalf("expected one send option, got %#v", options)
+		}
+		var okOptions bool
+		gotOpts, okOptions = options[0].(*telebot.SendOptions)
+		if !okOptions || gotOpts == nil {
+			t.Fatalf("expected *telebot.SendOptions, got %#v", options[0])
+		}
+		return &telebot.Message{}, nil
+	}}
+
+	sendReplyWithLog(bot, &telebot.Chat{ID: 1}, "Вот источник: [[1]](https://example.com) <|eos|>", nil)
+
+	if gotText != "Вот источник: [[1]](https://example.com)" {
+		t.Fatalf("unexpected sanitized text: %q", gotText)
+	}
+	if gotOpts.ParseMode != telebot.ModeMarkdown {
+		t.Fatalf("expected Markdown parse mode, got %q", gotOpts.ParseMode)
+	}
+}
+
 func TestImageGenerationToolIsOptInPerChat(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

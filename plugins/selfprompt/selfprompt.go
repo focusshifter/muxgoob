@@ -24,17 +24,21 @@ import (
 )
 
 type SelfPromptPlugin struct {
-	config     registry.SelfPromptConfig
-	db         *sql.DB
-	msgCounter map[int64]int64
-	mutex      sync.RWMutex
-	testMode   bool // Flag to indicate test mode - prevents counter reset
+	config                registry.SelfPromptConfig
+	db                    *sql.DB
+	msgCounter            map[int64]int64
+	refreshing            map[int64]bool
+	refreshStartMessageID map[int64]int
+	mutex                 sync.RWMutex
+	testMode              bool // Flag to preserve counter assertions in existing tests
 }
 
 func init() {
 	registry.RegisterPlugin(&SelfPromptPlugin{
-		msgCounter: make(map[int64]int64),
-		testMode:   false,
+		msgCounter:            make(map[int64]int64),
+		refreshing:            make(map[int64]bool),
+		refreshStartMessageID: make(map[int64]int),
+		testMode:              false,
 	})
 }
 
@@ -86,35 +90,66 @@ func (p *SelfPromptPlugin) Process(message *telebot.Message) {
 		return
 	}
 
-	// Initialize message counter map if it's nil
+	// Check if it's time to update the prompt or if there's no prompt yet.
+	// The prompt lookup is deliberately outside the lock because it touches SQLite.
+	currentPrompt, err := promptmgr.GetCurrentPrompt(message.Chat.ID, true)
+
+	// A message dispatcher goroutine is created for every incoming message. Keep a
+	// per-chat watermark so messages that arrive while a refresh runs count toward
+	// the *next* refresh, but cannot start duplicate concurrent refreshes.
+	p.mutex.Lock()
 	if p.msgCounter == nil {
 		p.msgCounter = make(map[int64]int64)
 	}
+	if p.refreshing == nil {
+		p.refreshing = make(map[int64]bool)
+	}
+	if p.refreshStartMessageID == nil {
+		p.refreshStartMessageID = make(map[int64]int)
+	}
 
-	// Update message counter
-	p.mutex.Lock()
-	p.msgCounter[message.Chat.ID]++
+	watermark := p.refreshStartMessageID[message.Chat.ID]
+	// Message ID zero is used by a few synthetic/test messages, for which arrival
+	// order is the only available ordering signal.
+	if message.ID == 0 || watermark == 0 || message.ID > watermark {
+		p.msgCounter[message.Chat.ID]++
+	}
 	count := p.msgCounter[message.Chat.ID]
-	p.mutex.Unlock()
 
-	// Check if it's time to update the prompt or if there's no prompt yet
-	currentPrompt, err := promptmgr.GetCurrentPrompt(message.Chat.ID, true)
-	if err != nil || currentPrompt == "" || count >= interval {
-		// Save the current counter value before updating the prompt
-		// This allows tests to verify the counter was incremented correctly
-		currentCount := count
+	reason := ""
+	switch {
+	case err != nil:
+		reason = "prompt_lookup_error"
+	case currentPrompt == "":
+		reason = "missing_prompt"
+	case count >= interval:
+		reason = "interval"
+	}
 
-		// Update the prompt
-		p.updatePrompt(message.Chat.ID)
-
-		// Only reset the counter if it hasn't been changed during updatePrompt
-		// and we're not in test mode
-		p.mutex.Lock()
-		if !p.testMode && p.msgCounter[message.Chat.ID] == currentCount {
+	shouldRefresh := reason != "" && !p.refreshing[message.Chat.ID]
+	if shouldRefresh {
+		p.refreshing[message.Chat.ID] = true
+		p.refreshStartMessageID[message.Chat.ID] = message.ID
+		if !p.testMode {
 			p.msgCounter[message.Chat.ID] = 0
 		}
-		p.mutex.Unlock()
 	}
+	p.mutex.Unlock()
+
+	if !shouldRefresh {
+		return
+	}
+
+	log.Printf("[selfprompt] Starting refresh for chat %d: reason=%s count=%d interval=%d watermark_message_id=%d", message.Chat.ID, reason, count, interval, message.ID)
+	defer func() {
+		p.mutex.Lock()
+		p.refreshing[message.Chat.ID] = false
+		queued := p.msgCounter[message.Chat.ID]
+		watermark := p.refreshStartMessageID[message.Chat.ID]
+		p.mutex.Unlock()
+		log.Printf("[selfprompt] Finished refresh for chat %d: queued_next=%d watermark_message_id=%d", message.Chat.ID, queued, watermark)
+	}()
+	p.updatePrompt(message.Chat.ID)
 }
 
 func (p *SelfPromptPlugin) handleCommand(message *telebot.Message) {

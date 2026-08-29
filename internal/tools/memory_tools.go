@@ -207,12 +207,13 @@ func (t *SearchMemoriesTool) Execute(ctx context.Context, raw string) (string, e
 	queryLower := strings.ToLower(query)
 	for _, entry := range entries {
 		bodyLower := strings.ToLower(entry.Body)
+		bodyTokens := memorySearchTokens(bodyLower)
 		score := 0
 		if strings.Contains(bodyLower, queryLower) {
 			score += 1000
 		}
 		for _, token := range tokens {
-			if strings.Contains(bodyLower, token) {
+			if memoryTokenMatchesBody(token, bodyLower, bodyTokens) {
 				score++
 			}
 		}
@@ -247,6 +248,56 @@ func memorySearchTokens(value string) []string {
 		}
 	}
 	return result
+}
+
+func memoryTokenMatchesBody(queryToken, bodyLower string, bodyTokens []string) bool {
+	if strings.Contains(bodyLower, queryToken) {
+		return true
+	}
+	queryStem := russianMemoryStem(queryToken)
+	if queryStem == queryToken {
+		return false
+	}
+	for _, bodyToken := range bodyTokens {
+		if russianMemoryStem(bodyToken) == queryStem {
+			return true
+		}
+	}
+	return false
+}
+
+var russianMemorySuffixes = []string{
+	"иями", "ями", "ами", "ого", "его", "ому", "ему", "ыми", "ими",
+	"ую", "юю", "ая", "яя", "ое", "ее", "ые", "ие", "ый", "ий", "ой",
+	"ым", "им", "ом", "ем", "ых", "их", "ов", "ев", "ей", "ам", "ям",
+	"ах", "ях", "ою", "ею", "а", "я", "ы", "и", "у", "ю", "е", "о", "ь", "й",
+}
+
+// russianMemoryStem removes one common Russian inflectional ending. This is
+// deliberately conservative: a four-rune stem is required so short names and
+// unrelated words are not collapsed merely because they share an ending.
+func russianMemoryStem(token string) string {
+	token = strings.ReplaceAll(strings.ToLower(token), "ё", "е")
+	hasRussian := false
+	for _, r := range token {
+		if r >= 'а' && r <= 'я' {
+			hasRussian = true
+			break
+		}
+	}
+	if !hasRussian {
+		return token
+	}
+	for _, suffix := range russianMemorySuffixes {
+		if !strings.HasSuffix(token, suffix) {
+			continue
+		}
+		stem := strings.TrimSuffix(token, suffix)
+		if len([]rune(stem)) >= 4 {
+			return stem
+		}
+	}
+	return token
 }
 
 func (t *MemoryStatusTool) Definition() openai.Tool {

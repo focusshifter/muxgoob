@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
@@ -64,6 +65,8 @@ func TestSearchMemoriesToolFiltersByChatSubjectKindAndQuery(t *testing.T) {
 		{ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: "@focusshifter абсолютный василий", SourceType: "test"},
 		{ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: "@focusshifter любит ML", SourceType: "test"},
 		{ChatID: 100, Kind: chatmemory.ChatLore, Body: "Василий приносит чай", SourceType: "test"},
+		{ChatID: 100, Kind: chatmemory.ChatLore, Body: "Саня может запускать канаву", SourceType: "test"},
+		{ChatID: 100, Kind: chatmemory.ChatLore, Body: "Сатирический ярлык: сырный рыцарь", SourceType: "test"},
 		{ChatID: 200, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: "@focusshifter абсолютный василий", SourceType: "test"},
 	} {
 		if _, _, err := repo.Add(context.Background(), entry); err != nil {
@@ -103,6 +106,36 @@ func TestSearchMemoriesToolFiltersByChatSubjectKindAndQuery(t *testing.T) {
 	}
 	if payload.Count != 2 {
 		t.Fatalf("subject_user_id=0 must mean unscoped search, got %s", raw)
+	}
+
+	raw, err = tool.Execute(context.Background(), `{"query":"КАНАВА","kind":"chat_lore","subject_user_id":0}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = struct {
+		Memories []chatmemory.Entry `json:"memories"`
+		Count    int                `json:"count"`
+	}{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 1 || !strings.Contains(payload.Memories[0].Body, "канаву") {
+		t.Fatalf("expected Russian inflection match канава/канаву, got %s", raw)
+	}
+
+	raw, err = tool.Execute(context.Background(), `{"query":"сырного рыцаря","kind":"chat_lore","subject_user_id":0}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = struct {
+		Memories []chatmemory.Entry `json:"memories"`
+		Count    int                `json:"count"`
+	}{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 1 || !strings.Contains(payload.Memories[0].Body, "сырный рыцарь") {
+		t.Fatalf("expected Russian adjective/noun inflection match, got %s", raw)
 	}
 }
 

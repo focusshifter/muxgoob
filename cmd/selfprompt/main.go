@@ -18,6 +18,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
@@ -320,60 +321,74 @@ func parseSinceDate(value string) (time.Time, error) {
 }
 
 func resetStoredState(chatID int64, selectedUser *activeChatUser) error {
+	cutover := chatmemory.IsCutover(context.Background(), database.DB, chatID)
 	if selectedUser != nil {
 		fmt.Printf("Resetting stored facts for %s (%d) in chat %d\n", selectedUser.Name, selectedUser.ID, chatID)
-		return insertEmptyPersonFactsVersion(chatID, selectedUser.ID)
+		return database.RetryWithBackoff(func() error {
+			return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+				return resetPersonFactsTx(tx, chatID, int64(selectedUser.ID), !cutover)
+			})
+		})
 	}
 
-	fmt.Printf("Resetting chat prompt and all stored person facts for chat %d\n", chatID)
-	if err := savePrompt(chatID, ""); err != nil {
-		return err
-	}
-
-	rows, err := database.DB.Query(`SELECT DISTINCT user_id FROM person_facts WHERE chat_id = ?`, chatID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	var resetCount int
-	for rows.Next() {
-		var userID int64
-		if err := rows.Scan(&userID); err != nil {
-			return err
-		}
-		if err := insertEmptyPersonFactsVersion(chatID, userID); err != nil {
-			return err
-		}
-		resetCount++
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	fmt.Printf("Reset prompt and %d stored fact profiles\n", resetCount)
-	return nil
-}
-
-func insertEmptyPersonFactsVersion(chatID int64, userID int64) error {
-	return database.RetryWithBackoff(func() error {
+	fmt.Printf("Resetting chat prompt, chat lore, and all stored person facts for chat %d\n", chatID)
+	resetCount := 0
+	err := database.RetryWithBackoff(func() error {
 		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			var nextVersion int
-			err := tx.QueryRow(`
-				SELECT COALESCE(MAX(version) + 1, 1)
-				FROM person_facts
-				WHERE chat_id = ? AND user_id = ?`, chatID, userID).Scan(&nextVersion)
+			if err := savePromptTx(tx, chatID, ""); err != nil {
+				return err
+			}
+			userQuery := `SELECT DISTINCT user_id FROM person_facts WHERE chat_id=?`
+			if cutover {
+				userQuery = `SELECT DISTINCT subject_user_id FROM memory_entries WHERE chat_id=? AND kind='person_fact' AND subject_user_id IS NOT NULL`
+			}
+			rows, err := tx.Query(userQuery, chatID)
 			if err != nil {
 				return err
 			}
-
-			_, err = tx.Exec(`
-				INSERT INTO person_facts (chat_id, user_id, facts, version, created_at)
-				VALUES (?, ?, '', ?, ?)`,
-				chatID, userID, nextVersion, time.Now().Unix())
-			return err
+			var userIDs []int64
+			for rows.Next() {
+				var userID int64
+				if err := rows.Scan(&userID); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				userIDs = append(userIDs, userID)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			for _, userID := range userIDs {
+				if err := resetPersonFactsTx(tx, chatID, userID, !cutover); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.Exec(`UPDATE memory_entries SET status='archived',updated_at=? WHERE chat_id=? AND kind='chat_lore' AND status='active'`, time.Now().Unix(), chatID); err != nil {
+				return err
+			}
+			resetCount = len(userIDs)
+			return nil
 		})
 	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Reset prompt, chat lore, and %d stored fact profiles\n", resetCount)
+	return nil
+}
+
+func resetPersonFactsTx(tx *sql.Tx, chatID, userID int64, writeLegacy bool) error {
+	if writeLegacy {
+		var nextVersion int
+		if err := tx.QueryRow(`SELECT COALESCE(MAX(version) + 1, 1) FROM person_facts WHERE chat_id=? AND user_id=?`, chatID, userID).Scan(&nextVersion); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO person_facts (chat_id,user_id,facts,version,created_at) VALUES (?,?, '',?,?)`, chatID, userID, nextVersion, time.Now().Unix()); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(`UPDATE memory_entries SET status='archived',updated_at=? WHERE chat_id=? AND kind='person_fact' AND subject_user_id=? AND status='active'`, time.Now().Unix(), chatID, userID)
+	return err
 }
 
 // retrieveHistoryBatch gets a batch of chat history from the database
@@ -1407,23 +1422,37 @@ Recent messages from %s:
 
 // savePrompt saves a new prompt to the database
 func savePrompt(chatID int64, prompt string) error {
+	cutover := chatmemory.IsCutover(context.Background(), database.DB, chatID)
+	migrateStable := cutover && chatmemory.HasLegacyStableContext(prompt)
+	storedPrompt := prompt
+	var stableBodies []string
+	if migrateStable {
+		stableBodies = chatmemory.ExtractLegacyStableContext(prompt)
+		storedPrompt = chatmemory.StripLegacyStableContext(prompt)
+	}
 	return database.RetryWithBackoff(func() error {
 		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			// Get next version
-			var nextVersion int
-			err := tx.QueryRow(`
-				SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`,
-				chatID).Scan(&nextVersion)
-			if err != nil {
+			if err := savePromptTx(tx, chatID, storedPrompt); err != nil {
 				return err
 			}
-
-			// Insert new prompt
-			_, err = tx.Exec(`
-				INSERT INTO prompts (chat_id, version, prompt, created_at)
-				VALUES (?, ?, ?, ?)`,
-				chatID, nextVersion, prompt, time.Now().Unix())
-			return err
+			if migrateStable {
+				repo := chatmemory.NewRepository(database.DB)
+				for _, body := range stableBodies {
+					if _, _, err := repo.AddTx(context.Background(), tx, chatmemory.Entry{ChatID: chatID, Kind: chatmemory.ChatLore, Body: body, SourceType: "selfprompt_cli_stable_context"}); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		})
 	})
+}
+
+func savePromptTx(tx *sql.Tx, chatID int64, prompt string) error {
+	var nextVersion int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`, chatID).Scan(&nextVersion); err != nil {
+		return err
+	}
+	_, err := tx.Exec(`INSERT INTO prompts (chat_id, version, prompt, created_at) VALUES (?, ?, ?, ?)`, chatID, nextVersion, prompt, time.Now().Unix())
+	return err
 }

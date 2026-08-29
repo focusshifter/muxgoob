@@ -224,6 +224,27 @@ func (r *Repository) List(ctx context.Context, filter Filter) ([]Entry, error) {
 	return entries, rows.Err()
 }
 
+// ReplaceChatLoreTx atomically replaces active shared lore in a caller-owned
+// transaction while retaining archived history.
+func (r *Repository) ReplaceChatLoreTx(ctx context.Context, tx *sql.Tx, chatID int64, bodies []string, sourceType string) error {
+	if r == nil || r.db == nil || tx == nil {
+		return errors.New("database and transaction are required")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE memory_entries SET status='archived', updated_at=? WHERE chat_id=? AND kind='chat_lore' AND status='active'`, time.Now().Unix(), chatID); err != nil {
+		return err
+	}
+	for _, body := range bodies {
+		entry := Entry{ChatID: chatID, Kind: ChatLore, Body: body, SourceType: sourceType}
+		if err := prepareEntry(&entry); err != nil {
+			return err
+		}
+		if _, _, err := r.add(ctx, tx, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ReplacePersonFacts atomically archives the current typed facts for one user
 // and installs a new active snapshot while retaining history.
 func (r *Repository) ReplacePersonFacts(ctx context.Context, chatID, userID int64, bodies []string, sourceType string) error {

@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
+	"unicode"
 
 	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	openai "github.com/sashabaranov/go-openai"
@@ -32,6 +35,17 @@ type ListMemoriesTool struct {
 type listMemoriesArgs struct {
 	Kind            chatmemory.Kind `json:"kind,omitempty"`
 	IncludeInactive bool            `json:"include_inactive,omitempty"`
+}
+type SearchMemoriesTool struct {
+	db     *sql.DB
+	chatID int64
+}
+type searchMemoriesArgs struct {
+	Query           string          `json:"query"`
+	Kind            chatmemory.Kind `json:"kind,omitempty"`
+	SubjectUserID   *int64          `json:"subject_user_id,omitempty"`
+	IncludeInactive bool            `json:"include_inactive,omitempty"`
+	Limit           int             `json:"limit,omitempty"`
 }
 type MemoryStatusTool struct {
 	db     *sql.DB
@@ -66,6 +80,9 @@ func NewRememberDecisionTool(db *sql.DB, chatID int64) Tool {
 }
 func NewListMemoriesTool(db *sql.DB, chatID int64) Tool {
 	return &ListMemoriesTool{db: db, chatID: chatID}
+}
+func NewSearchMemoriesTool(db *sql.DB, chatID int64) Tool {
+	return &SearchMemoriesTool{db: db, chatID: chatID}
 }
 func NewCompletePlanTool(db *sql.DB, chatID int64) Tool {
 	return &MemoryStatusTool{db: db, chatID: chatID, name: "completePlan", status: chatmemory.Completed, kind: chatmemory.PossiblePlan}
@@ -126,6 +143,103 @@ func (t *ListMemoriesTool) Execute(ctx context.Context, raw string) (string, err
 		return "", err
 	}
 	return marshalJSON(map[string]any{"memories": entries, "count": len(entries)}), nil
+}
+
+func (t *SearchMemoriesTool) Definition() openai.Tool {
+	return openai.Tool{Type: openai.ToolTypeFunction, Function: &openai.FunctionDefinition{
+		Name:        "searchMemories",
+		Description: "Search structured memories in this chat before archiving or superseding one. Scope person facts with subject_user_id when known.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query":            map[string]any{"type": "string", "description": "Distinctive words from the memory to find."},
+				"kind":             map[string]any{"type": "string", "enum": []string{"chat_lore", "person_fact", "possible_plan", "decision"}},
+				"subject_user_id":  map[string]any{"type": "integer"},
+				"include_inactive": map[string]any{"type": "boolean"},
+				"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+			},
+			"required": []string{"query"},
+		},
+	}}
+}
+
+func (t *SearchMemoriesTool) Execute(ctx context.Context, raw string) (string, error) {
+	if t == nil || t.db == nil {
+		return "", fmt.Errorf("database is not initialized")
+	}
+	var args searchMemoriesArgs
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	query := strings.TrimSpace(args.Query)
+	if query == "" {
+		return "", fmt.Errorf("query is required")
+	}
+	limit := args.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	entries, err := chatmemory.NewRepository(t.db).List(ctx, chatmemory.Filter{
+		ChatID:          t.chatID,
+		Kind:            args.Kind,
+		SubjectUserID:   args.SubjectUserID,
+		IncludeInactive: args.IncludeInactive,
+	})
+	if err != nil {
+		return "", err
+	}
+	tokens := memorySearchTokens(query)
+	type scoredEntry struct {
+		entry chatmemory.Entry
+		score int
+	}
+	matches := make([]scoredEntry, 0)
+	queryLower := strings.ToLower(query)
+	for _, entry := range entries {
+		bodyLower := strings.ToLower(entry.Body)
+		score := 0
+		if strings.Contains(bodyLower, queryLower) {
+			score += 1000
+		}
+		for _, token := range tokens {
+			if strings.Contains(bodyLower, token) {
+				score++
+			}
+		}
+		if score > 0 {
+			matches = append(matches, scoredEntry{entry: entry, score: score})
+		}
+	}
+	sort.SliceStable(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score > matches[j].score
+		}
+		return matches[i].entry.ID > matches[j].entry.ID
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	result := make([]chatmemory.Entry, 0, len(matches))
+	for _, match := range matches {
+		result = append(result, match.entry)
+	}
+	return marshalJSON(map[string]any{"memories": result, "count": len(result)}), nil
+}
+
+func memorySearchTokens(value string) []string {
+	parts := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len([]rune(part)) >= 2 {
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 func (t *MemoryStatusTool) Definition() openai.Tool {

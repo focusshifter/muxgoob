@@ -563,7 +563,7 @@ func (p *SelfPromptPlugin) updatePromptFromMessages(chatID int64, messages []tel
 		return
 	}
 	var stableMemory []string
-	if hasExplicitStableContext(newPrompt) {
+	if chatmemory.HasLegacyStableContext(newPrompt) {
 		parsedPrompt := facts.ParseChatPrompt(newPrompt)
 		stableMemory = append([]string(nil), parsedPrompt.StableContext...)
 		parsedPrompt.StableContext = nil
@@ -602,15 +602,6 @@ func (p *SelfPromptPlugin) updatePromptFromMessages(chatID int64, messages []tel
 	}
 }
 
-func hasExplicitStableContext(prompt string) bool {
-	for _, line := range strings.Split(prompt, "\n") {
-		if strings.EqualFold(strings.TrimSpace(line), "Stable context:") {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *SelfPromptPlugin) shouldBootstrapChat(chatID int64) bool {
 	var promptCount int
 	err := p.db.QueryRow(`SELECT COUNT(*) FROM prompts WHERE chat_id = ?`, chatID).Scan(&promptCount)
@@ -623,9 +614,13 @@ func (p *SelfPromptPlugin) shouldBootstrapChat(chatID int64) bool {
 	}
 
 	var factCount int
-	err = p.db.QueryRow(`SELECT COUNT(*) FROM person_facts WHERE chat_id = ?`, chatID).Scan(&factCount)
+	if chatmemory.IsCutover(context.Background(), p.db, chatID) {
+		err = p.db.QueryRow(`SELECT COUNT(*) FROM memory_entries WHERE chat_id=? AND kind IN ('chat_lore','person_fact') AND status='active'`, chatID).Scan(&factCount)
+	} else {
+		err = p.db.QueryRow(`SELECT COUNT(*) FROM person_facts WHERE chat_id = ?`, chatID).Scan(&factCount)
+	}
 	if err != nil {
-		log.Printf("[selfprompt] Error checking person facts for chat %d: %v", chatID, err)
+		log.Printf("[selfprompt] Error checking memory for chat %d: %v", chatID, err)
 		return false
 	}
 
@@ -789,23 +784,9 @@ func (p *SelfPromptPlugin) updatePersonFacts(chatID int64, messages []telebot.Me
 			continue
 		}
 
-		dossier := facts.ParseDossier(newFacts)
-		bodies := append([]string(nil), dossier.Identity...)
-		bodies = append(bodies, dossier.Interests...)
-		if len(bodies) == 0 {
-			bodies = []string{newFacts}
-		}
-		repo := chatmemory.NewRepository(p.db)
-		err = database.RetryWithBackoff(func() error {
-			return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-				if err := promptmgr.SavePersonFactsTx(context.Background(), tx, chatID, int64(user.ID), newFacts); err != nil {
-					return err
-				}
-				return repo.ReplacePersonFactsTx(context.Background(), tx, chatID, int64(user.ID), bodies, "selfprompt_person_facts")
-			})
-		})
+		err = promptmgr.SavePersonFacts(chatID, int64(user.ID), newFacts)
 		if err != nil {
-			log.Printf("[selfprompt] Error atomically saving person facts for chat %d user %d: %v", chatID, user.ID, err)
+			log.Printf("[selfprompt] Error saving person facts for chat %d user %d: %v", chatID, user.ID, err)
 		}
 	}
 }

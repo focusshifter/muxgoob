@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
@@ -144,7 +145,13 @@ func TestForgetTopicToolArchivesStructuredChatLore(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()
 	createToolTestTables(t, db)
-	insertPrompt(t, db, 100, 1, facts.RenderChatPrompt(&facts.ChatPrompt{}))
+	insertPrompt(t, db, 100, 1, facts.RenderChatPrompt(&facts.ChatPrompt{StableContext: []string{"preserved legacy lore"}}))
+	if err := chatmemory.EnsureSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO memory_migration_scopes(chat_id,state,updated_at) VALUES(100,'cutover',1)`); err != nil {
+		t.Fatal(err)
+	}
 
 	remember := NewRememberTopicTool(db, 100)
 	if _, err := remember.Execute(context.Background(), `{"topic":"Kyoto night walks"}`); err != nil {
@@ -171,6 +178,14 @@ func TestForgetTopicToolArchivesStructuredChatLore(t *testing.T) {
 	}
 	if status != string(chatmemory.Archived) {
 		t.Fatalf("expected archived status, got %s", status)
+	}
+	var promptCount int
+	var latestPrompt string
+	if err := db.QueryRow(`SELECT COUNT(*), prompt FROM prompts WHERE chat_id=100`).Scan(&promptCount, &latestPrompt); err != nil {
+		t.Fatal(err)
+	}
+	if promptCount != 1 || !strings.Contains(latestPrompt, "preserved legacy lore") {
+		t.Fatalf("cutover forget unexpectedly rewrote legacy prompt: count=%d prompt=%q", promptCount, latestPrompt)
 	}
 }
 

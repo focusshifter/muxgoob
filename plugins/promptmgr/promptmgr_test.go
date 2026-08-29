@@ -13,6 +13,78 @@ import (
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
 
+func TestSavePromptVersionMovesExplicitStableContextIntoStructuredLoreAfterCutover(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	originalDB := database.DB
+	database.DB = mockDB
+	defer func() { database.DB = originalDB }()
+	EnsureTables()
+	if _, err := mockDB.Exec(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT, data TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := chatmemory.EnsureSchema(mockDB); err != nil {
+		t.Fatal(err)
+	}
+	repo := chatmemory.NewRepository(mockDB)
+	if _, _, err := repo.Add(context.Background(), chatmemory.Entry{ChatID: 321, Kind: chatmemory.ChatLore, Body: "old lore", SourceType: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mockDB.Exec(`INSERT INTO prompts(chat_id,version,prompt,created_at) VALUES(321,1,'Reply style:
+- old
+
+Stable context:
+- stale legacy lore
+
+Avoid:
+- spoilers',0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mockDB.Exec(`INSERT INTO memory_migration_scopes(chat_id,state,updated_at) VALUES(321,'cutover',1)`); err != nil {
+		t.Fatal(err)
+	}
+	current, err := GetCurrentPrompt(321, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(current, "stale legacy lore") || !strings.Contains(current, "Reply style:") || !strings.Contains(current, "Avoid:") {
+		t.Fatalf("cutover prompt read retained legacy memory or damaged behavior: %q", current)
+	}
+
+	raw := "Reply style:\n- terse\n\nStable context:\n- focusshifter is a wizard\n- Ritual:\n\nAvoid:\n- spoilers"
+	if err := savePromptVersion(321, raw); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := mockDB.QueryRow(`SELECT prompt FROM prompts WHERE chat_id=321 ORDER BY version DESC LIMIT 1`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(stored, "Stable context:") || strings.Contains(stored, "focusshifter is a wizard") {
+		t.Fatalf("legacy stable context remained in new prompt row: %q", stored)
+	}
+	if !strings.Contains(stored, "Reply style:") || !strings.Contains(stored, "Avoid:") {
+		t.Fatalf("behavior sections were damaged: %q", stored)
+	}
+	entries, err := repo.List(context.Background(), chatmemory.Filter{ChatID: 321, Kind: chatmemory.ChatLore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Body == "old lore" || entries[1].Body == "old lore" {
+		t.Fatalf("expected exactly replacement lore, got %#v", entries)
+	}
+
+	if err := savePromptVersion(321, "Reply style:\n- friendlier"); err != nil {
+		t.Fatal(err)
+	}
+	entriesAfter, err := repo.List(context.Background(), chatmemory.Filter{ChatID: 321, Kind: chatmemory.ChatLore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entriesAfter) != 2 {
+		t.Fatalf("prompt without explicit Stable context changed lore: %#v", entriesAfter)
+	}
+}
+
 func TestPromptMgrPlugin_Process(t *testing.T) {
 	// Save original configs to restore later
 	originalConfigs := registry.Config
@@ -476,11 +548,12 @@ func TestPersonFactsCommandsUseStructuredMemoryAfterCutover(t *testing.T) {
 		t.Fatalf("expected structured replacement, got %#v", entries)
 	}
 	var latestLegacy string
-	if err := mockDB.QueryRow(`SELECT facts FROM person_facts WHERE chat_id=123 AND user_id=42 ORDER BY version DESC LIMIT 1`).Scan(&latestLegacy); err != nil {
-		t.Fatalf("reading compatibility facts: %v", err)
+	var legacyVersions int
+	if err := mockDB.QueryRow(`SELECT facts, COUNT(*) OVER () FROM person_facts WHERE chat_id=123 AND user_id=42 ORDER BY version DESC LIMIT 1`).Scan(&latestLegacy, &legacyVersions); err != nil {
+		t.Fatalf("reading preserved legacy facts: %v", err)
 	}
-	if latestLegacy != "updated structured fact" {
-		t.Fatalf("expected atomic legacy compatibility write, got %q", latestLegacy)
+	if latestLegacy != "legacy fact" || legacyVersions != 1 {
+		t.Fatalf("cutover update unexpectedly dual-wrote legacy facts: latest=%q versions=%d", latestLegacy, legacyVersions)
 	}
 }
 

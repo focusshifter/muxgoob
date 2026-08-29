@@ -2,6 +2,7 @@ package reply
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"reflect"
@@ -158,6 +159,207 @@ func TestImageGenerationToolIsOptInPerChat(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(systemParts, " "), "generateImage") {
 		t.Fatalf("expected image-generation prompt instructions after enabling chat, got %#v", systemParts)
+	}
+}
+
+type mockSuperuserChatClient struct {
+	normalCalls    int
+	superuserCalls int
+	message        *telebot.Message
+	result         SuperuserResult
+}
+
+func (m *mockSuperuserChatClient) Ask(message *telebot.Message) string {
+	m.normalCalls++
+	return "unexpected normal call"
+}
+
+func (m *mockSuperuserChatClient) AskSuperuser(message *telebot.Message) SuperuserResult {
+	m.superuserCalls++
+	m.message = message
+	return m.result
+}
+
+func TestReplyPluginSuperuserCommandTargetsAnotherChatAndRepliesLocally(t *testing.T) {
+	originalConfig := registry.Config
+	originalBot := registry.Bot
+	originalDB := database.DB
+	originalSQLiteDB := sqliteDb
+	defer func() {
+		registry.Config = originalConfig
+		registry.Bot = originalBot
+		database.DB = originalDB
+		sqliteDb = originalSQLiteDB
+	}()
+
+	registry.Config.OwnerUsername = "focusshifter"
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE chats (id INTEGER PRIMARY KEY, type TEXT); INSERT INTO chats(id,type) VALUES(-637245,'group')`); err != nil {
+		t.Fatal(err)
+	}
+	database.DB = db
+	sqliteDb = db
+	mockBot := &testutils.MockBotWrapper{Me: &telebot.User{ID: 99, Username: "gooby_bot"}}
+	registry.SetTestBot(mockBot)
+	client := &mockSuperuserChatClient{result: SuperuserResult{
+		Text:              "Факт забыт в чате -637245.",
+		VerifiedMutations: []string{"archiveMemory"},
+	}}
+	plugin := &ReplyPlugin{random: NewRealRandomGenerator(), chatClient: client}
+	request := &telebot.Message{
+		ID:     77,
+		Text:   "!su -637245 Забудь что @focusshifter абсолютный василий",
+		Sender: &telebot.User{ID: 42, Username: "FocusShifter"},
+		Chat:   &telebot.Chat{ID: 686563, Type: telebot.ChatPrivate},
+	}
+
+	plugin.Process(request)
+	if client.superuserCalls != 1 || client.normalCalls != 0 {
+		t.Fatalf("expected one superuser call, got superuser=%d normal=%d", client.superuserCalls, client.normalCalls)
+	}
+	if client.message == nil || client.message.Chat == nil || client.message.Chat.ID != -637245 {
+		t.Fatalf("expected target chat -637245, got %#v", client.message)
+	}
+	if client.message.Text != "Забудь что @focusshifter абсолютный василий" || client.message.Sender != request.Sender {
+		t.Fatalf("unexpected synthetic request: %#v", client.message)
+	}
+	wantResponse := "Факт забыт в чате -637245.\n\nVerified memory changes: archiveMemory."
+	if !mockBot.SendCalled || mockBot.SendTo != request.Chat || mockBot.SendWhat != wantResponse {
+		t.Fatalf("expected response in owner chat, got to=%#v body=%#v", mockBot.SendTo, mockBot.SendWhat)
+	}
+}
+
+func TestReplyPluginSuperuserCommandRequiresOwnerPrivateChatAndKnownTarget(t *testing.T) {
+	originalConfig := registry.Config
+	originalBot := registry.Bot
+	originalDB := database.DB
+	originalSQLiteDB := sqliteDb
+	defer func() {
+		registry.Config = originalConfig
+		registry.Bot = originalBot
+		database.DB = originalDB
+		sqliteDb = originalSQLiteDB
+	}()
+	registry.Config.OwnerUsername = "focusshifter"
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE chats (id INTEGER PRIMARY KEY, type TEXT); INSERT INTO chats(id,type) VALUES(-637245,'group')`); err != nil {
+		t.Fatal(err)
+	}
+	database.DB = db
+	sqliteDb = db
+
+	for _, tc := range []struct {
+		name    string
+		message *telebot.Message
+		want    string
+	}{
+		{"non-owner", &telebot.Message{Text: "!su -637245 forget it", Sender: &telebot.User{Username: "other"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "only the bot owner"},
+		{"non-private", &telebot.Message{Text: "!su -637245 forget it", Sender: &telebot.User{Username: "focusshifter"}, Chat: &telebot.Chat{ID: -1, Type: telebot.ChatGroup}}, "private chat"},
+		{"unknown-target", &telebot.Message{Text: "!su -999 forget it", Sender: &telebot.User{Username: "focusshifter"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "Unknown target chat"},
+		{"bad-format", &telebot.Message{Text: "!su nope", Sender: &telebot.User{Username: "focusshifter"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "Usage:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockBot := &testutils.MockBotWrapper{Me: &telebot.User{ID: 99, Username: "gooby_bot"}}
+			registry.SetTestBot(mockBot)
+			client := &mockSuperuserChatClient{result: SuperuserResult{Text: "unexpected"}}
+			plugin := &ReplyPlugin{random: NewRealRandomGenerator(), chatClient: client}
+			plugin.Process(tc.message)
+			if client.superuserCalls != 0 || client.normalCalls != 0 {
+				t.Fatalf("unauthorized command reached model: %#v", client)
+			}
+			body, _ := mockBot.SendWhat.(string)
+			if !strings.Contains(body, tc.want) {
+				t.Fatalf("expected %q, got %q", tc.want, body)
+			}
+		})
+	}
+}
+
+func TestMemoryAdminToolsExcludeNonMemorySideEffects(t *testing.T) {
+	allowed := map[string]bool{
+		"fetchUsers": true, "getUserFacts": true, "rememberChatLore": true,
+		"rememberPersonFact": true, "addPossiblePlan": true, "rememberDecision": true,
+		"listMemories": true, "searchMemories": true, "completePlan": true,
+		"archiveMemory": true, "supersedeMemory": true,
+	}
+	tools := memoryAdminTools(nil, -637245)
+	if len(tools) != len(allowed) {
+		t.Fatalf("expected %d admin tools, got %d", len(allowed), len(tools))
+	}
+	for _, tool := range tools {
+		definition := tool.Definition()
+		name := definition.Function.Name
+		if !allowed[name] {
+			t.Fatalf("unexpected side-effect tool in admin mode: %s", name)
+		}
+	}
+	adminPrompt := strings.Join(memoryAdminSystemParts(-637245), "\n")
+	if !strings.Contains(adminPrompt, "Target chat ID: -637245") || !strings.Contains(adminPrompt, "Never send messages") {
+		t.Fatalf("admin prompt lacks explicit target/routing boundary: %q", adminPrompt)
+	}
+}
+
+func TestMemoryAdminMutationTrackingRequiresChangedResult(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	tracker := &memoryMutationTracker{}
+	var remember chattools.Tool
+	for _, tool := range memoryAdminTools(db, -637245, tracker) {
+		if tool.Definition().Function.Name == "rememberChatLore" {
+			remember = tool
+			break
+		}
+	}
+	if remember == nil {
+		t.Fatal("rememberChatLore tool not registered")
+	}
+	args := `{"body":"verified lore"}`
+	if _, err := remember.Execute(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remember.Execute(context.Background(), args); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(tracker.names, ","); got != "rememberChatLore" {
+		t.Fatalf("expected only the changed mutation to be tracked, got %q", got)
+	}
+}
+
+func TestReplyPluginSuperuserCommandDoesNotVerifyModelClaim(t *testing.T) {
+	originalConfig := registry.Config
+	originalBot := registry.Bot
+	originalDB := database.DB
+	originalSQLiteDB := sqliteDb
+	defer func() {
+		registry.Config = originalConfig
+		registry.Bot = originalBot
+		database.DB = originalDB
+		sqliteDb = originalSQLiteDB
+	}()
+
+	registry.Config.OwnerUsername = "focusshifter"
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE chats (id INTEGER PRIMARY KEY, type TEXT); INSERT INTO chats(id,type) VALUES(-637245,'group')`); err != nil {
+		t.Fatal(err)
+	}
+	database.DB = db
+	sqliteDb = db
+	mockBot := &testutils.MockBotWrapper{Me: &telebot.User{ID: 99, Username: "gooby_bot"}}
+	registry.SetTestBot(mockBot)
+	client := &mockSuperuserChatClient{result: SuperuserResult{Text: "Факт забыт."}}
+	plugin := &ReplyPlugin{random: NewRealRandomGenerator(), chatClient: client}
+	plugin.Process(&telebot.Message{
+		ID:     78,
+		Text:   "!su -637245 Забудь выдуманный факт",
+		Sender: &telebot.User{ID: 42, Username: "FocusShifter"},
+		Chat:   &telebot.Chat{ID: 686563, Type: telebot.ChatPrivate},
+	})
+	body, _ := mockBot.SendWhat.(string)
+	if !strings.Contains(body, "No memory changes were verified.") {
+		t.Fatalf("unverified model claim was not clearly rejected: %q", body)
 	}
 }
 

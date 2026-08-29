@@ -477,6 +477,37 @@ func listPromptVersions(chatID int64, bot *registry.BotWrapper, message *telebot
 	sendPromptMessage(bot, message.Chat, response)
 }
 
+func savePromptVersion(chatID int64, prompt string) error {
+	if database.DB == nil {
+		return fmt.Errorf("database is not initialized")
+	}
+	if err := chatmemory.EnsureSchema(database.DB); err != nil {
+		return err
+	}
+	migrateStable := chatID != GLOBAL_CHAT_ID && chatmemory.IsCutover(context.Background(), database.DB, chatID) && chatmemory.HasLegacyStableContext(prompt)
+	storedPrompt := prompt
+	var stableBodies []string
+	if migrateStable {
+		stableBodies = chatmemory.ExtractLegacyStableContext(prompt)
+		storedPrompt = chatmemory.StripLegacyStableContext(prompt)
+	}
+	return database.RetryWithBackoff(func() error {
+		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			var nextVersion int
+			if err := tx.QueryRow(`SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`, chatID).Scan(&nextVersion); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT INTO prompts (chat_id, version, prompt, created_at) VALUES (?, ?, ?, ?)`, chatID, nextVersion, storedPrompt, time.Now().Unix()); err != nil {
+				return err
+			}
+			if migrateStable {
+				return chatmemory.NewRepository(database.DB).ReplaceChatLoreTx(context.Background(), tx, chatID, stableBodies, "promptmgr_stable_context")
+			}
+			return nil
+		})
+	})
+}
+
 func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, message *telebot.Message) {
 	log.Printf("[promptmgr] Updating prompt for chat %d", chatID)
 	// Ensure we're updating global prompt if it's a private chat with owner and global keyword is used
@@ -508,25 +539,7 @@ func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, mess
 		message.Sender.Username == registry.Config.OwnerUsername {
 
 		globalPrompt := strings.TrimPrefix(newPrompt, "global ")
-		err := database.RetryWithBackoff(func() error {
-			return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-				// Get the next version number for global prompt
-				var nextVersion int
-				err := tx.QueryRow(`
-					SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`,
-					GLOBAL_CHAT_ID).Scan(&nextVersion)
-				if err != nil {
-					return err
-				}
-
-				// Insert new global prompt
-				_, err = tx.Exec(`
-					INSERT INTO prompts (chat_id, version, prompt, created_at) 
-					VALUES (?, ?, ?, ?)`,
-					GLOBAL_CHAT_ID, nextVersion, globalPrompt, time.Now().Unix())
-				return err
-			})
-		})
+		err := savePromptVersion(GLOBAL_CHAT_ID, globalPrompt)
 
 		if err != nil {
 			sendPromptMessage(bot, message.Chat, "Error updating global prompt: "+err.Error())
@@ -537,26 +550,8 @@ func updatePrompt(chatID int64, newPrompt string, bot *registry.BotWrapper, mess
 		return
 	}
 
-	// Otherwise, update chat-specific prompt
-	err := database.RetryWithBackoff(func() error {
-		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			// Get the next version number
-			var nextVersion int
-			err := tx.QueryRow(`
-				SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`,
-				chatID).Scan(&nextVersion)
-			if err != nil {
-				return err
-			}
-
-			// Insert new prompt
-			_, err = tx.Exec(`
-				INSERT INTO prompts (chat_id, version, prompt, created_at) 
-				VALUES (?, ?, ?, ?)`,
-				chatID, nextVersion, newPrompt, time.Now().Unix())
-			return err
-		})
-	})
+	// Otherwise, update chat-specific prompt.
+	err := savePromptVersion(chatID, newPrompt)
 
 	if err != nil {
 		sendPromptMessage(bot, message.Chat, "Error updating prompt: "+err.Error())
@@ -583,26 +578,10 @@ func revertPrompt(chatID int64, version int, bot *registry.BotWrapper, message *
 		return
 	}
 
-	// Revert by inserting a new version with the same content
-	err = database.RetryWithBackoff(func() error {
-		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			// Get the next version number
-			var nextVersion int
-			err = tx.QueryRow(`
-				SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`,
-				chatID).Scan(&nextVersion)
-			if err != nil {
-				return err
-			}
-
-			// Insert new prompt based on the old version
-			_, err = tx.Exec(`
-				INSERT INTO prompts (chat_id, version, prompt, created_at) 
-				VALUES (?, ?, ?, ?)`,
-				chatID, nextVersion, prompt, time.Now().Unix())
-			return err
-		})
-	})
+	// Revert by inserting a new version with the same content. In cutover
+	// chats, an explicit legacy Stable context section is moved atomically into
+	// typed chat lore rather than revived as a runtime prompt dependency.
+	err = savePromptVersion(chatID, prompt)
 
 	if err != nil {
 		sendPromptMessage(bot, message.Chat, "Error reverting prompt: "+err.Error())
@@ -662,6 +641,7 @@ func splitMessage(text string, limit int) []string {
 // Returns combined global and chat-specific prompts if available, falls back to config
 func GetCurrentPrompt(chatID int64, fullPrompt bool) (string, error) {
 	log.Printf("[promptmgr] Getting current prompt for chat %d", chatID)
+	cutover := chatmemory.IsCutover(context.Background(), database.DB, chatID)
 
 	// Get global prompt if exists
 	var globalPrompt string
@@ -682,7 +662,6 @@ func GetCurrentPrompt(chatID int64, fullPrompt bool) (string, error) {
 	if err != nil && err != sql.ErrNoRows {
 		return "", fmt.Errorf("error retrieving chat prompt: %v", err)
 	}
-
 	// If no prompts found in DB, use config
 	if globalPrompt == "" && chatPrompt == "" {
 		log.Printf("[promptmgr] No prompts found in DB, using config")
@@ -694,6 +673,9 @@ func GetCurrentPrompt(chatID int64, fullPrompt bool) (string, error) {
 				break
 			}
 		}
+	}
+	if cutover {
+		chatPrompt = chatmemory.StripLegacyStableContext(chatPrompt)
 	}
 
 	// Combine prompts
@@ -712,8 +694,15 @@ func GetCurrentPrompt(chatID int64, fullPrompt bool) (string, error) {
 }
 
 func GetPersonFacts(chatID int64, userID int64) (string, error) {
-	if chatmemory.IsCutover(context.Background(), database.DB, chatID) {
-		results, err := getStructuredPersonFacts(chatID, []int64{userID})
+	return GetPersonFactsFromDB(database.DB, chatID, userID)
+}
+
+func GetPersonFactsFromDB(db *sql.DB, chatID int64, userID int64) (string, error) {
+	if db == nil {
+		return "", fmt.Errorf("database is not initialized")
+	}
+	if chatmemory.IsCutover(context.Background(), db, chatID) {
+		results, err := getStructuredPersonFacts(db, chatID, []int64{userID})
 		if err != nil {
 			return "", err
 		}
@@ -721,7 +710,7 @@ func GetPersonFacts(chatID int64, userID int64) (string, error) {
 	}
 
 	var facts string
-	err := database.DB.QueryRow(`
+	err := db.QueryRow(`
 		SELECT facts FROM person_facts
 		WHERE chat_id = ? AND user_id = ?
 		ORDER BY version DESC
@@ -741,7 +730,7 @@ func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error
 		return results, nil
 	}
 	if chatmemory.IsCutover(context.Background(), database.DB, chatID) {
-		return getStructuredPersonFacts(chatID, userIDs)
+		return getStructuredPersonFacts(database.DB, chatID, userIDs)
 	}
 
 	seen := make(map[int64]struct{}, len(userIDs))
@@ -798,7 +787,7 @@ func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error
 
 func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 	if chatmemory.IsCutover(context.Background(), database.DB, chatID) {
-		return getStructuredPersonFacts(chatID, nil)
+		return getStructuredPersonFacts(database.DB, chatID, nil)
 	}
 
 	results := make(map[int64]string)
@@ -849,22 +838,16 @@ func SavePersonFacts(chatID int64, userID int64, facts string) error {
 
 	bodies := personFactBodies(trimmedFacts)
 	return database.RetryWithBackoff(func() error {
-		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			ctx := context.Background()
-			if err := SavePersonFactsTx(ctx, tx, chatID, userID, trimmedFacts); err != nil {
-				return err
-			}
-			return chatmemory.NewRepository(database.DB).ReplacePersonFactsTx(ctx, tx, chatID, userID, bodies, "promptmgr_save_person_facts")
-		})
+		return chatmemory.NewRepository(database.DB).ReplacePersonFacts(context.Background(), chatID, userID, bodies, "promptmgr_save_person_facts")
 	})
 }
 
-func getStructuredPersonFacts(chatID int64, userIDs []int64) (map[int64]string, error) {
+func getStructuredPersonFacts(db *sql.DB, chatID int64, userIDs []int64) (map[int64]string, error) {
 	allowed := make(map[int64]struct{}, len(userIDs))
 	for _, userID := range userIDs {
 		allowed[userID] = struct{}{}
 	}
-	entries, err := chatmemory.NewRepository(database.DB).List(context.Background(), chatmemory.Filter{
+	entries, err := chatmemory.NewRepository(db).List(context.Background(), chatmemory.Filter{
 		ChatID: chatID,
 		Kind:   chatmemory.PersonFact,
 	})
@@ -909,8 +892,8 @@ func personFactBodies(raw string) []string {
 	return bodies
 }
 
-// SavePersonFactsTx appends a legacy compatibility version inside a caller-owned
-// transaction so canonical structured facts can be updated atomically with it.
+// SavePersonFactsTx appends one legacy-table version inside a caller-owned
+// transaction. Call it only for non-cutover scopes and explicit rollback tools.
 func SavePersonFactsTx(ctx context.Context, tx *sql.Tx, chatID int64, userID int64, rawFacts string) error {
 	if tx == nil {
 		return fmt.Errorf("transaction is required")

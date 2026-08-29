@@ -50,6 +50,47 @@ func TestTypedMemoryToolsRespectKindsAndChatScope(t *testing.T) {
 	}
 }
 
+func TestSearchMemoriesToolFiltersByChatSubjectKindAndQuery(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+	insertUser(t, db, 42, "focusshifter", "Victor", "")
+	if err := chatmemory.EnsureSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	repo := chatmemory.NewRepository(db)
+	subject := int64(42)
+	for _, entry := range []chatmemory.Entry{
+		{ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: "@focusshifter абсолютный василий", SourceType: "test"},
+		{ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: "@focusshifter любит ML", SourceType: "test"},
+		{ChatID: 100, Kind: chatmemory.ChatLore, Body: "Василий приносит чай", SourceType: "test"},
+		{ChatID: 200, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: "@focusshifter абсолютный василий", SourceType: "test"},
+	} {
+		if _, _, err := repo.Add(context.Background(), entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tool := NewSearchMemoriesTool(db, 100)
+	raw, err := tool.Execute(context.Background(), `{"query":"абсолютный василий","kind":"person_fact","subject_user_id":42}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Memories []chatmemory.Entry `json:"memories"`
+		Count    int                `json:"count"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 1 || len(payload.Memories) != 1 {
+		t.Fatalf("expected one scoped match, got %s", raw)
+	}
+	if payload.Memories[0].ChatID != 100 || payload.Memories[0].Body != "@focusshifter абсолютный василий" {
+		t.Fatalf("unexpected match: %#v", payload.Memories[0])
+	}
+}
+
 func memoryIDFromToolResult(t *testing.T, raw string) int64 {
 	t.Helper()
 	var payload struct {

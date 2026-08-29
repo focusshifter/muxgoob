@@ -292,6 +292,23 @@ func isLegacyHeading(trimmed string) bool {
 	return strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "* ")
 }
 
+// HasLegacyStableContext reports whether a prompt explicitly contains the
+// legacy Stable context section heading.
+func HasLegacyStableContext(raw string) bool {
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.EqualFold(strings.TrimSpace(line), "Stable context:") {
+			return true
+		}
+	}
+	return false
+}
+
+// ExtractLegacyStableContext returns the bullet bodies from an explicitly
+// headed legacy Stable context section.
+func ExtractLegacyStableContext(raw string) []string {
+	return extractExplicitStableContext(raw)
+}
+
 func extractExplicitStableContext(raw string) []string {
 	var result []string
 	inStable := false

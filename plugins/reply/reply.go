@@ -55,6 +55,15 @@ type ChatGptClient interface {
 	Ask(message *telebot.Message) string
 }
 
+type SuperuserResult struct {
+	Text              string
+	VerifiedMutations []string
+}
+
+type SuperuserChatGptClient interface {
+	AskSuperuser(message *telebot.Message) SuperuserResult
+}
+
 // RealChatGptClient implements ChatGptClient using the actual OpenAI API
 type RealChatGptClient struct{}
 
@@ -63,6 +72,70 @@ const actionOnlyReplyToken = "__GOOBY_ACTION_ONLY__"
 func (c *RealChatGptClient) Ask(message *telebot.Message) string {
 	// The actual implementation will be moved from askChatGpt
 	return askChatGpt(message)
+}
+
+func (c *RealChatGptClient) AskSuperuser(message *telebot.Message) SuperuserResult {
+	return askSuperuserChatGpt(message)
+}
+
+type memoryMutationTracker struct {
+	names []string
+}
+
+type trackedMemoryMutationTool struct {
+	chattools.Tool
+	tracker *memoryMutationTracker
+}
+
+func (t *trackedMemoryMutationTool) Execute(ctx context.Context, args string) (string, error) {
+	result, err := t.Tool.Execute(ctx, args)
+	if err != nil || t.tracker == nil {
+		return result, err
+	}
+	var payload struct {
+		Changed bool `json:"changed"`
+	}
+	if json.Unmarshal([]byte(result), &payload) == nil && payload.Changed {
+		name := t.Tool.Definition().Function.Name
+		t.tracker.names = append(t.tracker.names, name)
+	}
+	return result, nil
+}
+
+func memoryAdminTools(db *sql.DB, chatID int64, trackers ...*memoryMutationTracker) []chattools.Tool {
+	readOnly := []chattools.Tool{
+		chattools.NewFetchUsersTool(db, chatID),
+		chattools.NewGetUserFactsTool(db, chatID),
+		chattools.NewListMemoriesTool(db, chatID),
+		chattools.NewSearchMemoriesTool(db, chatID),
+	}
+	mutations := []chattools.Tool{
+		chattools.NewRememberChatLoreTool(db, chatID),
+		chattools.NewRememberPersonFactTool(db, chatID),
+		chattools.NewAddPossiblePlanTool(db, chatID),
+		chattools.NewRememberDecisionTool(db, chatID),
+		chattools.NewCompletePlanTool(db, chatID),
+		chattools.NewArchiveMemoryTool(db, chatID),
+		chattools.NewSupersedeMemoryTool(db, chatID),
+	}
+	if len(trackers) == 0 || trackers[0] == nil {
+		return append(readOnly, mutations...)
+	}
+	for _, tool := range mutations {
+		readOnly = append(readOnly, &trackedMemoryMutationTool{Tool: tool, tracker: trackers[0]})
+	}
+	return readOnly
+}
+
+func memoryAdminSystemParts(chatID int64) []string {
+	return []string{
+		fmt.Sprintf("OWNER MEMORY ADMIN MODE. Target chat ID: %d. Perform only memory inspection and memory mutations for this exact target chat.", chatID),
+		"The authenticated owner issued the instruction from a different private chat. Never send messages, polls, images, or other actions to the target chat. Your final textual report will be routed back to the owner's current chat by host code.",
+		"For a named person, call fetchUsers to resolve subject_user_id. To forget or replace an existing memory, call searchMemories with distinctive words and the subject when known, then call archiveMemory or supersedeMemory with the matching ID.",
+		"Do not claim success unless the mutation tool succeeds. If several memories match ambiguously, report the candidates instead of changing all of them.",
+		"Use rememberChatLore for shared lore, rememberPersonFact for one person, addPossiblePlan for tentative ideas, and rememberDecision only for agreed commitments.",
+		"Reply briefly in the owner's language and mention the target chat ID.",
+	}
 }
 
 func appendImageGenerationToolIfEnabled(chatID int64, tools []chattools.Tool, toolSystemParts []string) ([]chattools.Tool, []string, *chattools.GenerateImageTool) {
@@ -93,6 +166,7 @@ var (
 	dotkaExp        *regexp.Regexp
 	majorExp        *regexp.Regexp
 	replyCmdExp     *regexp.Regexp
+	superuserCmdExp *regexp.Regexp
 	spotifyAlbumExp *regexp.Regexp
 	mentionExp      *regexp.Regexp
 )
@@ -105,6 +179,7 @@ func init() {
 	dotkaExp = regexp.MustCompile(`(?i)^.*(dota|дота|дот((ец)|(к)+(а|у))).*$`)
 	majorExp = regexp.MustCompile(`(?i)^.*(товаризч|(товарищ(ь)?)\s+(майор|генерал|старшина|адмирал|капитан)).*$`)
 	replyCmdExp = regexp.MustCompile(`^!reply\s+(-?\d+)(?:\s+(.+))?$`)
+	superuserCmdExp = regexp.MustCompile(`(?is)^!su\s+(-?\d+)\s+(.+)$`)
 	spotifyAlbumExp = regexp.MustCompile(`https://open\.spotify\.com/album/([a-zA-Z0-9]+)`)
 	mentionExp = regexp.MustCompile(`(?i)@([a-z0-9_]{3,})`)
 
@@ -153,8 +228,12 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 
 	maybeQueueImageMetadata(message)
 
-	// Check for !reply command
+	// Check for owner-only cross-chat memory administration before ordinary routing.
 	messageText := messagePromptText(message)
+	if fields := strings.Fields(messageText); len(fields) > 0 && strings.EqualFold(fields[0], "!su") {
+		p.processSuperuserCommand(message, messageText)
+		return
+	}
 	if messageText != "" {
 		if matches := replyCmdExp.FindStringSubmatch(messageText); matches != nil {
 			// Only process private messages from the owner
@@ -327,6 +406,73 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			}
 		}
 	}
+}
+
+func (p *ReplyPlugin) processSuperuserCommand(message *telebot.Message, messageText string) {
+	bot := registry.Bot
+	if bot == nil || message == nil || message.Chat == nil {
+		return
+	}
+	if !isBotSuperAdmin(message) {
+		sendReplyWithLog(bot, message.Chat, "Sorry, only the bot owner can use !su.", replyOptionsForMessage(message))
+		return
+	}
+	if message.Chat.Type != telebot.ChatPrivate {
+		sendReplyWithLog(bot, message.Chat, "The !su command is available only in the owner's private chat.", replyOptionsForMessage(message))
+		return
+	}
+	matches := superuserCmdExp.FindStringSubmatch(strings.TrimSpace(messageText))
+	if matches == nil {
+		sendReplyWithLog(bot, message.Chat, "Usage: !su <chat_id> <memory instruction>", replyOptionsForMessage(message))
+		return
+	}
+	targetChatID, err := strconv.ParseInt(matches[1], 10, 64)
+	if err != nil || targetChatID == 0 {
+		sendReplyWithLog(bot, message.Chat, "Invalid target chat ID.", replyOptionsForMessage(message))
+		return
+	}
+	instruction := strings.TrimSpace(matches[2])
+	if instruction == "" {
+		sendReplyWithLog(bot, message.Chat, "Usage: !su <chat_id> <memory instruction>", replyOptionsForMessage(message))
+		return
+	}
+	if sqliteDb == nil {
+		sendReplyWithLog(bot, message.Chat, "Database is not initialized.", replyOptionsForMessage(message))
+		return
+	}
+	var targetType string
+	if err := sqliteDb.QueryRow(`SELECT type FROM chats WHERE id=?`, targetChatID).Scan(&targetType); err == sql.ErrNoRows {
+		sendReplyWithLog(bot, message.Chat, fmt.Sprintf("Unknown target chat %d.", targetChatID), replyOptionsForMessage(message))
+		return
+	} else if err != nil {
+		log.Printf("[reply] !su target lookup failed chat=%d: %v", targetChatID, err)
+		sendReplyWithLog(bot, message.Chat, "Could not validate the target chat.", replyOptionsForMessage(message))
+		return
+	}
+	log.Printf("[reply] accepted !su owner=%s source_chat=%d target_chat=%d", message.Sender.Username, message.Chat.ID, targetChatID)
+	client, ok := p.chatClient.(SuperuserChatGptClient)
+	if !ok {
+		log.Printf("[reply] Chat client does not support !su")
+		sendReplyWithLog(bot, message.Chat, "Superuser memory mode is unavailable.", replyOptionsForMessage(message))
+		return
+	}
+	targetMessage := &telebot.Message{
+		Text:   instruction,
+		Sender: message.Sender,
+		Chat:   &telebot.Chat{ID: targetChatID, Type: telebot.ChatType(targetType)},
+	}
+	_ = bot.Notify(message.Chat, telebot.Typing)
+	result := client.AskSuperuser(targetMessage)
+	response := sanitizeReplyText(result.Text)
+	if response == "" {
+		response = fmt.Sprintf("Memory command for chat %d returned no model report.", targetChatID)
+	}
+	if len(result.VerifiedMutations) > 0 {
+		response = strings.TrimSpace(response + fmt.Sprintf("\n\nVerified memory changes: %s.", strings.Join(result.VerifiedMutations, ", ")))
+	} else {
+		response = strings.TrimSpace(response + "\n\nNo memory changes were verified.")
+	}
+	sendReplyWithLog(bot, message.Chat, response, replyOptionsForMessage(message))
 }
 
 func isActionOnlyReply(replyText string) bool {
@@ -982,8 +1128,7 @@ func personFactAliases(chatID, userID int64) []string {
 	if sqliteDb == nil || userID == 0 {
 		return nil
 	}
-	var raw string
-	err := sqliteDb.QueryRow(`SELECT facts FROM person_facts WHERE chat_id = ? AND user_id = ? ORDER BY version DESC LIMIT 1`, chatID, userID).Scan(&raw)
+	raw, err := promptmgr.GetPersonFactsFromDB(sqliteDb, chatID, userID)
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return nil
 	}
@@ -1568,7 +1713,17 @@ func runImagePromptComposer(ctx context.Context, client chattools.ChatCompletion
 }
 
 // askChatGpt is a variable function that can be replaced in tests
+var askSuperuserChatGpt = func(message *telebot.Message) SuperuserResult {
+	tracker := &memoryMutationTracker{}
+	text := askChatGptWithMode(message, true, tracker)
+	return SuperuserResult{Text: text, VerifiedMutations: append([]string(nil), tracker.names...)}
+}
+
 var askChatGpt = func(message *telebot.Message) string {
+	return askChatGptWithMode(message, false, nil)
+}
+
+func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTracker *memoryMutationTracker) string {
 	// Safety check for test environment
 	if message == nil {
 		log.Printf("[reply] Message is nil in askChatGpt")
@@ -1576,11 +1731,13 @@ var askChatGpt = func(message *telebot.Message) string {
 	}
 
 	question := messagePromptText(message)
-	if imageContext, imageFallback, handled := maybeBuildImageInspectionContext(message, question); handled {
-		if imageFallback != "" {
-			return imageFallback
+	if !memoryAdmin {
+		if imageContext, imageFallback, handled := maybeBuildImageInspectionContext(message, question); handled {
+			if imageFallback != "" {
+				return imageFallback
+			}
+			question = strings.TrimSpace(strings.Join([]string{question, "", imageContext}, "\n"))
 		}
-		question = strings.TrimSpace(strings.Join([]string{question, "", imageContext}, "\n"))
 	}
 
 	// No need to check if registry.Config is initialized as it's not a pointer type
@@ -1636,16 +1793,17 @@ var askChatGpt = func(message *telebot.Message) string {
 		return ""
 	}
 
-	systemMessage, err := promptmgr.GetCurrentPrompt(message.Chat.ID, true)
-	if err != nil {
-		log.Printf("[reply] Error getting prompt: %v", err)
-		return ""
-	}
-	if chatmemory.IsCutover(context.Background(), sqliteDb, message.Chat.ID) {
-		systemMessage = chatmemory.StripLegacyStableContext(systemMessage)
+	var systemMessage string
+	var err error
+	if !memoryAdmin {
+		systemMessage, err = promptmgr.GetCurrentPrompt(message.Chat.ID, true)
+		if err != nil {
+			log.Printf("[reply] Error getting prompt: %v", err)
+			return ""
+		}
 	}
 	structuredContext := ""
-	if sqliteDb != nil {
+	if sqliteDb != nil && !memoryAdmin {
 		subjects := []int64(nil)
 		if message.Sender != nil {
 			subjects = []int64{int64(message.Sender.ID)}
@@ -1654,66 +1812,84 @@ var askChatGpt = func(message *telebot.Message) string {
 		structuredContext, memoryErr = chatmemory.NewRepository(sqliteDb).BuildContext(context.Background(), message.Chat.ID, subjects)
 		if memoryErr != nil {
 			log.Printf("[reply] Error building structured memory context: %v", memoryErr)
-		} else if structuredContext != "" {
+		} else if structuredContext != "" && !memoryAdmin {
 			systemMessage = strings.TrimSpace(systemMessage + "\n\n" + structuredContext)
 		}
+	}
+	if memoryAdmin {
+		// Cross-chat administration must not inherit target-chat roleplay,
+		// behavior rules, or stored text as system instructions. Memory is
+		// inspected explicitly through scoped tools instead.
+		systemMessage = ""
 	}
 
 	imageMemory := strings.TrimSpace(imageStableContext(systemMessage) + "\n" + structuredContext)
 
-	pollTool := chattools.NewSendPollTool(message.Chat.ID)
+	var pollTool *chattools.SendPollTool
 	var imageTool *chattools.GenerateImageTool
-	tools := []chattools.Tool{
-		chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
-		chattools.NewChatHistoryBoundsTool(sqliteDb, message.Chat.ID),
-		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
-		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
-		chattools.NewRememberChatLoreTool(sqliteDb, message.Chat.ID),
-		chattools.NewRememberPersonFactTool(sqliteDb, message.Chat.ID),
-		chattools.NewAddPossiblePlanTool(sqliteDb, message.Chat.ID),
-		chattools.NewRememberDecisionTool(sqliteDb, message.Chat.ID),
-		chattools.NewListMemoriesTool(sqliteDb, message.Chat.ID),
-		chattools.NewCompletePlanTool(sqliteDb, message.Chat.ID),
-		chattools.NewArchiveMemoryTool(sqliteDb, message.Chat.ID),
-		chattools.NewSupersedeMemoryTool(sqliteDb, message.Chat.ID),
-		// Backward-compatible aliases for one transition release.
-		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
-		chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
-		pollTool,
-	}
-	toolSystemParts := []string{
-		"You can call tools when they are needed.",
-		"Avoid markdown. If formatting is needed, use Telegram markdown only.",
-		"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
-		"After sendPoll succeeds, do not send any follow-up confirmation text.",
+	var tools []chattools.Tool
+	var toolSystemParts []string
+	if memoryAdmin {
+		tools = memoryAdminTools(sqliteDb, message.Chat.ID, mutationTracker)
+		toolSystemParts = memoryAdminSystemParts(message.Chat.ID)
+	} else {
+		pollTool = chattools.NewSendPollTool(message.Chat.ID)
+		tools = []chattools.Tool{
+			chattools.NewFetchUsersTool(sqliteDb, message.Chat.ID),
+			chattools.NewChatHistoryBoundsTool(sqliteDb, message.Chat.ID),
+			chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
+			chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
+			chattools.NewRememberChatLoreTool(sqliteDb, message.Chat.ID),
+			chattools.NewRememberPersonFactTool(sqliteDb, message.Chat.ID),
+			chattools.NewAddPossiblePlanTool(sqliteDb, message.Chat.ID),
+			chattools.NewRememberDecisionTool(sqliteDb, message.Chat.ID),
+			chattools.NewListMemoriesTool(sqliteDb, message.Chat.ID),
+			chattools.NewSearchMemoriesTool(sqliteDb, message.Chat.ID),
+			chattools.NewCompletePlanTool(sqliteDb, message.Chat.ID),
+			chattools.NewArchiveMemoryTool(sqliteDb, message.Chat.ID),
+			chattools.NewSupersedeMemoryTool(sqliteDb, message.Chat.ID),
+			// Preserve the current-chat natural-language memory aliases. Their
+			// cutover path is structured-only; typed tools remain preferred.
+			chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
+			chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
+			pollTool,
+		}
+		toolSystemParts = []string{
+			"You can call tools when they are needed.",
+			"Avoid markdown. If formatting is needed, use Telegram markdown only.",
+			"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
+			"After sendPoll succeeds, do not send any follow-up confirmation text.",
+		}
 	}
 	if directive := superAdminDirective(message); directive != "" {
 		toolSystemParts = append(toolSystemParts, directive)
 	}
-	if registry.GetImageGenerationEnabled(message.Chat.ID) {
+	if !memoryAdmin && registry.GetImageGenerationEnabled(message.Chat.ID) {
 		tools, toolSystemParts, imageTool = appendImageGenerationToolIfEnabled(message.Chat.ID, tools, toolSystemParts)
 		if imageTool != nil {
 			imageTool.SetOnStart(func() { reactToImageRequest(message) })
 		}
 	}
-	forceSearch := shouldForceSearchMessages(question)
-	forceHistoryBounds := shouldForceHistoryBounds(question)
+	forceSearch := !memoryAdmin && shouldForceSearchMessages(question)
+	forceHistoryBounds := !memoryAdmin && shouldForceHistoryBounds(question)
 	toolRegistry := chattools.NewRegistry(tools...)
-	toolSystemParts = append(toolSystemParts,
-		currentDateTimeContext(time.Now(), registry.Config.TimeLoc),
-		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
-		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
-		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
-		"Store durable memory by type: rememberChatLore for shared traditions/rules, rememberPersonFact for one person, addPossiblePlan for uncommitted ideas/places/purchases, and rememberDecision only for agreed commitments. Never put a possible plan into a schedule or decision automatically.",
-		"Use listMemories before completePlan, archiveMemory, or supersedeMemory when you do not know the memory ID. rememberTopic and forgetTopic are legacy compatibility aliases; prefer the typed memory tools.",
-		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
-		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
-		"Use getChatHistoryBounds for questions asking for the first, oldest, earliest, latest, or total stored chat history; do not infer chronological bounds from a topic search.",
-		"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill. For questions about when a topic was first discussed or mentioned, call searchMessages with sort set to oldest.",
-		"For questions about prior discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering. For chronological bounds, call getChatHistoryBounds instead.",
-		"Treat the prefill as recent context only, not authoritative chat history.",
-		"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
-	)
+	toolSystemParts = append(toolSystemParts, currentDateTimeContext(time.Now(), registry.Config.TimeLoc))
+	if !memoryAdmin {
+		toolSystemParts = append(toolSystemParts,
+			"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
+			"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
+			"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
+			"Store durable memory by type: rememberChatLore for shared traditions/rules, rememberPersonFact for one person, addPossiblePlan for uncommitted ideas/places/purchases, and rememberDecision only for agreed commitments. Never put a possible plan into a schedule or decision automatically.",
+			"Use searchMemories before completePlan, archiveMemory, or supersedeMemory when you do not know the memory ID. Keep rememberTopic and forgetTopic only for current-chat shared lore; use typed person-fact tools for facts about people.",
+			"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
+			"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
+			"Use getChatHistoryBounds for questions asking for the first, oldest, earliest, latest, or total stored chat history; do not infer chronological bounds from a topic search.",
+			"Use searchMessages for questions that require looking up prior messages instead of guessing from the prefill. For questions about when a topic was first discussed or mentioned, call searchMessages with sort set to oldest.",
+			"For questions about prior discussions, whether something was discussed before, who said something, finding old messages, or what someone thinks based on chat history, you must call searchMessages before answering. For chronological bounds, call getChatHistoryBounds instead.",
+			"Treat the prefill as recent context only, not authoritative chat history.",
+			"When using searchMessages for a topic, generate full-word variants yourself when useful, including transliterations, spacing variants, alternate spellings, abbreviations, and closely related names.",
+		)
+	}
 	if instruction := botImageReplyInstruction(message); instruction != "" {
 		toolSystemParts = append(toolSystemParts, instruction)
 	}
@@ -1726,10 +1902,15 @@ var askChatGpt = func(message *telebot.Message) string {
 		botID = registry.Bot.Bot.Me.ID
 	}
 
-	members := fetchPrefillMembers(message.Chat.ID)
+	members := []string(nil)
+	if !memoryAdmin {
+		members = fetchPrefillMembers(message.Chat.ID)
+	}
 
-	isImageGenerationRequest := shouldIsolateImageGenerationPrompt(question)
-	if isImageGenerationRequest {
+	isImageGenerationRequest := !memoryAdmin && shouldIsolateImageGenerationPrompt(question)
+	if memoryAdmin {
+		userMessage = question
+	} else if isImageGenerationRequest {
 		imageQuestion := imageQuestionWithAuthorReference(question, message)
 		if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
@@ -1829,7 +2010,7 @@ var askChatGpt = func(message *telebot.Message) string {
 		}
 	}
 
-	if pollTool.WasSent() || imageTool.WasSent() {
+	if (pollTool != nil && pollTool.WasSent()) || (imageTool != nil && imageTool.WasSent()) {
 		return actionOnlyReplyToken
 	}
 

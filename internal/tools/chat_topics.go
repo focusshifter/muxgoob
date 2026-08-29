@@ -126,11 +126,14 @@ func (t *RememberTopicTool) Execute(ctx context.Context, args string) (string, e
 	if err != nil {
 		return "", err
 	}
-	currentPrompt, _, promptErr := getLatestChatPrompt(t.db, t.chatID)
-	if promptErr != nil {
-		return "", promptErr
+	stableContext := []string{entry.Body}
+	if !chatmemory.IsCutover(ctx, t.db, t.chatID) {
+		currentPrompt, _, promptErr := getLatestChatPrompt(t.db, t.chatID)
+		if promptErr != nil {
+			return "", promptErr
+		}
+		stableContext = append(stableContext, facts.ParseChatPrompt(currentPrompt).StableContext...)
 	}
-	stableContext := append([]string{entry.Body}, facts.ParseChatPrompt(currentPrompt).StableContext...)
 	return marshalJSON(chatTopicResult{Action: "remember", Topic: topic, Changed: changed, Added: entry.Body, StableContext: stableContext}), nil
 }
 
@@ -152,9 +155,15 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("topic is required")
 	}
 
-	currentPrompt, currentVersion, err := getLatestChatPrompt(t.db, t.chatID)
-	if err != nil {
-		return "", err
+	cutover := chatmemory.IsCutover(ctx, t.db, t.chatID)
+	currentPrompt := ""
+	currentVersion := 0
+	if !cutover {
+		var err error
+		currentPrompt, currentVersion, err = getLatestChatPrompt(t.db, t.chatID)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	parsed := facts.ParseChatPrompt(currentPrompt)
@@ -218,7 +227,7 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 		}
 	}
 	version := 0
-	if currentPrompt != "" {
+	if !cutover && currentPrompt != "" {
 		updatedPrompt := facts.RenderChatPrompt(parsed)
 		version = currentVersion + 1
 		if _, err := tx.ExecContext(ctx, `INSERT INTO prompts(chat_id,version,prompt,created_at) VALUES(?,?,?,?)`, t.chatID, version, updatedPrompt, time.Now().Unix()); err != nil {

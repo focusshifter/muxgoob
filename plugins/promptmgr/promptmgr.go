@@ -13,6 +13,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/registry"
 	factsutil "github.com/focusshifter/muxgoob/utils/facts"
 )
@@ -711,6 +712,14 @@ func GetCurrentPrompt(chatID int64, fullPrompt bool) (string, error) {
 }
 
 func GetPersonFacts(chatID int64, userID int64) (string, error) {
+	if chatmemory.IsCutover(context.Background(), database.DB, chatID) {
+		results, err := getStructuredPersonFacts(chatID, []int64{userID})
+		if err != nil {
+			return "", err
+		}
+		return results[userID], nil
+	}
+
 	var facts string
 	err := database.DB.QueryRow(`
 		SELECT facts FROM person_facts
@@ -730,6 +739,9 @@ func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error
 	results := make(map[int64]string)
 	if len(userIDs) == 0 {
 		return results, nil
+	}
+	if chatmemory.IsCutover(context.Background(), database.DB, chatID) {
+		return getStructuredPersonFacts(chatID, userIDs)
 	}
 
 	seen := make(map[int64]struct{}, len(userIDs))
@@ -785,6 +797,10 @@ func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error
 }
 
 func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
+	if chatmemory.IsCutover(context.Background(), database.DB, chatID) {
+		return getStructuredPersonFacts(chatID, nil)
+	}
+
 	results := make(map[int64]string)
 	rows, err := database.DB.Query(`
 		SELECT pf.user_id, pf.facts
@@ -819,11 +835,78 @@ func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 }
 
 func SavePersonFacts(chatID int64, userID int64, facts string) error {
+	trimmedFacts := factsutil.EnforcePersonFactsBudgets(facts)
+	if trimmedFacts == "" {
+		return nil
+	}
+	if !chatmemory.IsCutover(context.Background(), database.DB, chatID) {
+		return database.RetryWithBackoff(func() error {
+			return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+				return SavePersonFactsTx(context.Background(), tx, chatID, userID, trimmedFacts)
+			})
+		})
+	}
+
+	bodies := personFactBodies(trimmedFacts)
 	return database.RetryWithBackoff(func() error {
 		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			return SavePersonFactsTx(context.Background(), tx, chatID, userID, facts)
+			ctx := context.Background()
+			if err := SavePersonFactsTx(ctx, tx, chatID, userID, trimmedFacts); err != nil {
+				return err
+			}
+			return chatmemory.NewRepository(database.DB).ReplacePersonFactsTx(ctx, tx, chatID, userID, bodies, "promptmgr_save_person_facts")
 		})
 	})
+}
+
+func getStructuredPersonFacts(chatID int64, userIDs []int64) (map[int64]string, error) {
+	allowed := make(map[int64]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		allowed[userID] = struct{}{}
+	}
+	entries, err := chatmemory.NewRepository(database.DB).List(context.Background(), chatmemory.Filter{
+		ChatID: chatID,
+		Kind:   chatmemory.PersonFact,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving structured person facts: %v", err)
+	}
+	grouped := make(map[int64][]string)
+	for _, entry := range entries {
+		if entry.SubjectUserID == nil {
+			continue
+		}
+		userID := *entry.SubjectUserID
+		if len(allowed) > 0 {
+			if _, ok := allowed[userID]; !ok {
+				continue
+			}
+		}
+		body := strings.TrimSpace(entry.Body)
+		if body != "" {
+			grouped[userID] = append(grouped[userID], body)
+		}
+	}
+	results := make(map[int64]string, len(grouped))
+	for userID, bodies := range grouped {
+		var lines []string
+		for _, body := range bodies {
+			lines = append(lines, "- "+body)
+		}
+		results[userID] = "Identity:\n" + strings.Join(lines, "\n")
+	}
+	return results, nil
+}
+
+func personFactBodies(raw string) []string {
+	trimmed := factsutil.EnforcePersonFactsBudgets(raw)
+	dossier := factsutil.ParseDossier(trimmed)
+	bodies := append([]string(nil), dossier.Identity...)
+	bodies = append(bodies, dossier.Interests...)
+	if len(bodies) == 0 && trimmed != "" {
+		bodies = []string{trimmed}
+	}
+	return bodies
 }
 
 // SavePersonFactsTx appends a legacy compatibility version inside a caller-owned

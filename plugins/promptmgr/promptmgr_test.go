@@ -1,12 +1,14 @@
 package promptmgr
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
@@ -401,6 +403,85 @@ func TestPromptMgrPlugin_ProcessPersonFactCommands(t *testing.T) {
 			t.Fatalf("expected owner error, got %q", messageText)
 		}
 	})
+}
+
+func TestPersonFactsCommandsUseStructuredMemoryAfterCutover(t *testing.T) {
+	originalConfigs := registry.Config
+	defer func() { registry.Config = originalConfigs }()
+	registry.Config.OwnerUsername = "test_owner"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	EnsureTables()
+	if err := chatmemory.EnsureSchema(mockDB); err != nil {
+		t.Fatalf("EnsureSchema failed: %v", err)
+	}
+	if _, err := mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY,
+			username TEXT,
+			first_name TEXT,
+			last_name TEXT,
+			data TEXT
+		);
+		INSERT INTO users (id, username, first_name, last_name)
+		VALUES (42, 'alice', 'Alice', 'Liddell');
+	`); err != nil {
+		t.Fatalf("creating users: %v", err)
+	}
+	if err := SavePersonFacts(123, 42, "legacy fact"); err != nil {
+		t.Fatalf("saving legacy facts: %v", err)
+	}
+	repo := chatmemory.NewRepository(mockDB)
+	if err := repo.ReplacePersonFacts(context.Background(), 123, 42, []string{"structured fact"}, "test"); err != nil {
+		t.Fatalf("saving structured facts: %v", err)
+	}
+	if _, err := mockDB.Exec(`INSERT INTO memory_migration_scopes(chat_id,state,updated_at) VALUES (123,'cutover',1)`); err != nil {
+		t.Fatalf("marking cutover: %v", err)
+	}
+
+	mockBot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(mockBot)
+	plugin := &PromptMgrPlugin{}
+	plugin.Process(&telebot.Message{
+		Text:   "!personfacts 123",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{ID: 999, Type: telebot.ChatPrivate},
+	})
+	messageText, _ := mockBot.SendWhat.(string)
+	if !strings.Contains(messageText, "structured fact") || strings.Contains(messageText, "legacy fact") {
+		t.Fatalf("expected structured-only list output, got %q", messageText)
+	}
+
+	mockBot.SendCalled = false
+	plugin.Process(&telebot.Message{
+		Text:   "!personfact 123 @alice updated structured fact",
+		Sender: &telebot.User{Username: "test_owner"},
+		Chat:   &telebot.Chat{ID: 999, Type: telebot.ChatPrivate},
+	})
+	if !mockBot.SendCalled {
+		t.Fatal("expected update acknowledgement")
+	}
+	subjectID := int64(42)
+	entries, err := repo.List(context.Background(), chatmemory.Filter{
+		ChatID:        123,
+		Kind:          chatmemory.PersonFact,
+		SubjectUserID: &subjectID,
+	})
+	if err != nil {
+		t.Fatalf("listing structured facts: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Body != "updated structured fact" {
+		t.Fatalf("expected structured replacement, got %#v", entries)
+	}
+	var latestLegacy string
+	if err := mockDB.QueryRow(`SELECT facts FROM person_facts WHERE chat_id=123 AND user_id=42 ORDER BY version DESC LIMIT 1`).Scan(&latestLegacy); err != nil {
+		t.Fatalf("reading compatibility facts: %v", err)
+	}
+	if latestLegacy != "updated structured fact" {
+		t.Fatalf("expected atomic legacy compatibility write, got %q", latestLegacy)
+	}
 }
 
 func TestSplitMessage(t *testing.T) {

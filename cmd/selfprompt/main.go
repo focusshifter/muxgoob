@@ -93,7 +93,7 @@ func main() {
 
 	// Initialize database
 	var err error
-	database.DB, err = sql.Open("sqlite3", dbPath+"?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared")
+	database.DB, err = sql.Open("sqlite3", dbPath+"?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared&_foreign_keys=on")
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

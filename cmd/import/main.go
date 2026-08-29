@@ -193,7 +193,7 @@ func main() {
 	// Open database connection
 	var db *sql.DB
 	if !dryRun {
-		db, err = sql.Open("sqlite3", dbFile+"?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared")
+		db, err = sql.Open("sqlite3", dbFile+"?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared&_foreign_keys=on")
 		if err != nil {
 			log.Fatalf("Failed to open database: %v", err)
 		}

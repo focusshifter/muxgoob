@@ -17,10 +17,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
+	"github.com/focusshifter/muxgoob/database"
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
@@ -116,10 +117,11 @@ func init() {
 }
 
 func (p *ReplyPlugin) Start(_ interface{}) {
-	var err error
-	sqliteDb, err = sql.Open("sqlite3", "db/muxgoob.sqlite")
-	if err != nil {
-		log.Fatal("Failed to open SQLite DB:", err)
+	// The application owns one configured SQLite pool. Plugins must never open
+	// independent handles with different WAL/busy-timeout settings.
+	sqliteDb = database.DB
+	if sqliteDb == nil {
+		log.Printf("[reply] Database is not initialized")
 	}
 }
 
@@ -823,10 +825,31 @@ func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMe
 		return ""
 	}
 
-	factMap, err := promptmgr.GetPersonFactsMulti(chatID, orderedUserIDs)
-	if err != nil {
-		log.Printf("[reply] Error retrieving person facts: %v", err)
-		return ""
+	factMap := make(map[int64]string, len(orderedUserIDs))
+	if chatmemory.IsCutover(context.Background(), sqliteDb, chatID) {
+		repo := chatmemory.NewRepository(sqliteDb)
+		for _, userID := range orderedUserIDs {
+			entries, err := repo.List(context.Background(), chatmemory.Filter{ChatID: chatID, Kind: chatmemory.PersonFact, SubjectUserID: &userID})
+			if err != nil {
+				log.Printf("[reply] Error retrieving structured person facts: %v", err)
+				return ""
+			}
+			if len(entries) == 0 {
+				continue
+			}
+			var lines []string
+			for _, entry := range entries {
+				lines = append(lines, "- "+entry.Body)
+			}
+			factMap[userID] = "Identity:\n" + strings.Join(lines, "\n")
+		}
+	} else {
+		var err error
+		factMap, err = promptmgr.GetPersonFactsMulti(chatID, orderedUserIDs)
+		if err != nil {
+			log.Printf("[reply] Error retrieving person facts: %v", err)
+			return ""
+		}
 	}
 
 	var out strings.Builder
@@ -1618,8 +1641,25 @@ var askChatGpt = func(message *telebot.Message) string {
 		log.Printf("[reply] Error getting prompt: %v", err)
 		return ""
 	}
+	if chatmemory.IsCutover(context.Background(), sqliteDb, message.Chat.ID) {
+		systemMessage = chatmemory.StripLegacyStableContext(systemMessage)
+	}
+	structuredContext := ""
+	if sqliteDb != nil {
+		subjects := []int64(nil)
+		if message.Sender != nil {
+			subjects = []int64{int64(message.Sender.ID)}
+		}
+		var memoryErr error
+		structuredContext, memoryErr = chatmemory.NewRepository(sqliteDb).BuildContext(context.Background(), message.Chat.ID, subjects)
+		if memoryErr != nil {
+			log.Printf("[reply] Error building structured memory context: %v", memoryErr)
+		} else if structuredContext != "" {
+			systemMessage = strings.TrimSpace(systemMessage + "\n\n" + structuredContext)
+		}
+	}
 
-	imageMemory := imageStableContext(systemMessage)
+	imageMemory := strings.TrimSpace(imageStableContext(systemMessage) + "\n" + structuredContext)
 
 	pollTool := chattools.NewSendPollTool(message.Chat.ID)
 	var imageTool *chattools.GenerateImageTool
@@ -1628,6 +1668,15 @@ var askChatGpt = func(message *telebot.Message) string {
 		chattools.NewChatHistoryBoundsTool(sqliteDb, message.Chat.ID),
 		chattools.NewSearchMessagesTool(sqliteDb, message.Chat.ID, message.ID),
 		chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
+		chattools.NewRememberChatLoreTool(sqliteDb, message.Chat.ID),
+		chattools.NewRememberPersonFactTool(sqliteDb, message.Chat.ID),
+		chattools.NewAddPossiblePlanTool(sqliteDb, message.Chat.ID),
+		chattools.NewRememberDecisionTool(sqliteDb, message.Chat.ID),
+		chattools.NewListMemoriesTool(sqliteDb, message.Chat.ID),
+		chattools.NewCompletePlanTool(sqliteDb, message.Chat.ID),
+		chattools.NewArchiveMemoryTool(sqliteDb, message.Chat.ID),
+		chattools.NewSupersedeMemoryTool(sqliteDb, message.Chat.ID),
+		// Backward-compatible aliases for one transition release.
 		chattools.NewRememberTopicTool(sqliteDb, message.Chat.ID),
 		chattools.NewForgetTopicTool(sqliteDb, message.Chat.ID),
 		pollTool,
@@ -1655,8 +1704,8 @@ var askChatGpt = func(message *telebot.Message) string {
 		"Use fetchUsers for questions about who is in the chat, chat participants, usernames, or active members.",
 		"Use getUserFacts for questions about specific users, what is known about them, or when you need facts for one or more people in this chat.",
 		"If the user asks what you know about a person or mentions a specific @username or name, prefer getUserFacts to verify chat-scoped facts, especially if the person is unfamiliar or not clearly covered by the prefill.",
-		"Use rememberTopic when the user directly asks you to remember or keep some durable chat lore, topic, preference, or instruction for later.",
-		"Use forgetTopic when the user directly asks you to forget, remove, or stop remembering a durable chat topic or lore item.",
+		"Store durable memory by type: rememberChatLore for shared traditions/rules, rememberPersonFact for one person, addPossiblePlan for uncommitted ideas/places/purchases, and rememberDecision only for agreed commitments. Never put a possible plan into a schedule or decision automatically.",
+		"Use listMemories before completePlan, archiveMemory, or supersedeMemory when you do not know the memory ID. rememberTopic and forgetTopic are legacy compatibility aliases; prefer the typed memory tools.",
 		"When asked about a person, do not dump every stored fact. Pick no more than 3 of the most interesting, relevant, or distinctive facts and summarize them.",
 		"Avoid meta commentary about hidden context, missing prompt data, or refusing to speculate. Just answer briefly with the best supported facts you have.",
 		"Use getChatHistoryBounds for questions asking for the first, oldest, earliest, latest, or total stored chat history; do not infer chronological bounds from a topic search.",

@@ -19,9 +19,16 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.24.x"
+      - name: Verify release commit
+        env:
+          GOFLAGS: -tags=sqlite_fts5
+        run: |
+          go test ./...
+          go test -race ./...
+          go vet ./...
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:

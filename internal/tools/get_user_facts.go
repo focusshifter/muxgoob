@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	factsutil "github.com/focusshifter/muxgoob/utils/facts"
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -189,6 +190,17 @@ func resolveChatUser(db *sql.DB, chatID int64, query string) (*resolvedChatUser,
 }
 
 func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {
+	if chatmemory.IsCutover(context.Background(), db, chatID) {
+		entries, err := chatmemory.NewRepository(db).List(context.Background(), chatmemory.Filter{ChatID: chatID, Kind: chatmemory.PersonFact, SubjectUserID: &userID})
+		if err != nil {
+			return "", fmt.Errorf("retrieving structured person facts: %w", err)
+		}
+		lines := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			lines = append(lines, "- "+entry.Body)
+		}
+		return strings.Join(lines, "\n"), nil
+	}
 	var facts string
 	err := db.QueryRow(`
 		SELECT facts FROM person_facts

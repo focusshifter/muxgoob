@@ -9,6 +9,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 )
 
 var DB *sql.DB
@@ -65,7 +67,7 @@ func RetryWithBackoff(fn func() error) error {
 func Initialize() {
 	var err error
 	// Increased busy_timeout to 10 seconds and added other performance settings
-	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared&_txlock=immediate")
+	DB, err = sql.Open("sqlite3", "db/muxgoob.sqlite?_journal=WAL&_busy_timeout=10000&_synchronous=NORMAL&cache=shared&_txlock=immediate&_foreign_keys=on")
 	if err != nil {
 		log.Fatal("[database] Failed to open SQLite DB:", err)
 	}
@@ -266,6 +268,9 @@ func Initialize() {
 	`)
 	if err != nil {
 		log.Fatal("[database] Failed to create tables:", err)
+	}
+	if err := chatmemory.EnsureSchema(DB); err != nil {
+		log.Fatal("[database] Failed to create structured memory tables:", err)
 	}
 
 	// Add review_text for older databases (ignore if already exists)

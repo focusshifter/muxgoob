@@ -7,19 +7,16 @@ import (
 
 	"github.com/tucnak/telebot"
 
-	"github.com/focusshifter/muxgoob/database"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
 
-func TestLogWriteDualPlugin_Process(t *testing.T) {
+func TestLogWriteDualPluginDoesNotOwnSQLitePersistence(t *testing.T) {
 	// Setup mock database
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()
 
 	// Create required tables
 	createTables(t, mockDB)
-
-	database.DB = mockDB
 
 	// Create plugin instance
 	plugin := &LogWriteDualPlugin{}
@@ -52,41 +49,14 @@ func TestLogWriteDualPlugin_Process(t *testing.T) {
 	// Process the message
 	plugin.Process(message)
 
-	// Verify the message was saved
-	var count int
-	err := mockDB.QueryRow("SELECT COUNT(*) FROM messages WHERE id = ? AND chat_id = ?", message.ID, message.Chat.ID).Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to query messages: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 message record, got %d", count)
-	}
-
-	// Verify the user was saved
-	err = mockDB.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", message.Sender.ID).Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to query users: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 user record, got %d", count)
-	}
-
-	// Verify the chat was saved
-	err = mockDB.QueryRow("SELECT COUNT(*) FROM chats WHERE id = ?", message.Chat.ID).Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to query chats: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 chat record, got %d", count)
-	}
-
-	// Verify the message entity was saved
-	err = mockDB.QueryRow("SELECT COUNT(*) FROM message_entities WHERE message_id = ? AND chat_id = ?", message.ID, message.Chat.ID).Scan(&count)
-	if err != nil {
-		t.Fatalf("Failed to query message_entities: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("Expected 1 message_entity record, got %d", count)
+	for _, table := range []string{"users", "chats", "messages", "message_entities"} {
+		var count int
+		if err := mockDB.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("query %s: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("logwrite must not duplicate central SQLite ingestion: %s has %d rows", table, count)
+		}
 	}
 }
 

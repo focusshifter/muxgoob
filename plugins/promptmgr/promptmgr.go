@@ -819,27 +819,27 @@ func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 }
 
 func SavePersonFacts(chatID int64, userID int64, facts string) error {
-	trimmedFacts := factsutil.EnforcePersonFactsBudgets(facts)
+	return database.RetryWithBackoff(func() error {
+		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			return SavePersonFactsTx(context.Background(), tx, chatID, userID, facts)
+		})
+	})
+}
+
+// SavePersonFactsTx appends a legacy compatibility version inside a caller-owned
+// transaction so canonical structured facts can be updated atomically with it.
+func SavePersonFactsTx(ctx context.Context, tx *sql.Tx, chatID int64, userID int64, rawFacts string) error {
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
+	}
+	trimmedFacts := factsutil.EnforcePersonFactsBudgets(rawFacts)
 	if trimmedFacts == "" {
 		return nil
 	}
-
-	return database.RetryWithBackoff(func() error {
-		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
-			var nextVersion int
-			err := tx.QueryRow(`
-				SELECT COALESCE(MAX(version) + 1, 1)
-				FROM person_facts
-				WHERE chat_id = ? AND user_id = ?`, chatID, userID).Scan(&nextVersion)
-			if err != nil {
-				return err
-			}
-
-			_, err = tx.Exec(`
-				INSERT INTO person_facts (chat_id, user_id, facts, version, created_at)
-				VALUES (?, ?, ?, ?, ?)`,
-				chatID, userID, trimmedFacts, nextVersion, time.Now().Unix())
-			return err
-		})
-	})
+	var nextVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version) + 1, 1) FROM person_facts WHERE chat_id = ? AND user_id = ?`, chatID, userID).Scan(&nextVersion); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO person_facts (chat_id, user_id, facts, version, created_at) VALUES (?, ?, ?, ?, ?)`, chatID, userID, trimmedFacts, nextVersion, time.Now().Unix())
+	return err
 }

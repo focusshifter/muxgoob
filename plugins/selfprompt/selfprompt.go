@@ -16,6 +16,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
@@ -542,6 +543,10 @@ func (p *SelfPromptPlugin) updatePromptFromMessages(chatID int64, messages []tel
 		log.Printf("[selfprompt] Error getting current prompt for chat %d: %v", chatID, err)
 		return
 	}
+	if err := chatmemory.EnsureSchema(p.db); err != nil {
+		log.Printf("[selfprompt] Error ensuring structured memory schema for chat %d: %v", chatID, err)
+		return
+	}
 
 	history := p.generateChatGptHistory(messages)
 	p.updatePersonFacts(chatID, messages, history)
@@ -557,9 +562,25 @@ func (p *SelfPromptPlugin) updatePromptFromMessages(chatID int64, messages []tel
 	if newPrompt == "" {
 		return
 	}
+	var stableMemory []string
+	if hasExplicitStableContext(newPrompt) {
+		parsedPrompt := facts.ParseChatPrompt(newPrompt)
+		stableMemory = append([]string(nil), parsedPrompt.StableContext...)
+		parsedPrompt.StableContext = nil
+		newPrompt = facts.RenderChatPrompt(parsedPrompt)
+	}
 
 	err = database.RetryWithBackoff(func() error {
 		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			repo := chatmemory.NewRepository(p.db)
+			for _, body := range stableMemory {
+				if _, _, memoryErr := repo.AddTx(context.Background(), tx, chatmemory.Entry{
+					ChatID: chatID, Kind: chatmemory.ChatLore, Body: body, SourceType: "selfprompt",
+				}); memoryErr != nil {
+					return memoryErr
+				}
+			}
+
 			var nextVersion int
 			err = tx.QueryRow(`
 				SELECT COALESCE(MAX(version) + 1, 1) FROM prompts WHERE chat_id = ?`,
@@ -579,6 +600,15 @@ func (p *SelfPromptPlugin) updatePromptFromMessages(chatID int64, messages []tel
 	if err != nil {
 		log.Printf("[selfprompt] Error updating prompt for chat %d: %v", chatID, err)
 	}
+}
+
+func hasExplicitStableContext(prompt string) bool {
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.EqualFold(strings.TrimSpace(line), "Stable context:") {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *SelfPromptPlugin) shouldBootstrapChat(chatID int64) bool {
@@ -729,6 +759,10 @@ func filterMessagesByUser(messages []telebot.Message, userID int64) []telebot.Me
 }
 
 func (p *SelfPromptPlugin) updatePersonFacts(chatID int64, messages []telebot.Message, _ string) {
+	if err := chatmemory.EnsureSchema(p.db); err != nil {
+		log.Printf("[selfprompt] Error ensuring structured memory schema for person facts in chat %d: %v", chatID, err)
+		return
+	}
 	activeUsers := collectActiveUsers(messages)
 	for _, user := range activeUsers {
 		userMessages := filterMessagesByUser(messages, user.ID)
@@ -750,13 +784,28 @@ func (p *SelfPromptPlugin) updatePersonFacts(chatID int64, messages []telebot.Me
 			newFacts = p.generateUserFacts(chatID, user, userHistory, currentFacts)
 		}
 
-		newFacts = strings.TrimSpace(newFacts)
-		if newFacts == "" || newFacts == strings.TrimSpace(currentFacts) {
+		newFacts = facts.EnforcePersonFactsBudgets(newFacts)
+		if newFacts == "" || newFacts == facts.EnforcePersonFactsBudgets(currentFacts) {
 			continue
 		}
 
-		if err := promptmgr.SavePersonFacts(chatID, user.ID, newFacts); err != nil {
-			log.Printf("[selfprompt] Error saving person facts for chat %d user %d: %v", chatID, user.ID, err)
+		dossier := facts.ParseDossier(newFacts)
+		bodies := append([]string(nil), dossier.Identity...)
+		bodies = append(bodies, dossier.Interests...)
+		if len(bodies) == 0 {
+			bodies = []string{newFacts}
+		}
+		repo := chatmemory.NewRepository(p.db)
+		err = database.RetryWithBackoff(func() error {
+			return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+				if err := promptmgr.SavePersonFactsTx(context.Background(), tx, chatID, int64(user.ID), newFacts); err != nil {
+					return err
+				}
+				return repo.ReplacePersonFactsTx(context.Background(), tx, chatID, int64(user.ID), bodies, "selfprompt_person_facts")
+			})
+		})
+		if err != nil {
+			log.Printf("[selfprompt] Error atomically saving person facts for chat %d user %d: %v", chatID, user.ID, err)
 		}
 	}
 }

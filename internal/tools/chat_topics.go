@@ -10,6 +10,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
 	"github.com/focusshifter/muxgoob/utils/facts"
@@ -96,9 +97,12 @@ func (t *ForgetTopicTool) Definition() openai.Tool {
 	}
 }
 
-func (t *RememberTopicTool) Execute(_ context.Context, args string) (string, error) {
+func (t *RememberTopicTool) Execute(ctx context.Context, args string) (string, error) {
 	if t == nil || t.db == nil {
 		return "", fmt.Errorf("database is not initialized")
+	}
+	if err := chatmemory.EnsureSchema(t.db); err != nil {
+		return "", err
 	}
 
 	parsedArgs := rememberTopicArgs{}
@@ -111,43 +115,31 @@ func (t *RememberTopicTool) Execute(_ context.Context, args string) (string, err
 		return "", fmt.Errorf("topic is required")
 	}
 
-	currentPrompt, _, err := getLatestChatPrompt(t.db, t.chatID)
-	if err != nil {
-		return "", err
-	}
-
-	parsed := facts.ParseChatPrompt(currentPrompt)
 	cleanTopic := sanitizeStableContextTopic(topic)
 	if cleanTopic == "" {
 		return "", fmt.Errorf("topic is required")
 	}
 
-	for _, existing := range parsed.StableContext {
-		if normalizeSearchText(existing) == normalizeSearchText(cleanTopic) {
-			return marshalJSON(chatTopicResult{Action: "remember", Topic: topic, Changed: false, StableContext: parsed.StableContext}), nil
-		}
-	}
-
-	parsed.StableContext = append([]string{cleanTopic}, parsed.StableContext...)
-	updatedPrompt := facts.RenderChatPrompt(parsed)
-	version, err := saveChatPrompt(t.db, t.chatID, updatedPrompt)
+	entry, changed, err := chatmemory.NewRepository(t.db).Add(ctx, chatmemory.Entry{
+		ChatID: t.chatID, Kind: chatmemory.ChatLore, Body: cleanTopic, SourceType: "rememberTopic",
+	})
 	if err != nil {
 		return "", err
 	}
-
-	return marshalJSON(chatTopicResult{
-		Action:        "remember",
-		Topic:         topic,
-		Changed:       true,
-		Added:         cleanTopic,
-		StableContext: parsed.StableContext,
-		Version:       version,
-	}), nil
+	currentPrompt, _, promptErr := getLatestChatPrompt(t.db, t.chatID)
+	if promptErr != nil {
+		return "", promptErr
+	}
+	stableContext := append([]string{entry.Body}, facts.ParseChatPrompt(currentPrompt).StableContext...)
+	return marshalJSON(chatTopicResult{Action: "remember", Topic: topic, Changed: changed, Added: entry.Body, StableContext: stableContext}), nil
 }
 
 func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, error) {
 	if t == nil || t.db == nil {
 		return "", fmt.Errorf("database is not initialized")
+	}
+	if err := chatmemory.EnsureSchema(t.db); err != nil {
+		return "", err
 	}
 
 	parsedArgs := forgetTopicArgs{}
@@ -160,13 +152,20 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("topic is required")
 	}
 
-	currentPrompt, _, err := getLatestChatPrompt(t.db, t.chatID)
+	currentPrompt, currentVersion, err := getLatestChatPrompt(t.db, t.chatID)
 	if err != nil {
 		return "", err
 	}
 
 	parsed := facts.ParseChatPrompt(currentPrompt)
-	allBullets := promptBullets(parsed)
+	entries, err := chatmemory.NewRepository(t.db).List(ctx, chatmemory.Filter{ChatID: t.chatID, Kind: chatmemory.ChatLore})
+	if err != nil {
+		return "", err
+	}
+	allBullets := append([]string(nil), parsed.StableContext...)
+	for _, entry := range entries {
+		allBullets = append(allBullets, entry.Body)
+	}
 	if len(allBullets) == 0 {
 		return marshalJSON(chatTopicResult{Action: "forget", Topic: topic, Changed: false, StableContext: parsed.StableContext}), nil
 	}
@@ -193,26 +192,55 @@ func (t *ForgetTopicTool) Execute(ctx context.Context, args string) (string, err
 	}
 
 	var removed []string
-	parsed.ReplyStyle, removed = filterPromptSection(parsed.ReplyStyle, removeSet)
-	parsed.StableContext, removed = filterPromptSection(parsed.StableContext, removeSet, removed...)
-	parsed.Avoid, removed = filterPromptSection(parsed.Avoid, removeSet, removed...)
+	parsed.StableContext, removed = filterPromptSection(parsed.StableContext, removeSet)
+	for _, entry := range entries {
+		if _, ok := removeSet[normalizeSearchText(entry.Body)]; !ok {
+			continue
+		}
+		removed = append(removed, entry.Body)
+	}
 
 	if len(removed) == 0 {
 		return marshalJSON(chatTopicResult{Action: "forget", Topic: topic, Changed: false, StableContext: parsed.StableContext}), nil
 	}
 
-	updatedPrompt := facts.RenderChatPrompt(parsed)
-	version, err := saveChatPrompt(t.db, t.chatID, updatedPrompt)
+	tx, err := t.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
+	defer tx.Rollback()
+	for _, entry := range entries {
+		if _, ok := removeSet[normalizeSearchText(entry.Body)]; !ok {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE memory_entries SET status=?,updated_at=? WHERE id=? AND status=?`, chatmemory.Archived, time.Now().Unix(), entry.ID, chatmemory.Active); err != nil {
+			return "", err
+		}
+	}
+	version := 0
+	if currentPrompt != "" {
+		updatedPrompt := facts.RenderChatPrompt(parsed)
+		version = currentVersion + 1
+		if _, err := tx.ExecContext(ctx, `INSERT INTO prompts(chat_id,version,prompt,created_at) VALUES(?,?,?,?)`, t.chatID, version, updatedPrompt, time.Now().Unix()); err != nil {
+			return "", err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
 
+	stableContext := append([]string(nil), parsed.StableContext...)
+	for _, entry := range entries {
+		if _, removedEntry := removeSet[normalizeSearchText(entry.Body)]; !removedEntry {
+			stableContext = append(stableContext, entry.Body)
+		}
+	}
 	return marshalJSON(chatTopicResult{
 		Action:        "forget",
 		Topic:         topic,
 		Changed:       true,
 		Removed:       removed,
-		StableContext: parsed.StableContext,
+		StableContext: stableContext,
 		Version:       version,
 	}), nil
 }

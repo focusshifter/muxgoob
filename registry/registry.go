@@ -6,7 +6,6 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 
 	"gopkg.in/yaml.v2"
@@ -19,11 +18,7 @@ var Plugins = map[string]MuxPlugin{}
 var Bot *BotWrapper
 var Config Configuration
 
-var (
-	dispatchMu       sync.Mutex
-	dispatchWG       sync.WaitGroup
-	dispatchStopping bool
-)
+var defaultDispatcher = NewDispatcher(func() map[string]MuxPlugin { return Plugins }, 16, 128)
 
 // MuxPlugin is a basic plugin interface
 type MuxPlugin interface {
@@ -143,33 +138,21 @@ func RegisterPlugin(p MuxPlugin) {
 	Plugins[key] = p
 }
 
-// DispatchMessage runs all registered plugins for an incoming or scheduled message.
-// Plugins run independently so a slow plugin does not block the rest of the bot.
+// DispatchMessage queues an incoming or scheduled message. Messages in one chat
+// retain their arrival order; different chats and plugins may run concurrently.
 func DispatchMessage(message *telebot.Message) {
-	dispatchMu.Lock()
-	defer dispatchMu.Unlock()
-	if dispatchStopping {
-		return
-	}
-	for _, plugin := range Plugins {
-		dispatchWG.Add(1)
-		go func(plugin MuxPlugin) {
-			defer dispatchWG.Done()
-			plugin.Process(message)
-		}(plugin)
+	if err := defaultDispatcher.Dispatch(message); err != nil {
+		log.Printf("[registry] Message dispatch rejected: %v", err)
 	}
 }
 
 // Shutdown stops plugins that own background workers and waits for in-flight
 // message handlers before databases are closed.
 func Shutdown(ctx context.Context) {
-	dispatchMu.Lock()
-	dispatchStopping = true
 	plugins := make([]MuxPlugin, 0, len(Plugins))
 	for _, plugin := range Plugins {
 		plugins = append(plugins, plugin)
 	}
-	dispatchMu.Unlock()
 
 	for _, plugin := range plugins {
 		if stoppable, ok := plugin.(ShutdownPlugin); ok {
@@ -177,15 +160,9 @@ func Shutdown(ctx context.Context) {
 		}
 	}
 
-	done := make(chan struct{})
-	go func() {
-		dispatchWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
+	if err := defaultDispatcher.Shutdown(ctx); err != nil {
+		log.Printf("[registry] Shutdown deadline reached with message handlers still running: %v", err)
+	} else {
 		log.Printf("[registry] Drained in-flight message handlers")
-	case <-ctx.Done():
-		log.Printf("[registry] Shutdown deadline reached with message handlers still running: %v", ctx.Err())
 	}
 }

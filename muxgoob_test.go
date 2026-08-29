@@ -14,12 +14,12 @@ import (
 )
 
 type recordingPlugin struct {
-	processed []*telebot.Message
+	processed chan *telebot.Message
 }
 
 func (p *recordingPlugin) Start(_ interface{}) {}
 func (p *recordingPlugin) Process(message *telebot.Message) {
-	p.processed = append(p.processed, message)
+	p.processed <- message
 }
 
 func createIncomingMessageSchema(t *testing.T, db *sql.DB) {
@@ -95,7 +95,7 @@ func TestHandleIncomingMessageSavesPhotoMessagesAndDispatchesPlugins(t *testing.
 	database.DB = mockDB
 	defer func() { database.DB = originalDB }()
 
-	plugin := &recordingPlugin{}
+	plugin := &recordingPlugin{processed: make(chan *telebot.Message, 1)}
 	originalPlugins := registry.Plugins
 	registry.Plugins = map[string]registry.MuxPlugin{"recording": plugin}
 	defer func() { registry.Plugins = originalPlugins }()
@@ -132,13 +132,12 @@ func TestHandleIncomingMessageSavesPhotoMessagesAndDispatchesPlugins(t *testing.
 		t.Fatalf("expected 1 saved photo media item, got %d", mediaCount)
 	}
 
-	if len(plugin.processed) == 0 {
-		deadline := time.Now().Add(200 * time.Millisecond)
-		for len(plugin.processed) == 0 && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
+	select {
+	case processed := <-plugin.processed:
+		if processed.ID != message.ID {
+			t.Fatalf("expected plugin to process message %d, got %d", message.ID, processed.ID)
 		}
-	}
-	if len(plugin.processed) != 1 || plugin.processed[0].ID != message.ID {
-		t.Fatalf("expected plugin to process message once, got %+v", plugin.processed)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for plugin to process message")
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
+
 	"github.com/focusshifter/muxgoob/utils/facts"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
@@ -100,7 +102,7 @@ func TestForgetTopicToolRemovesMatchedBullet(t *testing.T) {
 	}
 }
 
-func TestForgetTopicToolRemovesMatchedReplyStyleBullet(t *testing.T) {
+func TestForgetTopicToolDoesNotRemoveReplyStyleBullet(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()
 	createToolTestTables(t, db)
@@ -125,19 +127,50 @@ func TestForgetTopicToolRemovesMatchedReplyStyleBullet(t *testing.T) {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
 
-	if !payload.Changed {
-		t.Fatalf("expected changed payload, got %+v", payload)
-	}
-	if len(payload.Removed) != 1 || payload.Removed[0] != "Deploy the established lexicon (эхочемберы, рейды)" {
-		t.Fatalf("unexpected removed payload: %+v", payload)
+	if payload.Changed || len(payload.Removed) != 0 {
+		t.Fatalf("reply behavior must not be removed by a memory tool: %+v", payload)
 	}
 	currentPrompt, _, err := getLatestChatPrompt(db, 100)
 	if err != nil {
 		t.Fatalf("failed to load saved prompt: %v", err)
 	}
 	parsed := facts.ParseChatPrompt(currentPrompt)
-	if len(parsed.ReplyStyle) != 0 {
-		t.Fatalf("expected reply style bullet removed, got %+v", parsed.ReplyStyle)
+	if len(parsed.ReplyStyle) != 1 {
+		t.Fatalf("expected reply style bullet preserved, got %+v", parsed.ReplyStyle)
+	}
+}
+
+func TestForgetTopicToolArchivesStructuredChatLore(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+	insertPrompt(t, db, 100, 1, facts.RenderChatPrompt(&facts.ChatPrompt{}))
+
+	remember := NewRememberTopicTool(db, 100)
+	if _, err := remember.Execute(context.Background(), `{"topic":"Kyoto night walks"}`); err != nil {
+		t.Fatal(err)
+	}
+	forget := NewForgetTopicTool(db, 100)
+	forget.matcher = func(context.Context, int64, []string, string) ([]string, error) {
+		return []string{"Kyoto night walks"}, nil
+	}
+	result, err := forget.Execute(context.Background(), `{"topic":"Kyoto"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload chatTopicResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Changed {
+		t.Fatalf("expected structured memory removal: %+v", payload)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM memory_entries WHERE body='Kyoto night walks'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(chatmemory.Archived) {
+		t.Fatalf("expected archived status, got %s", status)
 	}
 }
 

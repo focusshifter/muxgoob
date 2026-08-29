@@ -89,6 +89,21 @@ func TestSearchMemoriesToolFiltersByChatSubjectKindAndQuery(t *testing.T) {
 	if payload.Memories[0].ChatID != 100 || payload.Memories[0].Body != "@focusshifter абсолютный василий" {
 		t.Fatalf("unexpected match: %#v", payload.Memories[0])
 	}
+
+	raw, err = tool.Execute(context.Background(), `{"query":"василий","subject_user_id":0}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = struct {
+		Memories []chatmemory.Entry `json:"memories"`
+		Count    int                `json:"count"`
+	}{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 2 {
+		t.Fatalf("subject_user_id=0 must mean unscoped search, got %s", raw)
+	}
 }
 
 func memoryIDFromToolResult(t *testing.T, raw string) int64 {

@@ -154,7 +154,7 @@ func (t *SearchMemoriesTool) Definition() openai.Tool {
 			"properties": map[string]any{
 				"query":            map[string]any{"type": "string", "description": "Distinctive words from the memory to find."},
 				"kind":             map[string]any{"type": "string", "enum": []string{"chat_lore", "person_fact", "possible_plan", "decision"}},
-				"subject_user_id":  map[string]any{"type": "integer"},
+				"subject_user_id":  map[string]any{"type": []any{"integer", "null"}, "description": "Telegram user ID to scope person facts, or null/0 for all subjects."},
 				"include_inactive": map[string]any{"type": "boolean"},
 				"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
 			},
@@ -182,10 +182,17 @@ func (t *SearchMemoriesTool) Execute(ctx context.Context, raw string) (string, e
 	if limit > 50 {
 		limit = 50
 	}
+	subjectUserID := args.SubjectUserID
+	// Codex strict schemas can materialize an omitted optional integer as zero.
+	// Telegram user IDs are positive, so zero means "no subject filter" rather
+	// than a real participant and must not turn a chat-wide search into no hits.
+	if subjectUserID != nil && *subjectUserID == 0 {
+		subjectUserID = nil
+	}
 	entries, err := chatmemory.NewRepository(t.db).List(ctx, chatmemory.Filter{
 		ChatID:          t.chatID,
 		Kind:            args.Kind,
-		SubjectUserID:   args.SubjectUserID,
+		SubjectUserID:   subjectUserID,
 		IncludeInactive: args.IncludeInactive,
 	})
 	if err != nil {

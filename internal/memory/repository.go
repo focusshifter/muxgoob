@@ -35,6 +35,15 @@ const (
 	Pinned      Retention = "pinned"
 )
 
+// IsPinnedAppearance distinguishes visual/canonical depiction facts from
+// pinned aliases and other durable identity facts. All three persist through
+// selfprompt replacement, but only visual facts belong in Appearance.
+func IsPinnedAppearance(entry Entry) bool {
+	return entry.Retention == Pinned &&
+		!strings.HasPrefix(entry.SourceType, "stable_alias") &&
+		!strings.HasPrefix(entry.SourceType, "stable_identity")
+}
+
 type Entry struct {
 	ID                 int64     `json:"id"`
 	ChatID             int64     `json:"chat_id"`

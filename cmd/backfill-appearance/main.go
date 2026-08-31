@@ -133,8 +133,8 @@ func validateManifest(ctx context.Context, db *sql.DB, input manifest) error {
 		if fact.ChatID == 0 || fact.SubjectUserID == 0 || fact.Body == "" {
 			return fmt.Errorf("fact %d requires chat_id, subject_user_id, and body", i)
 		}
-		if fact.LegacyPersonFactID == 0 && !strings.HasPrefix(input.SourceType, "owner_confirmed_") && !strings.HasPrefix(input.SourceType, "stable_alias_owner_confirmed_") {
-			return fmt.Errorf("fact %d requires legacy_person_fact_id unless source_type is owner_confirmed_*", i)
+		if fact.LegacyPersonFactID == 0 && !strings.HasPrefix(input.SourceType, "owner_confirmed_") && !strings.HasPrefix(input.SourceType, "stable_alias_owner_confirmed_") && !strings.HasPrefix(input.SourceType, "stable_identity_owner_confirmed_") {
+			return fmt.Errorf("fact %d requires legacy_person_fact_id unless source_type is owner_confirmed_*, stable_alias_owner_confirmed_*, or stable_identity_owner_confirmed_*", i)
 		}
 		key := fmt.Sprintf("%d/%d/%s", fact.ChatID, fact.SubjectUserID, strings.ToLower(fact.Body))
 		if _, ok := seen[key]; ok {

@@ -28,6 +28,8 @@ var canonicalRussianFirstNames = map[string]string{
 	"victor": "viktor",
 	"viktor": "viktor",
 	"vitya":  "viktor",
+	"иван":   "ivan",
+	"ivan":   "ivan",
 }
 
 func canonicalPersonName(value string) string {

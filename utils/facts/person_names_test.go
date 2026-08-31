@@ -8,6 +8,7 @@ func TestPersonNamesEquivalentSupportsRussianInflectionAndDiminutive(t *testing.
 		want               bool
 	}{
 		{"ивана", "Иван", true},
+		{"Ивана", "Ivan", true},
 		{"Витя", "Victor", true},
 		{"витю", "Виктор", true},
 		{"витёк", "viktor", true},

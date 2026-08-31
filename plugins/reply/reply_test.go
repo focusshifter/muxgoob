@@ -2099,7 +2099,7 @@ func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 		CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT);
 		CREATE TABLE IF NOT EXISTS messages (id INTEGER, chat_id INTEGER, sender_id INTEGER);
 		CREATE TABLE IF NOT EXISTS person_facts (chat_id INTEGER, user_id INTEGER, version INTEGER, facts TEXT);
-		INSERT INTO users (id, username, first_name, last_name) VALUES (7, 'ivanov', 'Иван', '');
+		INSERT INTO users (id, username, first_name, last_name) VALUES (7, 'ivanov', 'Ivan', '');
 		INSERT INTO users (id, username, first_name, last_name) VALUES (8, 'Vhailor', '', '');
 		INSERT INTO users (id, username, first_name, last_name) VALUES (9, 'focusshifter', 'Victor', 'Shcherbakov');
 		INSERT INTO messages (id, chat_id, sender_id) VALUES (1, 123, 7);

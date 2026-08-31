@@ -97,6 +97,28 @@ func TestGetUserFactsToolResolvesQuotedProfileAlias(t *testing.T) {
 	}
 }
 
+func TestGetUserFactsToolResolvesRussianDiminutiveFromLatinTelegramName(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	insertUser(t, db, 1, "focusshifter", "Victor", "Shcherbakov")
+	insertPersonFacts(t, db, 100, 1, "Identity:\n- has a van-dyke beard and glasses", 1)
+	insertMessage(t, db, 1, 100, 1, time.Now().Unix(), "hello")
+
+	result, err := NewGetUserFactsTool(db, 100).Execute(context.Background(), `{"users":["Витю"]}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload getUserFactsResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if payload.Count != 1 || payload.Users[0].Name != "focusshifter" || !strings.Contains(payload.Users[0].Facts, "van-dyke") {
+		t.Fatalf("expected Витю to resolve focusshifter's facts, got %+v", payload)
+	}
+}
+
 func TestGetUserFactsToolMatchesByUsernameOrName(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()

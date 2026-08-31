@@ -1136,37 +1136,6 @@ func personFactAliases(chatID, userID int64) []string {
 	return aliases
 }
 
-func russianNameStem(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return ""
-	}
-	for _, suffix := range []string{"ами", "ями", "ого", "ему", "ому", "ыми", "ими", "ом", "ем", "ах", "ях", "ой", "ей", "ам", "ям", "ов", "ев", "а", "я", "у", "ю", "ы", "и", "е"} {
-		if strings.HasSuffix(value, suffix) {
-			stem := strings.TrimSuffix(value, suffix)
-			if len([]rune(stem)) >= 3 {
-				return stem
-			}
-		}
-	}
-	return value
-}
-
-func nameMatchesRequestToken(token, candidate string) bool {
-	token = strings.ToLower(strings.TrimSpace(token))
-	candidate = strings.ToLower(strings.TrimSpace(candidate))
-	if token == "" || candidate == "" {
-		return false
-	}
-	if token == candidate {
-		return true
-	}
-	if strings.IndexFunc(token+candidate, func(r rune) bool { return r >= 'А' && r <= 'я' || r == 'ё' || r == 'Ё' }) >= 0 {
-		return russianNameStem(token) == russianNameStem(candidate)
-	}
-	return false
-}
-
 func lookupNamedChatUsersInText(chatID int64, text string) []*telebot.User {
 	if sqliteDb == nil || strings.TrimSpace(text) == "" {
 		return nil
@@ -1217,7 +1186,7 @@ func lookupNamedChatUsersInText(chatID int64, text string) []*telebot.User {
 		matched := false
 		for _, name := range names {
 			for token := range words {
-				if nameMatchesRequestToken(token, name) {
+				if facts.PersonNamesEquivalent(token, name) {
 					matched = true
 					break
 				}

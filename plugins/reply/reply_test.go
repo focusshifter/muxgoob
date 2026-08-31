@@ -2101,8 +2101,10 @@ func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 		CREATE TABLE IF NOT EXISTS person_facts (chat_id INTEGER, user_id INTEGER, version INTEGER, facts TEXT);
 		INSERT INTO users (id, username, first_name, last_name) VALUES (7, 'ivanov', 'Иван', '');
 		INSERT INTO users (id, username, first_name, last_name) VALUES (8, 'Vhailor', '', '');
+		INSERT INTO users (id, username, first_name, last_name) VALUES (9, 'focusshifter', 'Victor', 'Shcherbakov');
 		INSERT INTO messages (id, chat_id, sender_id) VALUES (1, 123, 7);
 		INSERT INTO messages (id, chat_id, sender_id) VALUES (2, 123, 8);
+		INSERT INTO messages (id, chat_id, sender_id) VALUES (3, 123, 9);
 		INSERT INTO person_facts (chat_id, user_id, version, facts) VALUES (123, 8, 1, 'Identity:
 - Prefers «Вейлор» over «Вялор».
 
@@ -2115,11 +2117,11 @@ Interests:
 	sqliteDb = mockDB
 	defer func() { sqliteDb = originalDB }()
 
-	users := lookupNamedChatUsersInText(123, "губи, нарисуй ивана пенге и вейлора")
-	if len(users) != 2 || users[0].ID != 7 || users[1].ID != 8 {
-		t.Fatalf("expected inflected Иван and person-fact alias Вейлор to resolve participants, got %#v", users)
+	users := lookupNamedChatUsersInText(123, "губи, нарисуй ивана пенге, вейлора и витю")
+	if len(users) != 3 || users[0].ID != 7 || users[1].ID != 8 || users[2].ID != 9 {
+		t.Fatalf("expected inflected Иван, alias Вейлор, and Витя → Victor to resolve participants, got %#v", users)
 	}
-	if !hasExplicitMention(&telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: "нарисуй ивана и вейлора"}) {
+	if !hasExplicitMention(&telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: "нарисуй ивана, вейлора и витю"}) {
 		t.Fatal("plain-text nickname must trigger personfacts lookup")
 	}
 }

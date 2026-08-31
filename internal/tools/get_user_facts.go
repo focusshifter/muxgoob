@@ -181,7 +181,7 @@ func resolveChatUser(db *sql.DB, chatID int64, query string) (*resolvedChatUser,
 		resolved := resolvedChatUser{ID: id, Name: name}
 		chatUsers = append(chatUsers, resolved)
 		for _, candidate := range []string{username, displayName, firstName, lastName} {
-			if normalizeSearchText(candidate) == normalized {
+			if normalizeSearchText(candidate) == normalized || factsutil.PersonNamesEquivalent(normalized, normalizeSearchText(candidate)) {
 				rows.Close()
 				return &resolved, nil
 			}

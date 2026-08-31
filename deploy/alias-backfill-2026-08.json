@@ -1,35 +1,14 @@
 {
   "source_type": "stable_alias_owner_confirmed_2026_08",
   "facts": [
-    {
-      "chat_id": -1001028877582,
-      "subject_user_id": 686563,
-      "body": "Known in this chat as «Витя»."
-    },
-    {
-      "chat_id": -1001028877582,
-      "subject_user_id": 686563,
-      "body": "Known in this chat as «Витяна», «Витян», and «Титян»."
-    },
-    {
-      "chat_id": -1001028877582,
-      "subject_user_id": 159722140,
-      "body": "Known in this chat as «Иван Пенге» and @pingeee."
-    },
-    {
-      "chat_id": -1001028877582,
-      "subject_user_id": 53085977,
-      "body": "Known in this chat as «Слим»."
-    },
-    {
-      "chat_id": -1001028877582,
-      "subject_user_id": 79465754,
-      "body": "Known in this chat as «Саня»."
-    },
-    {
-      "chat_id": -1001028877582,
-      "subject_user_id": 658658324,
-      "body": "Known in this chat as «Казян», «Каз», and «Казказ»."
-    }
+    {"chat_id": -1001028877582, "subject_user_id": 686563, "body": "Known in this chat as «Витя»."},
+    {"chat_id": -1001028877582, "subject_user_id": 686563, "body": "Known in this chat as «Витяна», «Витян», and «Титян»."},
+    {"chat_id": -1001028877582, "subject_user_id": 159722140, "body": "Known in this chat as «Иван Пенге» and @pingeee."},
+    {"chat_id": -1001028877582, "subject_user_id": 53085977, "body": "Known in this chat as «Слим»."},
+    {"chat_id": -1001028877582, "subject_user_id": 79465754, "body": "Known in this chat as «Саня»."},
+    {"chat_id": -1001028877582, "subject_user_id": 658658324, "body": "Known in this chat as «Казян», «Каз», and «Казказ»."},
+    {"chat_id": -1001028877582, "subject_user_id": 53734014, "body": "Known in this chat as «Сашка», «Сажка», and «Двач»."},
+    {"chat_id": -1001028877582, "subject_user_id": 145494627, "body": "Known in this chat as «Смуте»."},
+    {"chat_id": -1001028877582, "subject_user_id": 1713038, "body": "Known in this chat as «Глеб»."}
   ]
 }

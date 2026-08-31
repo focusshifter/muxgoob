@@ -25,10 +25,12 @@ type manifest struct {
 }
 
 type appearanceFact struct {
-	ChatID             int64  `json:"chat_id"`
-	SubjectUserID      int64  `json:"subject_user_id"`
-	Body               string `json:"body"`
-	LegacyPersonFactID int64  `json:"legacy_person_fact_id"`
+	ChatID              int64  `json:"chat_id"`
+	SubjectUserID       int64  `json:"subject_user_id"`
+	LegacyPersonFactID  int64  `json:"legacy_person_fact_id"`
+	LegacySubjectUserID int64  `json:"legacy_subject_user_id,omitempty"`
+	SourceExcerpt       string `json:"source_excerpt,omitempty"`
+	Body                string `json:"body"`
 }
 
 type result struct {
@@ -132,13 +134,21 @@ func validateManifest(ctx context.Context, db *sql.DB, input manifest) error {
 			return fmt.Errorf("duplicate fact %d", i)
 		}
 		seen[key] = struct{}{}
+		sourceUserID := fact.LegacySubjectUserID
+		if sourceUserID == 0 {
+			sourceUserID = fact.SubjectUserID
+		}
+		sourceExcerpt := strings.TrimSpace(fact.SourceExcerpt)
+		if sourceExcerpt == "" {
+			sourceExcerpt = fact.Body
+		}
 		var raw string
-		err := db.QueryRowContext(ctx, `SELECT facts FROM person_facts WHERE id=? AND chat_id=? AND user_id=?`, fact.LegacyPersonFactID, fact.ChatID, fact.SubjectUserID).Scan(&raw)
+		err := db.QueryRowContext(ctx, `SELECT facts FROM person_facts WHERE id=? AND chat_id=? AND user_id=?`, fact.LegacyPersonFactID, fact.ChatID, sourceUserID).Scan(&raw)
 		if err != nil {
 			return fmt.Errorf("fact %d legacy source: %w", i, err)
 		}
-		if !strings.Contains(strings.ToLower(raw), strings.ToLower(fact.Body)) {
-			return fmt.Errorf("fact %d body is not present verbatim in legacy source %d", i, fact.LegacyPersonFactID)
+		if !strings.Contains(strings.ToLower(raw), strings.ToLower(sourceExcerpt)) {
+			return fmt.Errorf("fact %d source_excerpt is not present verbatim in legacy source %d", i, fact.LegacyPersonFactID)
 		}
 	}
 	return nil

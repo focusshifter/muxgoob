@@ -119,8 +119,9 @@ func SanitizeDeltaForPerson(delta *Delta, userName string) *Delta {
 
 func cloneDossier(current *Dossier) *Dossier {
 	return &Dossier{
-		Identity:  append([]string(nil), current.Identity...),
-		Interests: append([]string(nil), current.Interests...),
+		Appearance: append([]string(nil), current.Appearance...),
+		Identity:   append([]string(nil), current.Identity...),
+		Interests:  append([]string(nil), current.Interests...),
 	}
 }
 

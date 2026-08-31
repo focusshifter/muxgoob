@@ -112,6 +112,7 @@ func memoryAdminTools(db *sql.DB, chatID int64, trackers ...*memoryMutationTrack
 	mutations := []chattools.Tool{
 		chattools.NewRememberChatLoreTool(db, chatID),
 		chattools.NewRememberPersonFactTool(db, chatID),
+		chattools.NewRememberAppearanceTool(db, chatID),
 		chattools.NewAddPossiblePlanTool(db, chatID),
 		chattools.NewRememberDecisionTool(db, chatID),
 		chattools.NewCompletePlanTool(db, chatID),
@@ -133,7 +134,7 @@ func memoryAdminSystemParts(chatID int64) []string {
 		"The authenticated owner issued the instruction from a different private chat. Never send messages, polls, images, or other actions to the target chat. Your final textual report will be routed back to the owner's current chat by host code.",
 		"For a named person, call fetchUsers to resolve subject_user_id. To forget or replace an existing memory, call searchMemories with distinctive words and the subject when known, then call archiveMemory or supersedeMemory with the matching ID.",
 		"Do not claim success unless the mutation tool succeeds. If several memories match ambiguously, report the candidates instead of changing all of them.",
-		"Use rememberChatLore for shared lore, rememberPersonFact for one person, addPossiblePlan for tentative ideas, and rememberDecision only for agreed commitments.",
+		"Use rememberChatLore for shared lore, rememberPersonFact for one person, rememberAppearance for a person's canonical visual traits or requested fictional depiction, addPossiblePlan for tentative ideas, and rememberDecision only for agreed commitments.",
 		"Reply briefly in the owner's language and mention the target chat ID.",
 	}
 }
@@ -647,11 +648,24 @@ func shouldForceSearchMessages(question string) bool {
 	return false
 }
 
-func initialToolChoice(forceSearch, forceHistoryBounds bool) any {
+// Every reference to a recognized participant has to load that participant's
+// chat-scoped facts before prose generation. Prefill is only a convenience;
+// it is not allowed to be the sole retrieval path for person-specific context.
+func shouldForceUserFacts(_ string, message *telebot.Message) bool {
+	return message != nil && message.Chat != nil && hasExplicitMention(message)
+}
+
+func initialToolChoice(forceSearch, forceHistoryBounds, forceUserFacts bool) any {
 	if forceHistoryBounds {
 		return openai.ToolChoice{
 			Type:     openai.ToolTypeFunction,
 			Function: openai.ToolFunction{Name: "getChatHistoryBounds"},
+		}
+	}
+	if forceUserFacts {
+		return openai.ToolChoice{
+			Type:     openai.ToolTypeFunction,
+			Function: openai.ToolFunction{Name: "getUserFacts"},
 		}
 	}
 	if forceSearch {
@@ -971,31 +985,10 @@ func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMe
 		return ""
 	}
 
-	factMap := make(map[int64]string, len(orderedUserIDs))
-	if chatmemory.IsCutover(context.Background(), sqliteDb, chatID) {
-		repo := chatmemory.NewRepository(sqliteDb)
-		for _, userID := range orderedUserIDs {
-			entries, err := repo.List(context.Background(), chatmemory.Filter{ChatID: chatID, Kind: chatmemory.PersonFact, SubjectUserID: &userID})
-			if err != nil {
-				log.Printf("[reply] Error retrieving structured person facts: %v", err)
-				return ""
-			}
-			if len(entries) == 0 {
-				continue
-			}
-			var lines []string
-			for _, entry := range entries {
-				lines = append(lines, "- "+entry.Body)
-			}
-			factMap[userID] = "Identity:\n" + strings.Join(lines, "\n")
-		}
-	} else {
-		var err error
-		factMap, err = promptmgr.GetPersonFactsMulti(chatID, orderedUserIDs)
-		if err != nil {
-			log.Printf("[reply] Error retrieving person facts: %v", err)
-			return ""
-		}
+	factMap, err := promptmgr.GetPersonFactsMulti(chatID, orderedUserIDs)
+	if err != nil {
+		log.Printf("[reply] Error retrieving person facts: %v", err)
+		return ""
 	}
 
 	var out strings.Builder
@@ -1841,6 +1834,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 			chattools.NewGetUserFactsTool(sqliteDb, message.Chat.ID),
 			chattools.NewRememberChatLoreTool(sqliteDb, message.Chat.ID),
 			chattools.NewRememberPersonFactTool(sqliteDb, message.Chat.ID),
+			chattools.NewRememberAppearanceTool(sqliteDb, message.Chat.ID),
 			chattools.NewAddPossiblePlanTool(sqliteDb, message.Chat.ID),
 			chattools.NewRememberDecisionTool(sqliteDb, message.Chat.ID),
 			chattools.NewListMemoriesTool(sqliteDb, message.Chat.ID),
@@ -1872,6 +1866,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 	}
 	forceSearch := !memoryAdmin && shouldForceSearchMessages(question)
 	forceHistoryBounds := !memoryAdmin && shouldForceHistoryBounds(question)
+	forceUserFacts := !memoryAdmin && shouldForceUserFacts(question, message)
 	toolRegistry := chattools.NewRegistry(tools...)
 	toolSystemParts = append(toolSystemParts, currentDateTimeContext(time.Now(), registry.Config.TimeLoc))
 	if !memoryAdmin {
@@ -1972,7 +1967,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 				FrequencyPenalty: 0.2,
 				PresencePenalty:  0.1,
 				Tools:            toolRegistry.Definitions(),
-				ToolChoice:       initialToolChoice(forceSearch, forceHistoryBounds),
+				ToolChoice:       initialToolChoice(forceSearch, forceHistoryBounds, forceUserFacts),
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role:    openai.ChatMessageRoleSystem,

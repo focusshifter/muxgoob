@@ -19,6 +19,8 @@ type AddMemoryTool struct {
 	kind            chatmemory.Kind
 	name            string
 	description     string
+	sourceType      string
+	retention       chatmemory.Retention
 	sourceMessageID *int64
 	sourceUserID    *int64
 }
@@ -72,6 +74,9 @@ func NewRememberChatLoreTool(db *sql.DB, chatID int64) Tool {
 func NewRememberPersonFactTool(db *sql.DB, chatID int64) Tool {
 	return newAddMemoryTool(db, chatID, chatmemory.PersonFact, "rememberPersonFact", "Remember a durable fact about one specific chat participant. Resolve the participant with fetchUsers and provide subject_user_id.")
 }
+func NewRememberAppearanceTool(db *sql.DB, chatID int64) Tool {
+	return newAddMemoryToolWithSource(db, chatID, chatmemory.PersonFact, "rememberAppearance", "Store a canonical visual/appearance fact for one participant: physical traits, clothing, or an explicitly requested fictional depiction. Resolve the participant with fetchUsers and provide subject_user_id. These facts are stable and are not replaced by automatic profile updates.", "stable_appearance")
+}
 func NewAddPossiblePlanTool(db *sql.DB, chatID int64) Tool {
 	return newAddMemoryTool(db, chatID, chatmemory.PossiblePlan, "addPossiblePlan", "Save a possible place, purchase, trip, project, or other non-committed plan. Do not turn it into a schedule or decision.")
 }
@@ -95,7 +100,15 @@ func NewSupersedeMemoryTool(db *sql.DB, chatID int64) Tool {
 }
 
 func newAddMemoryTool(db *sql.DB, chatID int64, kind chatmemory.Kind, name, description string) *AddMemoryTool {
-	return &AddMemoryTool{db: db, chatID: chatID, kind: kind, name: name, description: description}
+	return newAddMemoryToolWithMetadata(db, chatID, kind, name, description, "tool", chatmemory.Replaceable)
+}
+
+func newAddMemoryToolWithSource(db *sql.DB, chatID int64, kind chatmemory.Kind, name, description, sourceType string) *AddMemoryTool {
+	return newAddMemoryToolWithMetadata(db, chatID, kind, name, description, sourceType, chatmemory.Pinned)
+}
+
+func newAddMemoryToolWithMetadata(db *sql.DB, chatID int64, kind chatmemory.Kind, name, description, sourceType string, retention chatmemory.Retention) *AddMemoryTool {
+	return &AddMemoryTool{db: db, chatID: chatID, kind: kind, name: name, description: description, sourceType: sourceType, retention: retention}
 }
 
 func (t *AddMemoryTool) Definition() openai.Tool {
@@ -118,7 +131,11 @@ func (t *AddMemoryTool) Execute(ctx context.Context, raw string) (string, error)
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	entry, changed, err := chatmemory.NewRepository(t.db).Add(ctx, chatmemory.Entry{ChatID: t.chatID, Kind: t.kind, SubjectUserID: args.SubjectUserID, Body: args.Body, SourceType: "tool", SourceMessageID: t.sourceMessageID, SourceUserID: t.sourceUserID})
+	sourceType := t.sourceType
+	if sourceType == "" {
+		sourceType = "tool"
+	}
+	entry, changed, err := chatmemory.NewRepository(t.db).Add(ctx, chatmemory.Entry{ChatID: t.chatID, Kind: t.kind, SubjectUserID: args.SubjectUserID, Body: args.Body, SourceType: sourceType, Retention: t.retention, SourceMessageID: t.sourceMessageID, SourceUserID: t.sourceUserID})
 	if err != nil {
 		return "", err
 	}

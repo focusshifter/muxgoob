@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,28 @@ func TestGetUserFactsToolSeparatesMissingUsersAndUsersWithoutFacts(t *testing.T)
 	}
 	if len(payload.NoFacts) != 2 {
 		t.Fatalf("expected 2 no_facts entries, got %d", len(payload.NoFacts))
+	}
+}
+
+func TestGetUserFactsToolResolvesQuotedProfileAlias(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+
+	insertUser(t, db, 1, "sasha_real", "Alexander", "")
+	insertPersonFacts(t, db, 100, 1, "Identity:\n- Known in this chat as «Саня»\n- wears a hoodie", 1)
+	insertMessage(t, db, 1, 100, 1, time.Now().Unix(), "hello")
+
+	result, err := NewGetUserFactsTool(db, 100).Execute(context.Background(), `{"users":["Саня"]}`)
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	var payload getUserFactsResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+	if payload.Count != 1 || payload.Users[0].Name != "sasha_real" || !strings.Contains(payload.Users[0].Facts, "hoodie") {
+		t.Fatalf("expected alias to resolve the participant facts, got %+v", payload)
 	}
 }
 

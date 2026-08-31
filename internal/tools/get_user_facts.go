@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
@@ -141,6 +142,8 @@ type resolvedChatUser struct {
 	Name string
 }
 
+var quotedUserAliasExp = regexp.MustCompile(`[«"]([^»"]{3,64})[»"]`)
+
 func resolveChatUser(db *sql.DB, chatID int64, query string) (*resolvedChatUser, error) {
 	normalized := normalizeSearchText(query)
 	if normalized == "" {
@@ -156,36 +159,57 @@ func resolveChatUser(db *sql.DB, chatID int64, query string) (*resolvedChatUser,
 	if err != nil {
 		return nil, fmt.Errorf("resolving user facts target: %w", err)
 	}
-	defer rows.Close()
 
+	var chatUsers []resolvedChatUser
 	for rows.Next() {
 		var id int64
 		var username, firstName, lastName string
 		var lastSeen int64
 		if err := rows.Scan(&id, &username, &firstName, &lastName, &lastSeen); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("scanning user facts target: %w", err)
 		}
 
 		displayName := strings.TrimSpace(strings.Join([]string{firstName, lastName}, " "))
-		candidates := []string{username, displayName, firstName, lastName}
-		for _, candidate := range candidates {
+		name := username
+		if name == "" {
+			name = displayName
+		}
+		if name == "" {
+			name = fmt.Sprintf("user_%d", id)
+		}
+		resolved := resolvedChatUser{ID: id, Name: name}
+		chatUsers = append(chatUsers, resolved)
+		for _, candidate := range []string{username, displayName, firstName, lastName} {
 			if normalizeSearchText(candidate) == normalized {
-				name := username
-				if name == "" {
-					name = displayName
-				}
-				if name == "" {
-					name = fmt.Sprintf("user_%d", id)
-				}
-				return &resolvedChatUser{ID: id, Name: name}, nil
+				rows.Close()
+				return &resolved, nil
 			}
 		}
 	}
-
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, fmt.Errorf("iterating user facts targets: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("closing user facts targets: %w", err)
+	}
 
+	// A nickname may be recorded in a participant's durable facts rather than
+	// Telegram profile. Resolve only explicitly quoted aliases, matching the
+	// reply-context resolver, and keep the lookup scoped to this chat.
+	for _, user := range chatUsers {
+		facts, err := fetchLatestPersonFacts(db, chatID, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range quotedUserAliasExp.FindAllStringSubmatch(facts, -1) {
+			if len(match) > 1 && normalizeSearchText(match[1]) == normalized {
+				resolved := user
+				return &resolved, nil
+			}
+		}
+	}
 	return nil, nil
 }
 
@@ -195,11 +219,15 @@ func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("retrieving structured person facts: %w", err)
 		}
-		lines := make([]string, 0, len(entries))
+		dossier := &factsutil.Dossier{}
 		for _, entry := range entries {
-			lines = append(lines, "- "+entry.Body)
+			if entry.Retention == chatmemory.Pinned {
+				dossier.Appearance = append(dossier.Appearance, entry.Body)
+			} else {
+				dossier.Identity = append(dossier.Identity, entry.Body)
+			}
 		}
-		return strings.Join(lines, "\n"), nil
+		return factsutil.RenderDossier(factsutil.EnforceDossierBudgets(dossier)), nil
 	}
 	var facts string
 	err := db.QueryRow(`

@@ -114,4 +114,31 @@ func TestRepositorySupersedePreservesHistory(t *testing.T) {
 	}
 }
 
+func TestReplacePersonFactsPreservesStableAppearance(t *testing.T) {
+	db := setupRepositoryTestDB(t)
+	defer db.Close()
+	repo := NewRepository(db)
+	subject := int64(10)
+	if _, _, err := repo.Add(context.Background(), Entry{ChatID: 1, Kind: PersonFact, SubjectUserID: &subject, Body: "Has a beard and glasses", Retention: Pinned, SourceType: "stable_appearance"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReplacePersonFacts(context.Background(), 1, subject, []string{"Likes XCOM"}, "selfprompt"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.List(context.Background(), Filter{ChatID: 1, Kind: PersonFact, SubjectUserID: &subject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected stable appearance plus current facts, got %#v", entries)
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		seen[entry.Body] = true
+	}
+	if !seen["Has a beard and glasses"] || !seen["Likes XCOM"] {
+		t.Fatalf("stable appearance was evicted by person-fact replacement: %#v", entries)
+	}
+}
+
 func int64Ptr(v int64) *int64 { return &v }

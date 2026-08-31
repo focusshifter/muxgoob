@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	openai "github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
@@ -280,7 +281,7 @@ func TestReplyPluginSuperuserCommandRequiresOwnerPrivateChatAndKnownTarget(t *te
 func TestMemoryAdminToolsExcludeNonMemorySideEffects(t *testing.T) {
 	allowed := map[string]bool{
 		"fetchUsers": true, "getUserFacts": true, "rememberChatLore": true,
-		"rememberPersonFact": true, "addPossiblePlan": true, "rememberDecision": true,
+		"rememberPersonFact": true, "rememberAppearance": true, "addPossiblePlan": true, "rememberDecision": true,
 		"listMemories": true, "searchMemories": true, "completePlan": true,
 		"archiveMemory": true, "supersedeMemory": true,
 	}
@@ -2154,6 +2155,30 @@ func TestShouldForceSearchMessages(t *testing.T) {
 				t.Fatalf("shouldForceSearchMessages(%q) = %v, want %v", tc.question, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestShouldForceUserFactsForEveryNamedParticipantReference(t *testing.T) {
+	for _, question := range []string{
+		"Губи, как выглядит @Vhailor?",
+		"Губи, а что @Vhailor думает про XCOM?",
+		"Губи, опиши @Vhailor",
+	} {
+		message := &telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: question}
+		if !shouldForceUserFacts(message.Text, message) {
+			t.Fatalf("expected named participant reference to force getUserFacts: %q", question)
+		}
+	}
+	choice, ok := initialToolChoice(false, false, true).(openai.ToolChoice)
+	if !ok || choice.Function.Name != "getUserFacts" {
+		t.Fatalf("expected getUserFacts tool choice, got %#v", initialToolChoice(false, false, true))
+	}
+
+	for _, question := range []string{"как выглядит броневик?", "опиши этот контейнер"} {
+		plain := &telebot.Message{Chat: &telebot.Chat{ID: 123}, Text: question}
+		if shouldForceUserFacts(question, plain) {
+			t.Fatalf("must not force user facts without a named chat participant: %q", question)
+		}
 	}
 }
 

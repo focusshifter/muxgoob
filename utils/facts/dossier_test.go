@@ -60,6 +60,26 @@ Interests:
 	}
 }
 
+func TestAppearanceFactsSurviveAutomaticDossierCompactionAndDelta(t *testing.T) {
+	current := ParseDossier(`Appearance:
+- Has a van-dyke beard and rectangular glasses
+- Wears a dark hoodie
+
+Identity:
+- works in IT
+
+Interests:
+- likes games`)
+	delta := &Delta{Interests: []DeltaOp{{Action: '+', Text: "likes XCOM", NewText: "likes XCOM"}}}
+	got := EnforceDossierBudgets(ApplyDelta(current, delta))
+	if len(got.Appearance) != 2 || got.Appearance[0] != "Has a van-dyke beard and rectangular glasses" || got.Appearance[1] != "Wears a dark hoodie" {
+		t.Fatalf("appearance facts must survive automatic updates unchanged: %#v", got.Appearance)
+	}
+	if !strings.Contains(RenderDossier(got), "Appearance:\n- Has a van-dyke beard and rectangular glasses") {
+		t.Fatalf("appearance section missing from rendered dossier: %q", RenderDossier(got))
+	}
+}
+
 func countBullets(text string) int {
 	count := 0
 	for _, line := range strings.Split(text, "\n") {

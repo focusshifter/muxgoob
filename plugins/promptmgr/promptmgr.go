@@ -836,9 +836,23 @@ func SavePersonFacts(chatID int64, userID int64, facts string) error {
 		})
 	}
 
-	bodies := personFactBodies(trimmedFacts)
+	dossier := factsutil.ParseDossier(trimmedFacts)
+	bodies := append([]string(nil), dossier.Identity...)
+	bodies = append(bodies, dossier.Interests...)
+	if len(bodies) == 0 && len(dossier.Appearance) == 0 && trimmedFacts != "" {
+		bodies = []string{trimmedFacts}
+	}
 	return database.RetryWithBackoff(func() error {
-		return chatmemory.NewRepository(database.DB).ReplacePersonFacts(context.Background(), chatID, userID, bodies, "promptmgr_save_person_facts")
+		return database.WithTx(context.Background(), func(tx *sql.Tx) error {
+			repo := chatmemory.NewRepository(database.DB)
+			for _, body := range dossier.Appearance {
+				subject := userID
+				if _, _, err := repo.AddTx(context.Background(), tx, chatmemory.Entry{ChatID: chatID, Kind: chatmemory.PersonFact, SubjectUserID: &subject, Body: body, Retention: chatmemory.Pinned, SourceType: "stable_appearance"}); err != nil {
+					return err
+				}
+			}
+			return repo.ReplacePersonFactsTx(context.Background(), tx, chatID, userID, bodies, "promptmgr_save_person_facts")
+		})
 	})
 }
 
@@ -854,7 +868,7 @@ func getStructuredPersonFacts(db *sql.DB, chatID int64, userIDs []int64) (map[in
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving structured person facts: %v", err)
 	}
-	grouped := make(map[int64][]string)
+	grouped := make(map[int64]*factsutil.Dossier)
 	for _, entry := range entries {
 		if entry.SubjectUserID == nil {
 			continue
@@ -866,17 +880,23 @@ func getStructuredPersonFacts(db *sql.DB, chatID int64, userIDs []int64) (map[in
 			}
 		}
 		body := strings.TrimSpace(entry.Body)
-		if body != "" {
-			grouped[userID] = append(grouped[userID], body)
+		if body == "" {
+			continue
+		}
+		dossier := grouped[userID]
+		if dossier == nil {
+			dossier = &factsutil.Dossier{}
+			grouped[userID] = dossier
+		}
+		if entry.Retention == chatmemory.Pinned {
+			dossier.Appearance = append(dossier.Appearance, body)
+		} else {
+			dossier.Identity = append(dossier.Identity, body)
 		}
 	}
 	results := make(map[int64]string, len(grouped))
-	for userID, bodies := range grouped {
-		var lines []string
-		for _, body := range bodies {
-			lines = append(lines, "- "+body)
-		}
-		results[userID] = "Identity:\n" + strings.Join(lines, "\n")
+	for userID, dossier := range grouped {
+		results[userID] = factsutil.RenderDossier(factsutil.EnforceDossierBudgets(dossier))
 	}
 	return results, nil
 }

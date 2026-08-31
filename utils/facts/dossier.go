@@ -7,14 +7,19 @@ import (
 )
 
 const (
-	MaxDossierIdentityBullets = 12
-	MaxDossierInterestBullets = 32
-	MaxDossierCanonicalTokens = 8
+	MaxDossierIdentityBullets   = 12
+	MaxDossierAppearanceBullets = 12
+	MaxDossierInterestBullets   = 32
+	MaxDossierCanonicalTokens   = 8
 )
 
 type Dossier struct {
-	Identity  []string
-	Interests []string
+	// Appearance is a user-identity anchor (visual traits, canonical depiction,
+	// clothing). It is intentionally excluded from automated delta updates and
+	// budget eviction; only an explicit owner/user memory mutation may change it.
+	Appearance []string
+	Identity   []string
+	Interests  []string
 }
 
 func ParseDossier(text string) *Dossier {
@@ -28,6 +33,9 @@ func ParseDossier(text string) *Dossier {
 		}
 
 		switch line {
+		case "Appearance:":
+			section = &d.Appearance
+			continue
 		case "Identity:":
 			section = &d.Identity
 			continue
@@ -63,6 +71,10 @@ func RenderDossier(d *Dossier) string {
 
 	var out strings.Builder
 	writeSection(&out, "Identity:", d.Identity)
+	if len(d.Appearance) > 0 {
+		out.WriteString("\n\n")
+		writeSection(&out, "Appearance:", d.Appearance)
+	}
 	out.WriteString("\n\n")
 	writeSection(&out, "Interests:", d.Interests)
 	return strings.TrimSpace(out.String())
@@ -84,9 +96,34 @@ func EnforceDossierBudgets(d *Dossier) *Dossier {
 		return &Dossier{}
 	}
 	return &Dossier{
-		Identity:  compactDossierSection(d.Identity, MaxDossierIdentityBullets),
-		Interests: compactDossierSection(d.Interests, MaxDossierInterestBullets),
+		Appearance: preserveAppearanceFacts(d.Appearance),
+		Identity:   compactDossierSection(d.Identity, MaxDossierIdentityBullets),
+		Interests:  compactDossierSection(d.Interests, MaxDossierInterestBullets),
 	}
+}
+
+func preserveAppearanceFacts(items []string) []string {
+	kept := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range kept {
+			if strings.EqualFold(existing, item) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			if len(kept) >= MaxDossierAppearanceBullets {
+				continue
+			}
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 func writeSection(out *strings.Builder, heading string, items []string) {

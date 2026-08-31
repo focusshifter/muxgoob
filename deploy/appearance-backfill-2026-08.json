@@ -1,0 +1,23 @@
+{
+  "source_type": "appearance_backfill_2026_08",
+  "facts": [
+    {
+      "chat_id": -1001028877582,
+      "subject_user_id": 686563,
+      "legacy_person_fact_id": 18399,
+      "body": "Has light-brown hair, a van-dyke beard, browline or rectangular glasses, and baldness."
+    },
+    {
+      "chat_id": -1001028877582,
+      "subject_user_id": 76899185,
+      "legacy_person_fact_id": 18392,
+      "body": "Prefers being depicted as Vhailor, an emo dwarf, rather than seated as a passenger."
+    },
+    {
+      "chat_id": -1001028877582,
+      "subject_user_id": 76899185,
+      "legacy_person_fact_id": 17633,
+      "body": "Insists on dwarf identity, not gnome; wants to be depicted with a beard."
+    }
+  ]
+}

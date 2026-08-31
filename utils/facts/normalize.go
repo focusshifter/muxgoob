@@ -11,6 +11,7 @@ type Evaluation struct {
 
 var dossierHeadings = []string{
 	"Identity:",
+	"Appearance:",
 	"Interests:",
 }
 
@@ -90,6 +91,7 @@ func looksLikeMetaFactsOutput(value string) bool {
 
 func hasExpectedDossierStructure(value string) bool {
 	lines := strings.Split(value, "\n")
+	expected := []string{"Identity:", "Appearance:", "Interests:"}
 	headingIndex := 0
 	inSection := false
 
@@ -99,8 +101,15 @@ func hasExpectedDossierStructure(value string) bool {
 			continue
 		}
 
-		if headingIndex < len(dossierHeadings) && line == dossierHeadings[headingIndex] {
+		if headingIndex < len(expected) && line == expected[headingIndex] {
 			headingIndex++
+			inSection = true
+			continue
+		}
+		// Appearance is optional for legacy dossiers, but if present it must be
+		// between Identity and Interests.
+		if headingIndex == 1 && line == "Interests:" {
+			headingIndex = len(expected)
 			inSection = true
 			continue
 		}
@@ -108,17 +117,12 @@ func hasExpectedDossierStructure(value string) bool {
 		if isKnownHeading(line) {
 			return false
 		}
-
-		if !inSection {
-			return false
-		}
-
-		if !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
+		if !inSection || (!strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ")) {
 			return false
 		}
 	}
 
-	return headingIndex == len(dossierHeadings)
+	return headingIndex == len(expected)
 }
 
 func isKnownHeading(line string) bool {

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -37,5 +38,28 @@ func TestBuildContextExcludesPlansAndScopesPersonFacts(t *testing.T) {
 		if strings.Contains(rendered, excluded) {
 			t.Fatalf("unexpected %q in %q", excluded, rendered)
 		}
+	}
+}
+
+func TestBuildContextPrioritizesPinnedAppearance(t *testing.T) {
+	db := setupRepositoryTestDB(t)
+	defer db.Close()
+	repo := NewRepository(db)
+	ctx := context.Background()
+	userID := int64(1)
+	if _, _, err := repo.Add(ctx, Entry{ChatID: 10, Kind: PersonFact, SubjectUserID: &userID, Body: "Canonical emo dwarf", Retention: Pinned, SourceType: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxContextEntriesPerKind+5; i++ {
+		if _, _, err := repo.Add(ctx, Entry{ChatID: 10, Kind: PersonFact, SubjectUserID: &userID, Body: fmt.Sprintf("recent replaceable fact %d", i), SourceType: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rendered, err := repo.BuildContext(ctx, 10, []int64{userID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rendered, "Canonical emo dwarf") {
+		t.Fatalf("pinned appearance was omitted from capped context: %q", rendered)
 	}
 }

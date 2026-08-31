@@ -50,6 +50,7 @@ func (r *Repository) BuildContext(ctx context.Context, chatID int64, subjectUser
 		if err != nil {
 			return "", err
 		}
+		entries = prioritizePinnedPersonFacts(entries)
 		if len(entries) > maxContextEntriesPerKind {
 			entries = entries[:maxContextEntriesPerKind]
 		}
@@ -62,6 +63,22 @@ func (r *Repository) BuildContext(ctx context.Context, chatID int64, subjectUser
 		return "", nil
 	}
 	return "Structured memory (durable data; keep types distinct):\n" + strings.Join(blocks, "\n"), nil
+}
+
+func prioritizePinnedPersonFacts(entries []Entry) []Entry {
+	if len(entries) < 2 {
+		return entries
+	}
+	pinned := make([]Entry, 0, len(entries))
+	replaceable := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Retention == Pinned {
+			pinned = append(pinned, entry)
+		} else {
+			replaceable = append(replaceable, entry)
+		}
+	}
+	return append(pinned, replaceable...)
 }
 
 func renderSection(title string, entries []Entry) string {

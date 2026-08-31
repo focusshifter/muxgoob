@@ -28,22 +28,30 @@ const (
 	Superseded Status = "superseded"
 )
 
+type Retention string
+
+const (
+	Replaceable Retention = "replaceable"
+	Pinned      Retention = "pinned"
+)
+
 type Entry struct {
-	ID                 int64  `json:"id"`
-	ChatID             int64  `json:"chat_id"`
-	Kind               Kind   `json:"kind"`
-	SubjectUserID      *int64 `json:"subject_user_id,omitempty"`
-	Body               string `json:"body"`
-	NormalizedBody     string `json:"-"`
-	Status             Status `json:"status"`
-	SourceType         string `json:"source_type"`
-	SourceMessageID    *int64 `json:"source_message_id,omitempty"`
-	SourceUserID       *int64 `json:"source_user_id,omitempty"`
-	LegacyPromptID     *int64 `json:"legacy_prompt_id,omitempty"`
-	LegacyPersonFactID *int64 `json:"legacy_person_fact_id,omitempty"`
-	SupersedesID       *int64 `json:"supersedes_id,omitempty"`
-	CreatedAt          int64  `json:"created_at"`
-	UpdatedAt          int64  `json:"updated_at"`
+	ID                 int64     `json:"id"`
+	ChatID             int64     `json:"chat_id"`
+	Kind               Kind      `json:"kind"`
+	SubjectUserID      *int64    `json:"subject_user_id,omitempty"`
+	Body               string    `json:"body"`
+	NormalizedBody     string    `json:"-"`
+	Status             Status    `json:"status"`
+	Retention          Retention `json:"retention"`
+	SourceType         string    `json:"source_type"`
+	SourceMessageID    *int64    `json:"source_message_id,omitempty"`
+	SourceUserID       *int64    `json:"source_user_id,omitempty"`
+	LegacyPromptID     *int64    `json:"legacy_prompt_id,omitempty"`
+	LegacyPersonFactID *int64    `json:"legacy_person_fact_id,omitempty"`
+	SupersedesID       *int64    `json:"supersedes_id,omitempty"`
+	CreatedAt          int64     `json:"created_at"`
+	UpdatedAt          int64     `json:"updated_at"`
 }
 
 type Filter struct {
@@ -73,6 +81,7 @@ func EnsureSchema(db *sql.DB) error {
 			body TEXT NOT NULL,
 			normalized_body TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed','archived','superseded')),
+			retention TEXT NOT NULL DEFAULT 'replaceable' CHECK(retention IN ('replaceable','pinned')),
 			source_type TEXT NOT NULL,
 			source_message_id INTEGER,
 			source_user_id INTEGER,
@@ -123,6 +132,16 @@ func EnsureSchema(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("ensure memory schema: %w", err)
 	}
+	// SQLite does not support ADD COLUMN IF NOT EXISTS. Existing databases need
+	// this additive migration; new databases already have the column above.
+	if _, err := db.Exec(`ALTER TABLE memory_entries ADD COLUMN retention TEXT NOT NULL DEFAULT 'replaceable' CHECK(retention IN ('replaceable','pinned'))`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return fmt.Errorf("add memory retention column: %w", err)
+	}
+	// Upgrade records created by the initial appearance implementation, which
+	// used source_type as the retention signal.
+	if _, err := db.Exec(`UPDATE memory_entries SET retention='pinned' WHERE source_type='stable_appearance'`); err != nil {
+		return fmt.Errorf("backfill pinned appearance retention: %w", err)
+	}
 	return nil
 }
 
@@ -158,12 +177,12 @@ type sqlExecutor interface {
 func (r *Repository) add(ctx context.Context, exec sqlExecutor, entry Entry) (Entry, bool, error) {
 	result, err := exec.ExecContext(ctx, `
 		INSERT OR IGNORE INTO memory_entries (
-			chat_id, kind, subject_user_id, body, normalized_body, status,
+			chat_id, kind, subject_user_id, body, normalized_body, status, retention,
 			source_type, source_message_id, source_user_id, legacy_prompt_id,
 			legacy_person_fact_id, supersedes_id, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.ChatID, entry.Kind, nullableInt64(entry.SubjectUserID), entry.Body,
-		entry.NormalizedBody, entry.Status, entry.SourceType,
+		entry.NormalizedBody, entry.Status, entry.Retention, entry.SourceType,
 		nullableInt64(entry.SourceMessageID), nullableInt64(entry.SourceUserID),
 		nullableInt64(entry.LegacyPromptID), nullableInt64(entry.LegacyPersonFactID),
 		nullableInt64(entry.SupersedesID), entry.CreatedAt, entry.UpdatedAt)
@@ -173,7 +192,7 @@ func (r *Repository) add(ctx context.Context, exec sqlExecutor, entry Entry) (En
 	changed, _ := result.RowsAffected()
 
 	row := exec.QueryRowContext(ctx, `
-		SELECT id, chat_id, kind, subject_user_id, body, normalized_body, status,
+		SELECT id, chat_id, kind, subject_user_id, body, normalized_body, status, retention,
 			source_type, source_message_id, source_user_id, legacy_prompt_id,
 			legacy_person_fact_id, supersedes_id, created_at, updated_at
 		FROM memory_entries
@@ -191,7 +210,7 @@ func (r *Repository) List(ctx context.Context, filter Filter) ([]Entry, error) {
 	if r == nil || r.db == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	query := `SELECT id, chat_id, kind, subject_user_id, body, normalized_body, status,
+	query := `SELECT id, chat_id, kind, subject_user_id, body, normalized_body, status, retention,
 		source_type, source_message_id, source_user_id, legacy_prompt_id,
 		legacy_person_fact_id, supersedes_id, created_at, updated_at
 		FROM memory_entries WHERE chat_id=?`
@@ -270,7 +289,7 @@ func (r *Repository) ReplacePersonFactsTx(ctx context.Context, tx *sql.Tx, chatI
 	if r == nil || r.db == nil || tx == nil {
 		return errors.New("database and transaction are required")
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE memory_entries SET status='archived', updated_at=? WHERE chat_id=? AND kind='person_fact' AND subject_user_id=? AND status='active'`, time.Now().Unix(), chatID, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE memory_entries SET status='archived', updated_at=? WHERE chat_id=? AND kind='person_fact' AND subject_user_id=? AND status='active' AND retention='replaceable'`, time.Now().Unix(), chatID, userID); err != nil {
 		return err
 	}
 	for _, body := range bodies {
@@ -315,7 +334,7 @@ func (r *Repository) Supersede(ctx context.Context, oldID int64, replacement Ent
 		return Entry{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	old, err := scanEntry(tx.QueryRowContext(ctx, `SELECT id, chat_id, kind, subject_user_id, body, normalized_body, status, source_type, source_message_id, source_user_id, legacy_prompt_id, legacy_person_fact_id, supersedes_id, created_at, updated_at FROM memory_entries WHERE id=?`, oldID))
+	old, err := scanEntry(tx.QueryRowContext(ctx, `SELECT id, chat_id, kind, subject_user_id, body, normalized_body, status, retention, source_type, source_message_id, source_user_id, legacy_prompt_id, legacy_person_fact_id, supersedes_id, created_at, updated_at FROM memory_entries WHERE id=?`, oldID))
 	if err != nil {
 		return Entry{}, fmt.Errorf("read superseded memory: %w", err)
 	}
@@ -378,6 +397,15 @@ func prepareEntry(entry *Entry) error {
 	if entry.Status != Active {
 		return errors.New("new memories must be active")
 	}
+	if entry.Retention == "" {
+		entry.Retention = Replaceable
+	}
+	if entry.Retention != Replaceable && entry.Retention != Pinned {
+		return fmt.Errorf("unsupported memory retention %q", entry.Retention)
+	}
+	if entry.Retention == Pinned && entry.Kind != PersonFact {
+		return errors.New("pinned retention is supported only for person_fact")
+	}
 	entry.SourceType = strings.TrimSpace(entry.SourceType)
 	if entry.SourceType == "" {
 		return errors.New("source_type is required")
@@ -418,7 +446,7 @@ func scanEntry(row rowScanner) (Entry, error) {
 	var entry Entry
 	var subject, sourceMessage, sourceUser, legacyPrompt, legacyPerson, supersedes sql.NullInt64
 	err := row.Scan(&entry.ID, &entry.ChatID, &entry.Kind, &subject, &entry.Body, &entry.NormalizedBody,
-		&entry.Status, &entry.SourceType, &sourceMessage, &sourceUser, &legacyPrompt,
+		&entry.Status, &entry.Retention, &entry.SourceType, &sourceMessage, &sourceUser, &legacyPrompt,
 		&legacyPerson, &supersedes, &entry.CreatedAt, &entry.UpdatedAt)
 	if err != nil {
 		return Entry{}, err

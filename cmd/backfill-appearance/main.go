@@ -94,12 +94,16 @@ func main() {
 		repo := chatmemory.NewRepository(db)
 		if err := withTx(context.Background(), db, func(tx *sql.Tx) error {
 			for _, fact := range input.Facts {
-				subject, legacy := fact.SubjectUserID, fact.LegacyPersonFactID
-				_, changed, err := repo.AddTx(context.Background(), tx, chatmemory.Entry{
+				subject := fact.SubjectUserID
+				entry := chatmemory.Entry{
 					ChatID: fact.ChatID, Kind: chatmemory.PersonFact, SubjectUserID: &subject,
 					Body: fact.Body, Retention: chatmemory.Pinned, SourceType: input.SourceType,
-					LegacyPersonFactID: &legacy,
-				})
+				}
+				if fact.LegacyPersonFactID != 0 {
+					legacy := fact.LegacyPersonFactID
+					entry.LegacyPersonFactID = &legacy
+				}
+				_, changed, err := repo.AddTx(context.Background(), tx, entry)
 				if err != nil {
 					return err
 				}
@@ -126,14 +130,20 @@ func validateManifest(ctx context.Context, db *sql.DB, input manifest) error {
 	seen := map[string]struct{}{}
 	for i, fact := range input.Facts {
 		fact.Body = strings.TrimSpace(fact.Body)
-		if fact.ChatID == 0 || fact.SubjectUserID == 0 || fact.LegacyPersonFactID == 0 || fact.Body == "" {
-			return fmt.Errorf("fact %d requires chat_id, subject_user_id, legacy_person_fact_id, and body", i)
+		if fact.ChatID == 0 || fact.SubjectUserID == 0 || fact.Body == "" {
+			return fmt.Errorf("fact %d requires chat_id, subject_user_id, and body", i)
+		}
+		if fact.LegacyPersonFactID == 0 && !strings.HasPrefix(input.SourceType, "owner_confirmed_") && !strings.HasPrefix(input.SourceType, "stable_alias_owner_confirmed_") {
+			return fmt.Errorf("fact %d requires legacy_person_fact_id unless source_type is owner_confirmed_*", i)
 		}
 		key := fmt.Sprintf("%d/%d/%s", fact.ChatID, fact.SubjectUserID, strings.ToLower(fact.Body))
 		if _, ok := seen[key]; ok {
 			return fmt.Errorf("duplicate fact %d", i)
 		}
 		seen[key] = struct{}{}
+		if fact.LegacyPersonFactID == 0 {
+			continue
+		}
 		sourceUserID := fact.LegacySubjectUserID
 		if sourceUserID == 0 {
 			sourceUserID = fact.SubjectUserID

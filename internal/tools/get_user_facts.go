@@ -221,7 +221,7 @@ func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {
 		}
 		dossier := &factsutil.Dossier{}
 		for _, entry := range entries {
-			if entry.Retention == chatmemory.Pinned {
+			if entry.Retention == chatmemory.Pinned && !strings.HasPrefix(entry.SourceType, "stable_alias") {
 				dossier.Appearance = append(dossier.Appearance, entry.Body)
 			} else {
 				dossier.Identity = append(dossier.Identity, entry.Body)

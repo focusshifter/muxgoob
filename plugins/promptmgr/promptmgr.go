@@ -888,7 +888,7 @@ func getStructuredPersonFacts(db *sql.DB, chatID int64, userIDs []int64) (map[in
 			dossier = &factsutil.Dossier{}
 			grouped[userID] = dossier
 		}
-		if entry.Retention == chatmemory.Pinned {
+		if entry.Retention == chatmemory.Pinned && !strings.HasPrefix(entry.SourceType, "stable_alias") {
 			dossier.Appearance = append(dossier.Appearance, body)
 		} else {
 			dossier.Identity = append(dossier.Identity, body)

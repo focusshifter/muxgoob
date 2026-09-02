@@ -160,7 +160,17 @@ func TestImageGenerationToolIsOptInPerChat(t *testing.T) {
 		t.Fatalf("expected only generateImage definition, got %#v", defs)
 	}
 	instructions := strings.Join(systemParts, " ")
-	for _, required := range []string{"generateImage", "fetchUsers", "getUserFacts", "Appearance"} {
+	for _, required := range []string{
+		"generateImage",
+		"fetchUsers",
+		"getUserFacts",
+		"Appearance",
+		"decide the exact depicted-person set",
+		"do not call fetchUsers",
+		"only those explicitly depicted people",
+		"belongs only to that returned person",
+		"never copy, transfer, or reuse",
+	} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("expected image-generation instructions to mention %q, got %#v", required, systemParts)
 		}
@@ -2029,7 +2039,19 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 
 func TestImagePromptComposerSystemMessage(t *testing.T) {
 	message := imagePromptComposerSystemMessage("")
-	for _, required := range []string{"generateImage", "fetchUsers", "getUserFacts", "Appearance", "Do not try to bypass", "image-generation"} {
+	for _, required := range []string{
+		"generateImage",
+		"fetchUsers",
+		"getUserFacts",
+		"Appearance",
+		"Do not try to bypass",
+		"image-generation",
+		"decide the exact depicted-person set",
+		"do not call fetchUsers",
+		"only those explicitly depicted people",
+		"belongs only to that returned person",
+		"never copy, transfer, or reuse",
+	} {
 		if !strings.Contains(message, required) {
 			t.Fatalf("composer system message missing %q: %s", required, message)
 		}

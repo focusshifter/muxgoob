@@ -147,14 +147,18 @@ func appendImageGenerationToolIfEnabled(chatID int64, tools []chattools.Tool, to
 	tools = append(tools, imageTool)
 	toolSystemParts = append(toolSystemParts,
 		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
-		"Before generateImage, if the requested image depicts one or more chat members, call getUserFacts for every intended person. If it depicts a collective such as the chat, the group, friends, or everyone together and the intended people are not enumerated, call fetchUsers first, then call getUserFacts for the intended participants. Do not call these user tools for images unrelated to chat members.",
-		"When composing the generateImage prompt, preserve every Appearance fact returned for each depicted person as a mandatory visual constraint. Do not replace known people with generic extras, infer gender or appearance from a name, or omit a depicted person's supplied Appearance.",
+		imageParticipantLookupInstructions,
+		imageParticipantFactBindingInstructions,
 		"For a new image request, use only the active request as visual source unless the user explicitly asks for chat history, chat events, or chat participants. In that opt-in case, use only relevant factual text context; never carry over prior image prompts, generated images, captions, styles, or image metadata. Preserve all explicit visual constraints, especially composition, lighting, color grade, era, and negative constraints.",
 		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
 		"After generateImage succeeds, do not send any follow-up confirmation text.",
 	)
 	return tools, toolSystemParts, imageTool
 }
+
+const imageParticipantLookupInstructions = "Before any participant lookup, decide the exact depicted-person set from the active image request. If the request already names or enumerates the depicted people, do not call fetchUsers; call getUserFacts with only those explicitly depicted people, excluding chat members who are merely present in history or otherwise mentioned. For an unenumerated collective request, call fetchUsers only to resolve candidates, then call getUserFacts only for the people the image will actually depict; never pass the full fetched roster unless the request explicitly depicts every member. Do not call these user tools for images unrelated to chat members."
+
+const imageParticipantFactBindingInstructions = "Treat every getUserFacts result item as a sealed record keyed by its query and name: every Identity or Appearance fact belongs only to that returned person. Preserve each depicted person's returned Appearance as a mandatory visual constraint, but never copy, transfer, or reuse one person's facts for another person. If a depicted person has no Appearance, leave their appearance unspecified or use a neutral labeled avatar; do not borrow another participant's traits or infer gender or appearance from a name."
 
 type ReplyPlugin struct {
 	random     RandomGenerator
@@ -1642,9 +1646,9 @@ func imagePromptComposer(chatID *int64) (chattools.ChatCompletionCreator, string
 func imagePromptComposerSystemMessage(superAdminDirective string) string {
 	parts := []string{
 		"You compose direct image-generation requests.",
-		"Before generateImage, if the image depicts one or more chat members, call getUserFacts for every intended person. If it depicts a collective such as the chat, the group, friends, or everyone together and the intended people are not enumerated, call fetchUsers first, then call getUserFacts for the intended participants. Do not call these user tools for unrelated images.",
+		imageParticipantLookupInstructions,
 		"Use generateImage for a compatible request and put a complete, concrete visual prompt in its prompt field.",
-		"Preserve every Appearance fact returned for each depicted person as a mandatory visual constraint. Never replace known people with generic extras or infer gender or appearance from a name.",
+		imageParticipantFactBindingInstructions,
 		"Preserve relevant supplied identity, scene, style, and composition details without inventing personal details.",
 		"Do not claim that an image was generated unless generateImage succeeds.",
 		"Do not try to bypass any image provider's safety controls; if the requested content cannot be generated, offer a brief allowed alternative.",

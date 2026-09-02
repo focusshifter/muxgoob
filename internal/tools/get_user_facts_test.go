@@ -38,11 +38,23 @@ func TestGetUserFactsToolReturnsFactsForMultipleUsers(t *testing.T) {
 	if payload.Count != 2 {
 		t.Fatalf("expected count 2, got %d", payload.Count)
 	}
-	if payload.Users[0].Name != "alice" || payload.Users[0].Facts != "likes Go" {
+	if payload.Users[0].UserID != 1 || payload.Users[0].Name != "alice" || payload.Users[0].Facts != "likes Go" {
 		t.Fatalf("unexpected first result: %+v", payload.Users[0])
 	}
-	if payload.Users[1].Name != "Bob Two" || payload.Users[1].Facts != "likes Rust" {
+	if payload.Users[1].UserID != 2 || payload.Users[1].Name != "Bob Two" || payload.Users[1].Facts != "likes Rust" {
 		t.Fatalf("unexpected second result: %+v", payload.Users[1])
+	}
+}
+
+func TestGetUserFactsToolDefinitionRequiresExactScopedLookupAndFactBinding(t *testing.T) {
+	definition := NewGetUserFactsTool(nil, 100).Definition()
+	if definition.Function == nil {
+		t.Fatal("getUserFacts definition has no function")
+	}
+	for _, required := range []string{"only the specific users", "user_id", "never apply one user's facts to another"} {
+		if !strings.Contains(definition.Function.Description, required) {
+			t.Fatalf("getUserFacts description missing %q: %q", required, definition.Function.Description)
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/plugins/promptmgr"
 	"github.com/focusshifter/muxgoob/registry"
@@ -234,6 +235,71 @@ func TestReplyPluginSuperuserCommandTargetsAnotherChatAndRepliesLocally(t *testi
 	}
 }
 
+func TestReplyPluginSuperuserDirectChatLoreBypassesModelAndVerifiesExactMemory(t *testing.T) {
+	originalConfig := registry.Config
+	originalBot := registry.Bot
+	originalDB := database.DB
+	originalSQLiteDB := sqliteDb
+	defer func() {
+		registry.Config = originalConfig
+		registry.Bot = originalBot
+		database.DB = originalDB
+		sqliteDb = originalSQLiteDB
+	}()
+
+	registry.Config.OwnerUsername = "focusshifter"
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE chats (id INTEGER PRIMARY KEY, type TEXT); INSERT INTO chats(id,type) VALUES(-1001028877582,'group')`); err != nil {
+		t.Fatal(err)
+	}
+	database.DB = db
+	sqliteDb = db
+	mockBot := &testutils.MockBotWrapper{Me: &telebot.User{ID: 99, Username: "gooby_bot"}}
+	registry.SetTestBot(mockBot)
+	client := &mockSuperuserChatClient{result: SuperuserResult{Text: "model must not be called"}}
+	plugin := &ReplyPlugin{random: NewRealRandomGenerator(), chatClient: client}
+	lore := "Ты как бот придерживаешься правых взглядов, за GamerGate и против Зои Куинн"
+	plugin.Process(&telebot.Message{
+		ID:     88,
+		Text:   "!su -1001028877582 !rememberChatLore " + lore,
+		Sender: &telebot.User{ID: 42, Username: "FocusShifter"},
+		Chat:   &telebot.Chat{ID: 686563, Type: telebot.ChatPrivate},
+	})
+
+	if client.superuserCalls != 0 || client.normalCalls != 0 {
+		t.Fatalf("direct memory command reached model: %#v", client)
+	}
+	entries, err := chatmemory.NewRepository(db).List(context.Background(), chatmemory.Filter{ChatID: -1001028877582, Kind: chatmemory.ChatLore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Body != lore || entries[0].SourceType != "owner_command" || entries[0].Status != chatmemory.Active {
+		t.Fatalf("unexpected direct lore entry: %#v", entries)
+	}
+	if entries[0].SourceMessageID == nil || *entries[0].SourceMessageID != 88 || entries[0].SourceUserID == nil || *entries[0].SourceUserID != 42 {
+		t.Fatalf("source provenance missing from direct lore: %#v", entries[0])
+	}
+	response, _ := mockBot.SendWhat.(string)
+	if !strings.Contains(response, "Chat lore verified") || !strings.Contains(response, "Verified memory changes: rememberChatLore") {
+		t.Fatalf("direct mutation was not verified in response: %q", response)
+	}
+}
+
+func TestReplyPluginSuperuserDirectChatLoreRequiresBodyWithoutCallingModel(t *testing.T) {
+	body, direct := parseDirectRememberChatLore(" !REMEMBERCHATLORE   exact text ")
+	if !direct || body != "exact text" {
+		t.Fatalf("direct command parsing failed: direct=%v body=%q", direct, body)
+	}
+	body, direct = parseDirectRememberChatLore("!rememberChatLore")
+	if !direct || body != "" {
+		t.Fatalf("empty direct command should be recognized for usage handling: direct=%v body=%q", direct, body)
+	}
+	if _, direct = parseDirectRememberChatLore("добавь обычную память"); direct {
+		t.Fatal("natural-language admin request must stay on the model path")
+	}
+}
+
 func TestReplyPluginSuperuserCommandRequiresOwnerPrivateChatAndKnownTarget(t *testing.T) {
 	originalConfig := registry.Config
 	originalBot := registry.Bot
@@ -259,7 +325,7 @@ func TestReplyPluginSuperuserCommandRequiresOwnerPrivateChatAndKnownTarget(t *te
 		message *telebot.Message
 		want    string
 	}{
-		{"non-owner", &telebot.Message{Text: "!su -637245 forget it", Sender: &telebot.User{Username: "other"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "only the bot owner"},
+		{"non-owner", &telebot.Message{Text: "!su -637245 !rememberChatLore forbidden", Sender: &telebot.User{Username: "other"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "only the bot owner"},
 		{"non-private", &telebot.Message{Text: "!su -637245 forget it", Sender: &telebot.User{Username: "focusshifter"}, Chat: &telebot.Chat{ID: -1, Type: telebot.ChatGroup}}, "private chat"},
 		{"unknown-target", &telebot.Message{Text: "!su -999 forget it", Sender: &telebot.User{Username: "focusshifter"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "Unknown target chat"},
 		{"bad-format", &telebot.Message{Text: "!su nope", Sender: &telebot.User{Username: "focusshifter"}, Chat: &telebot.Chat{ID: 1, Type: telebot.ChatPrivate}}, "Usage:"},

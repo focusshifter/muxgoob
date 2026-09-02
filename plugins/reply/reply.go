@@ -411,6 +411,55 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 	}
 }
 
+func parseDirectRememberChatLore(instruction string) (string, bool) {
+	trimmed := strings.TrimSpace(instruction)
+	command, body, found := strings.Cut(trimmed, " ")
+	if !strings.EqualFold(command, "!rememberChatLore") {
+		return "", false
+	}
+	if !found {
+		return "", true
+	}
+	return strings.TrimSpace(body), true
+}
+
+func rememberChatLoreDirectly(ctx context.Context, db *sql.DB, targetChatID int64, sourceMessage *telebot.Message, body string) (chatmemory.Entry, bool, error) {
+	if err := chatmemory.EnsureSchema(db); err != nil {
+		return chatmemory.Entry{}, false, err
+	}
+	entry := chatmemory.Entry{
+		ChatID:     targetChatID,
+		Kind:       chatmemory.ChatLore,
+		Body:       strings.TrimSpace(body),
+		Retention:  chatmemory.Replaceable,
+		SourceType: "owner_command",
+	}
+	if sourceMessage != nil {
+		sourceMessageID := int64(sourceMessage.ID)
+		entry.SourceMessageID = &sourceMessageID
+		if sourceMessage.Sender != nil {
+			sourceUserID := int64(sourceMessage.Sender.ID)
+			entry.SourceUserID = &sourceUserID
+		}
+	}
+
+	repository := chatmemory.NewRepository(db)
+	stored, changed, err := repository.Add(ctx, entry)
+	if err != nil {
+		return chatmemory.Entry{}, false, err
+	}
+	entries, err := repository.List(ctx, chatmemory.Filter{ChatID: targetChatID, Kind: chatmemory.ChatLore})
+	if err != nil {
+		return chatmemory.Entry{}, false, fmt.Errorf("verify direct chat lore: %w", err)
+	}
+	for _, candidate := range entries {
+		if candidate.ID == stored.ID && candidate.Body == entry.Body && candidate.Status == chatmemory.Active {
+			return candidate, changed, nil
+		}
+	}
+	return chatmemory.Entry{}, false, fmt.Errorf("direct chat lore was not found after write")
+}
+
 func (p *ReplyPlugin) processSuperuserCommand(message *telebot.Message, messageText string) {
 	bot := registry.Bot
 	if bot == nil || message == nil || message.Chat == nil {
@@ -453,6 +502,26 @@ func (p *ReplyPlugin) processSuperuserCommand(message *telebot.Message, messageT
 		return
 	}
 	log.Printf("[reply] accepted !su owner=%s source_chat=%d target_chat=%d", message.Sender.Username, message.Chat.ID, targetChatID)
+	if body, direct := parseDirectRememberChatLore(instruction); direct {
+		if body == "" {
+			sendReplyWithLog(bot, message.Chat, "Usage: !su <chat_id> !rememberChatLore <exact text>", replyOptionsForMessage(message))
+			return
+		}
+		entry, changed, err := rememberChatLoreDirectly(context.Background(), sqliteDb, targetChatID, message, body)
+		if err != nil {
+			log.Printf("[reply] direct !rememberChatLore failed chat=%d: %v", targetChatID, err)
+			sendReplyWithLog(bot, message.Chat, "Could not save and verify chat lore.", replyOptionsForMessage(message))
+			return
+		}
+		response := fmt.Sprintf("Chat lore verified in chat %d as memory %d.", targetChatID, entry.ID)
+		if changed {
+			response += "\n\nVerified memory changes: rememberChatLore."
+		} else {
+			response += "\n\nNo memory change was needed; the exact lore already exists."
+		}
+		sendReplyWithLog(bot, message.Chat, response, replyOptionsForMessage(message))
+		return
+	}
 	client, ok := p.chatClient.(SuperuserChatGptClient)
 	if !ok {
 		log.Printf("[reply] Chat client does not support !su")

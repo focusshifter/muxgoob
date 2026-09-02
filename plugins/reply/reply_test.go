@@ -158,8 +158,11 @@ func TestImageGenerationToolIsOptInPerChat(t *testing.T) {
 	if len(defs) != 1 || defs[0].Function == nil || defs[0].Function.Name != "generateImage" {
 		t.Fatalf("expected only generateImage definition, got %#v", defs)
 	}
-	if !strings.Contains(strings.Join(systemParts, " "), "generateImage") {
-		t.Fatalf("expected image-generation prompt instructions after enabling chat, got %#v", systemParts)
+	instructions := strings.Join(systemParts, " ")
+	for _, required := range []string{"generateImage", "fetchUsers", "getUserFacts", "Appearance"} {
+		if !strings.Contains(instructions, required) {
+			t.Fatalf("expected image-generation instructions to mention %q, got %#v", required, systemParts)
+		}
 	}
 }
 
@@ -1946,24 +1949,38 @@ func TestImageSceneContextOptInAndFiltering(t *testing.T) {
 	if shouldUseImageSceneContext("губи, нарисуй пингвина в шапке") {
 		t.Fatal("ordinary image request must not opt in to chat context")
 	}
-
 	current := &telebot.Message{ID: 4, Sender: &telebot.User{Username: "victor"}}
 	prompt := buildImageScenePrompt([]telebot.Message{
 		{ID: 1, Sender: &telebot.User{Username: "alice"}, Text: "Капитан отменил релиз"},
 		{ID: 2, Sender: &telebot.User{Username: "bob"}, Text: "нарисуй пингвина в шапке"},
 		{ID: 3, Sender: &telebot.User{Username: "bot", ID: 99}, Text: "сгенерированная картинка"},
 		{ID: 4, Sender: current.Sender, Text: question},
-	}, question, 99, current, []string{"alice", "bob"}, "alice: любит 35mm плёнку", "чибики всегда двухмерные")
-	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "любит 35mm плёнку") || !strings.Contains(prompt, "чибики всегда двухмерные") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
+	}, question, 99, current, []string{"alice", "bob"}, "чибики всегда двухмерные")
+	if !strings.Contains(prompt, "Капитан отменил релиз") || !strings.Contains(prompt, "чибики всегда двухмерные") || strings.Contains(prompt, "пингвина") || strings.Contains(prompt, "сгенерированная") {
 		t.Fatalf("unexpected scene context: %q", prompt)
 	}
 }
 
 func TestImagePromptComposerSystemMessage(t *testing.T) {
 	message := imagePromptComposerSystemMessage("")
-	for _, required := range []string{"generateImage", "Do not try to bypass", "image-generation"} {
+	for _, required := range []string{"generateImage", "fetchUsers", "getUserFacts", "Appearance", "Do not try to bypass", "image-generation"} {
 		if !strings.Contains(message, required) {
 			t.Fatalf("composer system message missing %q: %s", required, message)
+		}
+	}
+}
+
+func TestImagePromptComposerExposesParticipantLookupTools(t *testing.T) {
+	registry := imagePromptComposerRegistry(123, chattools.NewGenerateImageTool(123))
+	got := make(map[string]bool)
+	for _, definition := range registry.Definitions() {
+		if definition.Function != nil {
+			got[definition.Function.Name] = true
+		}
+	}
+	for _, required := range []string{"fetchUsers", "getUserFacts", "generateImage"} {
+		if !got[required] {
+			t.Fatalf("image composer missing %s tool; got %#v", required, got)
 		}
 	}
 }
@@ -2047,33 +2064,7 @@ Avoid:
 	}
 }
 
-func TestCompactPersonFactsForImageKeepsOnlyIdentity(t *testing.T) {
-	factsText := `Identity:
-- Вейлор — эмо-гном.
-- Предпочитает «Вейлор».
-
-Interests:
-- Spotify, metal, keyboards, Forza, YouTube.`
-	got := compactPersonFactsForImage(factsText)
-	if !strings.Contains(got, "эмо-гном") || !strings.Contains(got, "Предпочитает") || strings.Contains(got, "Spotify") || strings.Contains(got, "Interests") {
-		t.Fatalf("unexpected compact image facts: %q", got)
-	}
-}
-
-func TestImageAuthorReferenceLoadsSenderIdentity(t *testing.T) {
-	mockDB := testutils.SetupTestDB(t)
-	defer mockDB.Close()
-	originalDatabaseDB := database.DB
-	database.DB = mockDB
-	defer func() { database.DB = originalDatabaseDB }()
-	_, err := mockDB.Exec(`
-		CREATE TABLE IF NOT EXISTS person_facts (chat_id INTEGER, user_id INTEGER, version INTEGER, facts TEXT);
-		INSERT INTO person_facts (chat_id, user_id, version, facts) VALUES (123, 8, 1, 'Identity:
-- Вейлор — эмо-гном.
-- Предпочитает «Вейлор».');`)
-	if err != nil {
-		t.Fatalf("create author facts: %v", err)
-	}
+func TestImageAuthorReferenceIdentifiesSenderForToolLookup(t *testing.T) {
 	message := &telebot.Message{
 		Chat:   &telebot.Chat{ID: 123},
 		Sender: &telebot.User{ID: 8, Username: "Vhailor"},
@@ -2081,10 +2072,6 @@ func TestImageAuthorReferenceLoadsSenderIdentity(t *testing.T) {
 	}
 	if hasExplicitMention(message) {
 		t.Fatal("author identity must not depend on treating first-person wording as a named mention")
-	}
-	personFacts := buildImagePersonFactsContext(123, message, 0)
-	if !strings.Contains(personFacts, "Vhailor") || !strings.Contains(personFacts, "эмо-гном") {
-		t.Fatalf("author identity facts missing: %q", personFacts)
 	}
 	prompt := imageQuestionWithAuthorReference(message.Text, message)
 	if !strings.Contains(prompt, "Vhailor") || !strings.Contains(prompt, "not as an anonymous or generic driver") {
@@ -2126,14 +2113,17 @@ Interests:
 	}
 }
 
-func TestImagePromptLoadsFactsForExplicitMentions(t *testing.T) {
+func TestImagePromptKeepsRequestAndStableContextWithoutInjectedPersonFacts(t *testing.T) {
 	message := &telebot.Message{Text: "губи, нарисуй @ivan в космосе"}
 	if !hasExplicitMention(message) {
 		t.Fatal("expected @username to be treated as an explicit mention")
 	}
-	prompt := buildImageMentionPrompt(message.Text, "ivan: носит красную куртку", "иван всегда в шапочке пингвина")
-	if !strings.Contains(prompt, "@ivan") || !strings.Contains(prompt, "носит красную куртку") || !strings.Contains(prompt, "шапочке пингвина") {
-		t.Fatalf("mentioned facts missing from prompt: %q", prompt)
+	prompt := buildImageMentionPrompt(message.Text, "иван всегда в шапочке пингвина")
+	if !strings.Contains(prompt, "@ivan") || !strings.Contains(prompt, "шапочке пингвина") {
+		t.Fatalf("request or stable context missing from prompt: %q", prompt)
+	}
+	if strings.Contains(prompt, "носит красную куртку") {
+		t.Fatalf("person facts must be retrieved through getUserFacts, not injected directly: %q", prompt)
 	}
 }
 

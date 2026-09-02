@@ -147,6 +147,8 @@ func appendImageGenerationToolIfEnabled(chatID int64, tools []chattools.Tool, to
 	tools = append(tools, imageTool)
 	toolSystemParts = append(toolSystemParts,
 		"If the user asks you to draw, generate, create, render, or make an image/photo/picture/sticker/картинку/мем, use generateImage instead of only describing an image.",
+		"Before generateImage, if the requested image depicts one or more chat members, call getUserFacts for every intended person. If it depicts a collective such as the chat, the group, friends, or everyone together and the intended people are not enumerated, call fetchUsers first, then call getUserFacts for the intended participants. Do not call these user tools for images unrelated to chat members.",
+		"When composing the generateImage prompt, preserve every Appearance fact returned for each depicted person as a mandatory visual constraint. Do not replace known people with generic extras, infer gender or appearance from a name, or omit a depicted person's supplied Appearance.",
 		"For a new image request, use only the active request as visual source unless the user explicitly asks for chat history, chat events, or chat participants. In that opt-in case, use only relevant factual text context; never carry over prior image prompts, generated images, captions, styles, or image metadata. Preserve all explicit visual constraints, especially composition, lighting, color grade, era, and negative constraints.",
 		"When using generateImage, never expose the internal image prompt. If a caption feels useful, pass a short related Telegram-style caption to the tool; otherwise leave the caption empty.",
 		"After generateImage succeeds, do not send any follow-up confirmation text.",
@@ -1010,76 +1012,6 @@ func buildPersonFactsContext(chatID int64, messages []telebot.Message, currentMe
 	return strings.TrimSpace(out.String())
 }
 
-const maxImageIdentityFacts = 4
-
-func compactPersonFactsForImage(raw string) string {
-	dossier := facts.ParseDossier(raw)
-	if len(dossier.Identity) == 0 {
-		return ""
-	}
-	identity := dossier.Identity
-	if len(identity) > maxImageIdentityFacts {
-		identity = identity[:maxImageIdentityFacts]
-	}
-	var out strings.Builder
-	out.WriteString("Identity:")
-	for _, fact := range identity {
-		fact = strings.TrimSpace(fact)
-		if fact != "" {
-			out.WriteString("\n- ")
-			out.WriteString(fact)
-		}
-	}
-	return out.String()
-}
-
-func buildImagePersonFactsContext(chatID int64, currentMessage *telebot.Message, botID int) string {
-	if currentMessage == nil {
-		return ""
-	}
-	users := make([]*telebot.User, 0)
-	seen := make(map[int64]struct{})
-	addUser := func(user *telebot.User) {
-		if user == nil || user.ID == 0 || user.ID == botID {
-			return
-		}
-		id := int64(user.ID)
-		if _, ok := seen[id]; ok {
-			return
-		}
-		seen[id] = struct{}{}
-		users = append(users, user)
-	}
-	// Every image request carries the request author's compact Identity. The model,
-	// not a keyword matcher, resolves first-person language in the request.
-	addUser(currentMessage.Sender)
-	addMentionedUsers(chatID, currentMessage, addUser)
-	if len(users) == 0 {
-		return ""
-	}
-	ids := make([]int64, 0, len(users))
-	for _, user := range users {
-		ids = append(ids, int64(user.ID))
-	}
-	factMap, err := promptmgr.GetPersonFactsMulti(chatID, ids)
-	if err != nil {
-		log.Printf("[reply] Error retrieving image person facts: %v", err)
-		return ""
-	}
-	var out strings.Builder
-	for _, user := range users {
-		factsText := compactPersonFactsForImage(factMap[int64(user.ID)])
-		if factsText == "" {
-			continue
-		}
-		out.WriteString(userDisplayName(user))
-		out.WriteString(":\n")
-		out.WriteString(factsText)
-		out.WriteString("\n")
-	}
-	return strings.TrimSpace(out.String())
-}
-
 func addMentionedUsers(chatID int64, message *telebot.Message, addUser func(user *telebot.User)) {
 	if message == nil {
 		return
@@ -1291,7 +1223,7 @@ func imageQuestionWithAuthorReference(question string, message *telebot.Message)
 	return strings.TrimSpace(question) + "\n\nRequest author: " + name + ". Interpret any first-person reference in this request as this author. If the scene depicts the author, portray " + name + " as the named subject, not as an anonymous or generic driver; apply their supplied Identity facts when relevant."
 }
 
-func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, personFacts string, stableContext string) string {
+func buildImageScenePrompt(messages []telebot.Message, question string, botID int, currentMessage *telebot.Message, members []string, stableContext string) string {
 	contextLines := make([]string, 0, maxImageSceneContextMessages)
 	for _, message := range imageSceneRelevantMessages(messages, botID, currentMessage) {
 		text := messagePromptText(&message)
@@ -1314,11 +1246,6 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 		prompt.WriteString(strings.Join(members, ", "))
 		prompt.WriteString("\n")
 	}
-	if strings.TrimSpace(personFacts) != "" {
-		prompt.WriteString("Relevant participant facts (use only if they help this scene; do not turn them into visual instructions unless requested):\n")
-		prompt.WriteString(strings.TrimSpace(personFacts))
-		prompt.WriteString("\n")
-	}
 	if len(contextLines) > 0 {
 		prompt.WriteString("Recent text-only chat context:\n")
 		prompt.WriteString(strings.Join(contextLines, "\n"))
@@ -1326,12 +1253,8 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 	return appendImageStableContext(prompt.String(), stableContext)
 }
 
-func buildImageMentionPrompt(question, personFacts string, stableContext string) string {
-	prompt := strings.TrimSpace(question)
-	if strings.TrimSpace(personFacts) != "" {
-		prompt += "\n\nExplicitly mentioned chat-member facts (use only when relevant to the requested scene; do not invent visual traits from them):\n" + strings.TrimSpace(personFacts)
-	}
-	return appendImageStableContext(prompt, stableContext)
+func buildImageMentionPrompt(question, stableContext string) string {
+	return appendImageStableContext(strings.TrimSpace(question), stableContext)
 }
 
 func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {
@@ -1650,7 +1573,9 @@ func imagePromptComposer(chatID *int64) (chattools.ChatCompletionCreator, string
 func imagePromptComposerSystemMessage(superAdminDirective string) string {
 	parts := []string{
 		"You compose direct image-generation requests.",
+		"Before generateImage, if the image depicts one or more chat members, call getUserFacts for every intended person. If it depicts a collective such as the chat, the group, friends, or everyone together and the intended people are not enumerated, call fetchUsers first, then call getUserFacts for the intended participants. Do not call these user tools for unrelated images.",
 		"Use generateImage for a compatible request and put a complete, concrete visual prompt in its prompt field.",
+		"Preserve every Appearance fact returned for each depicted person as a mandatory visual constraint. Never replace known people with generic extras or infer gender or appearance from a name.",
 		"Preserve relevant supplied identity, scene, style, and composition details without inventing personal details.",
 		"Do not claim that an image was generated unless generateImage succeeds.",
 		"Do not try to bypass any image provider's safety controls; if the requested content cannot be generated, offer a brief allowed alternative.",
@@ -1661,8 +1586,16 @@ func imagePromptComposerSystemMessage(superAdminDirective string) string {
 	return strings.Join(parts, " ")
 }
 
-func runImagePromptComposer(ctx context.Context, client chattools.ChatCompletionCreator, model, userMessage, superAdminDirective string, imageTool *chattools.GenerateImageTool) (string, error) {
-	toolRegistry := chattools.NewRegistry(imageTool)
+func imagePromptComposerRegistry(chatID int64, imageTool *chattools.GenerateImageTool) *chattools.Registry {
+	return chattools.NewRegistry(
+		chattools.NewFetchUsersTool(sqliteDb, chatID),
+		chattools.NewGetUserFactsTool(sqliteDb, chatID),
+		imageTool,
+	)
+}
+
+func runImagePromptComposer(ctx context.Context, client chattools.ChatCompletionCreator, model, userMessage, superAdminDirective string, chatID int64, imageTool *chattools.GenerateImageTool) (string, error) {
+	toolRegistry := imagePromptComposerRegistry(chatID, imageTool)
 	return chattools.RunLoop(ctx, client, openai.ChatCompletionRequest{
 		Model:       model,
 		Temperature: 0.3,
@@ -1879,15 +1812,10 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 		if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
-			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
-			userMessage = buildImageScenePrompt(relevantSceneMessages, imageQuestion, botID, message, members, personFacts, imageMemory)
-		} else if message.Chat != nil {
-			// Include the request author for every image request; named subjects are added too.
-			personFacts := buildImagePersonFactsContext(message.Chat.ID, message, botID)
-			userMessage = buildImageMentionPrompt(imageQuestion, personFacts, imageMemory)
+			userMessage = buildImageScenePrompt(relevantSceneMessages, imageQuestion, botID, message, members, imageMemory)
 		} else {
-			// Keep old visual chatter isolated, but retain explicitly remembered chat lore.
-			userMessage = buildImageMentionPrompt(imageQuestion, "", imageMemory)
+			// Participant identities and appearances are retrieved through tools.
+			userMessage = buildImageMentionPrompt(imageQuestion, imageMemory)
 		}
 	} else if registry.Config.ChatGptUseHistory {
 		// Check if message.Chat is nil to prevent nil pointer dereference
@@ -1923,7 +1851,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 	var resp string
 	if imagePromptMode == "direct" {
 		log.Print(formatChatGPTRequestLog("openrouter-image-prompt", composerModel, message.Chat.ID, len(question), 1))
-		resp, err = runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, superAdminDirective(message), imageTool)
+		resp, err = runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, superAdminDirective(message), message.Chat.ID, imageTool)
 	} else {
 		log.Print(formatChatGPTRequestLog(effectiveProvider, model, message.Chat.ID, len(question), len(toolRegistry.Definitions())))
 		resp, err = chattools.RunLoop(
@@ -1965,7 +1893,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 			log.Printf("[reply] Image prompt composer fallback is enabled but OpenRouter provider/model is not configured")
 		} else {
 			log.Print(formatChatGPTRequestLog("openrouter-image-prompt-fallback", composerModel, message.Chat.ID, len(question), 1))
-			fallbackResp, fallbackErr := runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, superAdminDirective(message), imageTool)
+			fallbackResp, fallbackErr := runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, superAdminDirective(message), message.Chat.ID, imageTool)
 			if fallbackErr != nil {
 				log.Printf("[reply] Image prompt composer fallback error: %v", fallbackErr)
 			} else if fallbackResp != "" {

@@ -25,10 +25,11 @@ type getUserFactsArgs struct {
 }
 
 type getUserFactsItem struct {
-	Query  string `json:"query"`
-	UserID int64  `json:"user_id"`
-	Name   string `json:"name"`
-	Facts  string `json:"facts"`
+	Query      string   `json:"query"`
+	UserID     int64    `json:"user_id"`
+	Name       string   `json:"name"`
+	Appearance []string `json:"appearance,omitempty"`
+	Facts      string   `json:"facts"`
 }
 
 type getUserFactsResult struct {
@@ -47,7 +48,7 @@ func (t *GetUserFactsTool) Definition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name:        "getUserFacts",
-			Description: "Get chat-scoped facts for only the specific users needed for the current task. Pass @usernames, usernames, or display names from this Telegram chat. Each result is independently bound to its query, user_id, and name; never apply one user's facts to another person.",
+			Description: "Get chat-scoped facts for only the specific users needed for the current task. Pass @usernames, usernames, or display names from this Telegram chat. Each result is independently bound to its query, user_id, and name; never apply one user's facts to another person. For images, the appearance array is the authoritative visual-fact set and is kept separate from the general facts dossier.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -128,11 +129,13 @@ func lookupUserFacts(db *sql.DB, chatID int64, queries []string) ([]getUserFacts
 			continue
 		}
 
+		dossier := factsutil.ParseDossier(facts)
 		results = append(results, getUserFactsItem{
-			Query:  query,
-			UserID: resolved.ID,
-			Name:   resolved.Name,
-			Facts:  facts,
+			Query:      query,
+			UserID:     resolved.ID,
+			Name:       resolved.Name,
+			Appearance: append([]string(nil), dossier.Appearance...),
+			Facts:      facts,
 		})
 	}
 

@@ -164,12 +164,12 @@ func TestImageGenerationToolIsOptInPerChat(t *testing.T) {
 		"generateImage",
 		"fetchUsers",
 		"getUserFacts",
-		"Appearance",
+		"appearance",
 		"decide the exact depicted-person set",
 		"do not call fetchUsers",
 		"only those explicitly depicted people",
-		"belongs only to that returned person",
-		"never copy, transfer, or reuse",
+		"facts belong only to that returned person",
+		"copy, transfer, or reuse",
 	} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("expected image-generation instructions to mention %q, got %#v", required, systemParts)
@@ -2043,14 +2043,18 @@ func TestImagePromptComposerSystemMessage(t *testing.T) {
 		"generateImage",
 		"fetchUsers",
 		"getUserFacts",
-		"Appearance",
+		"appearance",
 		"Do not try to bypass",
 		"image-generation",
 		"decide the exact depicted-person set",
 		"do not call fetchUsers",
 		"only those explicitly depicted people",
-		"belongs only to that returned person",
-		"never copy, transfer, or reuse",
+		"facts belong only to that returned person",
+		"copy, transfer, or reuse",
+		"explicit appearance array",
+		"account handle uses its real-world depiction",
+		"fictional/persona depiction is used only when that persona is explicitly requested",
+		"Never mix variants",
 	} {
 		if !strings.Contains(message, required) {
 			t.Fatalf("composer system message missing %q: %s", required, message)

@@ -3,10 +3,12 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/utils/testutils"
 )
 
@@ -51,10 +53,55 @@ func TestGetUserFactsToolDefinitionRequiresExactScopedLookupAndFactBinding(t *te
 	if definition.Function == nil {
 		t.Fatal("getUserFacts definition has no function")
 	}
-	for _, required := range []string{"only the specific users", "user_id", "never apply one user's facts to another"} {
+	for _, required := range []string{"only the specific users", "user_id", "appearance", "never apply one user's facts to another"} {
 		if !strings.Contains(definition.Function.Description, required) {
 			t.Fatalf("getUserFacts description missing %q: %q", required, definition.Function.Description)
 		}
+	}
+}
+
+func TestGetUserFactsToolReturnsAppearanceSeparatelyFromNoisyIdentity(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+	if err := chatmemory.EnsureSchema(db); err != nil {
+		t.Fatal(err)
+	}
+
+	insertUser(t, db, 1, "focusshifter", "Victor", "Shcherbakov")
+	insertMessage(t, db, 1, 100, 1, time.Now().Unix(), "hello")
+	if _, err := db.Exec(`INSERT INTO memory_migration_scopes (chat_id, state, updated_at) VALUES (100, 'cutover', ?)`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	repo := chatmemory.NewRepository(db)
+	for i := 0; i < 20; i++ {
+		subject := int64(1)
+		if _, _, err := repo.Add(context.Background(), chatmemory.Entry{
+			ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject,
+			Body: "ordinary identity fact " + strconv.Itoa(i), SourceType: "test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	subject := int64(1)
+	appearance := "Canonical real-world depiction for focusshifter: light-brown hair, a Van Dyke beard, and browline glasses."
+	if _, _, err := repo.Add(context.Background(), chatmemory.Entry{
+		ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject,
+		Body: appearance, Retention: chatmemory.Pinned, SourceType: "stable_appearance",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := NewGetUserFactsTool(db, 100).Execute(context.Background(), `{"users":["focusshifter"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload getUserFactsResult
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Users) != 1 || len(payload.Users[0].Appearance) != 1 || payload.Users[0].Appearance[0] != appearance {
+		t.Fatalf("expected an explicit authoritative appearance field, got %+v", payload)
 	}
 }
 

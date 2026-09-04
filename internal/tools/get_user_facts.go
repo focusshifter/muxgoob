@@ -28,7 +28,7 @@ type getUserFactsItem struct {
 	Query      string   `json:"query"`
 	UserID     int64    `json:"user_id"`
 	Name       string   `json:"name"`
-	Appearance []string `json:"appearance,omitempty"`
+	Appearance []string `json:"appearance"`
 	Facts      string   `json:"facts"`
 }
 
@@ -130,12 +130,20 @@ func lookupUserFacts(db *sql.DB, chatID int64, queries []string) ([]getUserFacts
 		}
 
 		dossier := factsutil.ParseDossier(facts)
+		appearance := append([]string{}, dossier.Appearance...)
+		generalFacts := facts
+		if len(dossier.Appearance)+len(dossier.Identity)+len(dossier.Interests) > 0 {
+			generalFacts = factsutil.RenderDossier(&factsutil.Dossier{
+				Identity:  dossier.Identity,
+				Interests: dossier.Interests,
+			})
+		}
 		results = append(results, getUserFactsItem{
 			Query:      query,
 			UserID:     resolved.ID,
 			Name:       resolved.Name,
-			Appearance: append([]string(nil), dossier.Appearance...),
-			Facts:      facts,
+			Appearance: appearance,
+			Facts:      generalFacts,
 		})
 	}
 

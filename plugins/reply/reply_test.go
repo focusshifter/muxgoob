@@ -2052,9 +2052,9 @@ func TestImagePromptComposerSystemMessage(t *testing.T) {
 		"facts belong only to that returned person",
 		"copy, transfer, or reuse",
 		"explicit appearance array",
-		"account handle uses its real-world depiction",
-		"fictional/persona depiction is used only when that persona is explicitly requested",
-		"Never mix variants",
+		"Account handles and chat aliases refer to the same person",
+		"copy every element",
+		"Never omit one of that person's supplied visual traits",
 	} {
 		if !strings.Contains(message, required) {
 			t.Fatalf("composer system message missing %q: %s", required, message)

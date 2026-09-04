@@ -36,6 +36,9 @@ func TestGetUserFactsToolReturnsFactsForMultipleUsers(t *testing.T) {
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		t.Fatalf("failed to unmarshal result: %v", err)
 	}
+	if !strings.Contains(result, `"appearance":[]`) {
+		t.Fatalf("expected explicit empty appearance arrays, got %s", result)
+	}
 
 	if payload.Count != 2 {
 		t.Fatalf("expected count 2, got %d", payload.Count)
@@ -84,10 +87,17 @@ func TestGetUserFactsToolReturnsAppearanceSeparatelyFromNoisyIdentity(t *testing
 		}
 	}
 	subject := int64(1)
-	appearance := "Canonical real-world depiction for focusshifter: light-brown hair, a Van Dyke beard, and browline glasses."
+	appearance := "Canonical depiction for focusshifter/Vityana: light-brown hair, a Van Dyke beard, and browline glasses."
 	if _, _, err := repo.Add(context.Background(), chatmemory.Entry{
 		ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject,
 		Body: appearance, Retention: chatmemory.Pinned, SourceType: "stable_appearance",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	catEars := "Canonical depiction for focusshifter/Vityana includes cat ears."
+	if _, _, err := repo.Add(context.Background(), chatmemory.Entry{
+		ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject,
+		Body: catEars, Retention: chatmemory.Pinned, SourceType: "stable_appearance",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +110,15 @@ func TestGetUserFactsToolReturnsAppearanceSeparatelyFromNoisyIdentity(t *testing
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Users) != 1 || len(payload.Users[0].Appearance) != 1 || payload.Users[0].Appearance[0] != appearance {
+	if len(payload.Users) != 1 || len(payload.Users[0].Appearance) != 2 {
 		t.Fatalf("expected an explicit authoritative appearance field, got %+v", payload)
+	}
+	joined := strings.Join(payload.Users[0].Appearance, "\n")
+	if !strings.Contains(joined, appearance) || !strings.Contains(joined, catEars) {
+		t.Fatalf("expected every alias-bound visual fact, got %+v", payload.Users[0].Appearance)
+	}
+	if strings.Contains(payload.Users[0].Facts, appearance) || strings.Contains(payload.Users[0].Facts, catEars) || strings.Contains(payload.Users[0].Facts, "Appearance:") {
+		t.Fatalf("appearance leaked back into the general facts dossier: %q", payload.Users[0].Facts)
 	}
 }
 

@@ -173,6 +173,49 @@ func TestGetUserFactsToolResolvesQuotedProfileAlias(t *testing.T) {
 	}
 }
 
+func TestGetUserFactsToolResolvesStableAliasBeforeDossierCompaction(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	defer db.Close()
+	createToolTestTables(t, db)
+	if err := chatmemory.EnsureSchema(db); err != nil {
+		t.Fatal(err)
+	}
+
+	insertUser(t, db, 8, "Kukovjako", "", "")
+	insertMessage(t, db, 1, 100, 8, time.Now().Unix(), "hello")
+	if _, err := db.Exec(`INSERT INTO memory_migration_scopes (chat_id, state, updated_at) VALUES (100, 'cutover', ?)`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := chatmemory.NewRepository(db)
+	subject := int64(8)
+	for _, body := range []string{
+		"Known in this chat as «Саня».",
+		"Known in this chat as «Саня», «Куковяка», and «Куковяко».",
+	} {
+		if _, _, err := repo.Add(context.Background(), chatmemory.Entry{
+			ChatID: 100, Kind: chatmemory.PersonFact, SubjectUserID: &subject,
+			Body: body, Retention: chatmemory.Pinned, SourceType: "stable_alias_owner_confirmed_test",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, alias := range []string{"куковяка", "куковяко"} {
+		result, err := NewGetUserFactsTool(db, 100).Execute(context.Background(), `{"users":["`+alias+`"]}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload getUserFactsResult
+		if err := json.Unmarshal([]byte(result), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Count != 1 || payload.Users[0].UserID != 8 {
+			t.Fatalf("expected stable alias %q to resolve Kukovjako despite dossier compaction, got %+v", alias, payload)
+		}
+	}
+}
+
 func TestGetUserFactsToolResolvesRussianDiminutiveFromLatinTelegramName(t *testing.T) {
 	db := testutils.SetupTestDB(t)
 	defer db.Close()

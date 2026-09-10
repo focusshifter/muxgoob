@@ -209,21 +209,68 @@ func resolveChatUser(db *sql.DB, chatID int64, query string) (*resolvedChatUser,
 	}
 
 	// A nickname may be recorded in a participant's durable facts rather than
-	// Telegram profile. Resolve only explicitly quoted aliases, matching the
-	// reply-context resolver, and keep the lookup scoped to this chat.
+	// Telegram profile. Stable aliases must be read before dossier compaction:
+	// overlapping identity bullets can otherwise collapse a newer alias list.
+	stableAliases, err := fetchStableUserAliasFacts(db, chatID)
+	if err != nil {
+		return nil, err
+	}
 	for _, user := range chatUsers {
+		if factsContainQuotedAlias(stableAliases[user.ID], normalized) {
+			resolved := user
+			return &resolved, nil
+		}
+
 		facts, err := fetchLatestPersonFacts(db, chatID, user.ID)
 		if err != nil {
 			return nil, err
 		}
-		for _, match := range quotedUserAliasExp.FindAllStringSubmatch(facts, -1) {
-			if len(match) > 1 && normalizeSearchText(match[1]) == normalized {
-				resolved := user
-				return &resolved, nil
-			}
+		if factsContainQuotedAlias([]string{facts}, normalized) {
+			resolved := user
+			return &resolved, nil
 		}
 	}
 	return nil, nil
+}
+
+func fetchStableUserAliasFacts(db *sql.DB, chatID int64) (map[int64][]string, error) {
+	facts := make(map[int64][]string)
+	if !chatmemory.IsCutover(context.Background(), db, chatID) {
+		return facts, nil
+	}
+	rows, err := db.Query(`
+		SELECT subject_user_id, body
+		FROM memory_entries
+		WHERE chat_id=? AND kind='person_fact' AND subject_user_id IS NOT NULL
+			AND status='active' AND retention='pinned' AND source_type LIKE 'stable_alias%'
+		ORDER BY updated_at DESC, id DESC`, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("retrieving stable user aliases: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var userID int64
+		var body string
+		if err := rows.Scan(&userID, &body); err != nil {
+			return nil, fmt.Errorf("scanning stable user aliases: %w", err)
+		}
+		facts[userID] = append(facts[userID], body)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating stable user aliases: %w", err)
+	}
+	return facts, nil
+}
+
+func factsContainQuotedAlias(facts []string, normalized string) bool {
+	for _, fact := range facts {
+		for _, match := range quotedUserAliasExp.FindAllStringSubmatch(fact, -1) {
+			if len(match) > 1 && normalizeSearchText(match[1]) == normalized {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {

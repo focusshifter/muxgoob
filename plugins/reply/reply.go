@@ -1677,7 +1677,7 @@ func runImagePromptComposer(ctx context.Context, client chattools.ChatCompletion
 			{Role: openai.ChatMessageRoleSystem, Content: imagePromptComposerSystemMessage(superAdminDirective)},
 			{Role: openai.ChatMessageRoleUser, Content: userMessage},
 		},
-	}, toolRegistry, 5)
+	}, toolRegistry, 10)
 }
 
 // askChatGpt is a variable function that can be replaced in tests
@@ -1950,7 +1950,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 				},
 			},
 			toolRegistry,
-			5,
+			10,
 		)
 	}
 

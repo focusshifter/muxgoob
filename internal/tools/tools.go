@@ -9,7 +9,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-const defaultMaxIterations = 5
+const defaultMaxIterations = 10
 
 type Tool interface {
 	Definition() openai.Tool

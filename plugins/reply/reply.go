@@ -862,9 +862,25 @@ func retrieveHistoryForChat(chatID int64, messageCount int) []telebot.Message {
 		delete(replyParentIDs, id)
 	}
 
-	if len(replyParentIDs) > 0 {
+	// Follow reply ancestry, not just the first parent. Telegram only embeds the
+	// direct replied-to message, so a reply to a reply otherwise loses the
+	// original source when that source falls outside the recent-history window.
+	const maxReplyAncestorDepth = 8
+	for depth := 0; depth < maxReplyAncestorDepth && len(replyParentIDs) > 0; depth++ {
 		parentMessages := retrieveMessagesByIDs(sqliteDb, chatID, replyParentIDs)
-		messages = append(messages, parentMessages...)
+		replyParentIDs = make(map[int]struct{})
+		for _, parent := range parentMessages {
+			if _, exists := existingIDs[parent.ID]; exists {
+				continue
+			}
+			existingIDs[parent.ID] = struct{}{}
+			messages = append(messages, parent)
+			if parent.ReplyTo != nil && parent.ReplyTo.ID != 0 {
+				if _, exists := existingIDs[parent.ReplyTo.ID]; !exists {
+					replyParentIDs[parent.ReplyTo.ID] = struct{}{}
+				}
+			}
+		}
 	}
 
 	// Sort by ID for consistent order
@@ -889,7 +905,7 @@ func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []t
 
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
 	query := fmt.Sprintf(
-		`SELECT data FROM messages WHERE chat_id = ? AND id IN (%s)`,
+		`SELECT id, reply_to_message_id, data FROM messages WHERE chat_id = ? AND id IN (%s)`,
 		placeholders,
 	)
 
@@ -908,8 +924,10 @@ func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []t
 
 	var messages []telebot.Message
 	for rows.Next() {
+		var id int
+		var replyID sql.NullInt64
 		var data string
-		if err := rows.Scan(&data); err != nil {
+		if err := rows.Scan(&id, &replyID, &data); err != nil {
 			log.Printf("[reply] Error scanning parent message: %v", err)
 			continue
 		}
@@ -918,6 +936,12 @@ func retrieveMessagesByIDs(db *sql.DB, chatID int64, idSet map[int]struct{}) []t
 		if err := json.Unmarshal([]byte(data), &msg); err != nil {
 			log.Printf("[reply] Error unmarshaling parent message: %v", err)
 			continue
+		}
+		if msg.ID == 0 {
+			msg.ID = id
+		}
+		if replyID.Valid && (msg.ReplyTo == nil || msg.ReplyTo.ID == 0) {
+			msg.ReplyTo = &telebot.Message{ID: int(replyID.Int64)}
 		}
 		messages = append(messages, msg)
 	}
@@ -1357,6 +1381,10 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 	}
 
 	prefill.WriteString("Prefill:\n")
+	messageByID := make(map[int]*telebot.Message, len(messages))
+	for i := range messages {
+		messageByID[messages[i].ID] = &messages[i]
+	}
 
 	for _, message := range messages {
 		if currentMessage != nil && message.ID == currentMessage.ID {
@@ -1383,7 +1411,7 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 		if botID != 0 && message.Sender.ID == botID {
 			role = "{{char}}"
 		}
-		prefill.WriteString(fmt.Sprintf("%s (%s): %s\n", role, name, messageText))
+		prefill.WriteString(formatPrefillMessage(role, name, messageText, &message, messageByID, botID))
 	}
 
 	currentName := ""
@@ -1394,11 +1422,62 @@ func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPr
 		}
 	}
 	if currentName != "" {
-		prefill.WriteString(fmt.Sprintf("{{user}} (%s): %s\n", currentName, questionText))
+		prefill.WriteString(formatPrefillMessage("{{user}}", currentName, questionText, currentMessage, messageByID, botID))
 	} else {
-		prefill.WriteString(fmt.Sprintf("{{user}}: %s\n", questionText))
+		prefill.WriteString(formatPrefillMessage("{{user}}", "", questionText, currentMessage, messageByID, botID))
 	}
 	return prefill.String()
+}
+
+func formatPrefillMessage(role, name, text string, message *telebot.Message, messageByID map[int]*telebot.Message, botID int) string {
+	var line strings.Builder
+	line.WriteString(role)
+	if name != "" {
+		line.WriteString(" (")
+		line.WriteString(name)
+		line.WriteString(")")
+	}
+	if message != nil && message.ReplyTo != nil {
+		parent := message.ReplyTo
+		if loaded := messageByID[parent.ID]; loaded != nil {
+			parent = loaded
+		}
+		parentText := strings.TrimSpace(messagePromptText(parent))
+		if metadata := strings.TrimSpace(imageMetadataForMessage(*parent)); metadata != "" {
+			if parentText != "" {
+				parentText += "\n"
+			}
+			parentText += "Image metadata: " + metadata
+		}
+		if parentText != "" {
+			parentName := userDisplayName(parent.Sender)
+			parentRole := "{{user}}"
+			if parent.Sender != nil && botID != 0 && parent.Sender.ID == botID {
+				parentRole = "{{char}}"
+			}
+			line.WriteString(fmt.Sprintf(" [reply to message %d by %s", parent.ID, parentRole))
+			if parentName != "" {
+				line.WriteString(" (")
+				line.WriteString(parentName)
+				line.WriteString(")")
+			}
+			line.WriteString(": ")
+			line.WriteString(strconv.Quote(truncateReplySource(parentText, 1500)))
+			line.WriteString("]")
+		}
+	}
+	line.WriteString(": ")
+	line.WriteString(text)
+	line.WriteString("\n")
+	return line.String()
+}
+
+func truncateReplySource(text string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if maxRunes <= 0 || len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "…"
 }
 
 func buildSpotifyReviewContext(messages []telebot.Message) string {

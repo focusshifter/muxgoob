@@ -923,6 +923,51 @@ func TestRetrieveHistoryForChat_IncludesReplyParents(t *testing.T) {
 	}
 }
 
+func TestRetrieveHistoryForChat_IncludesReplyGrandparent(t *testing.T) {
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	_, err := mockDB.Exec(`CREATE TABLE IF NOT EXISTS messages (
+		id INTEGER, chat_id INTEGER, reply_to_message_id INTEGER, unixtime INTEGER, data TEXT,
+		PRIMARY KEY (id, chat_id));`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chatID := int64(100)
+	grandparent := telebot.Message{ID: 10, Unixtime: 100, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "source"}, Text: "Original scene source"}
+	parent := telebot.Message{ID: 20, Unixtime: 200, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "author"}, Text: "Use the previous message", ReplyTo: &grandparent}
+	child := telebot.Message{ID: 30, Unixtime: 300, Chat: &telebot.Chat{ID: chatID}, Sender: &telebot.User{Username: "author"}, Text: "Draw it", ReplyTo: &telebot.Message{ID: parent.ID}}
+	for _, item := range []struct {
+		message telebot.Message
+		replyID interface{}
+	}{{grandparent, nil}, {parent, grandparent.ID}, {child, parent.ID}} {
+		data, marshalErr := json.Marshal(item.message)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, err = mockDB.Exec(`INSERT INTO messages (id, chat_id, reply_to_message_id, unixtime, data) VALUES (?, ?, ?, ?, ?)`, item.message.ID, chatID, item.replyID, item.message.Unixtime, string(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	originalDB := sqliteDb
+	sqliteDb = mockDB
+	defer func() { sqliteDb = originalDB }()
+	history := retrieveHistoryForChat(chatID, 1)
+	if len(history) != 3 || history[0].ID != 10 || history[1].ID != 20 || history[2].ID != 30 {
+		t.Fatalf("expected full reply chain [10 20 30], got %+v", history)
+	}
+}
+
+func TestBuildNoAssPrefill_AttachesReplySource(t *testing.T) {
+	source := telebot.Message{ID: 10, Sender: &telebot.User{ID: 7, Username: "source"}, Text: "the exact scene to draw"}
+	current := &telebot.Message{ID: 20, Sender: &telebot.User{ID: 8, Username: "author"}, Text: "нарисуй в предыдущем сообщении", ReplyTo: &telebot.Message{ID: source.ID}}
+	prefill := buildNoAssPrefill([]telebot.Message{source}, current.Text, "", "", 99, current, nil)
+	if !strings.Contains(prefill, `[reply to message 10 by {{user}} (source): "the exact scene to draw"]`) {
+		t.Fatalf("reply source missing from prefill: %s", prefill)
+	}
+}
+
 func TestBuildSpotifyReviewContext_UsesStoredReviewText(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

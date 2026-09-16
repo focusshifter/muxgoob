@@ -1309,8 +1309,10 @@ func appendImageStableContext(prompt string, stableContext string) string {
 	return strings.TrimSpace(prompt) + "\n\nPersistent chat memory (apply relevant character, visual, and lore constraints from these remembered facts; do not replace them with assumptions based only on names):\n" + stableContext
 }
 
+var imageFirstPersonReferencePattern = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_])(я|меня|мне|мной|мой|моя|мо[еёю]|мои|моим|моих|i|me|my|mine)([^\p{L}\p{N}_]|$)`)
+
 func imageQuestionWithAuthorReference(question string, message *telebot.Message) string {
-	if message == nil || message.Sender == nil {
+	if message == nil || message.Sender == nil || !imageFirstPersonReferencePattern.MatchString(question) {
 		return question
 	}
 	name := userDisplayName(message.Sender)
@@ -1352,6 +1354,64 @@ func buildImageScenePrompt(messages []telebot.Message, question string, botID in
 
 func buildImageMentionPrompt(question, stableContext string) string {
 	return appendImageStableContext(strings.TrimSpace(question), stableContext)
+}
+
+const maxImageReplyChainDepth = 8
+
+func retrieveImageReplyChain(chatID int64, currentMessage *telebot.Message) []telebot.Message {
+	if currentMessage == nil || currentMessage.ReplyTo == nil || currentMessage.ReplyTo.ID == 0 {
+		return nil
+	}
+
+	chain := make([]telebot.Message, 0, maxImageReplyChainDepth)
+	next := currentMessage.ReplyTo
+	seen := make(map[int]struct{}, maxImageReplyChainDepth)
+	for next != nil && next.ID != 0 && len(chain) < maxImageReplyChainDepth {
+		if _, exists := seen[next.ID]; exists {
+			break
+		}
+		seen[next.ID] = struct{}{}
+
+		source := *next
+		if sqliteDb != nil {
+			if stored := retrieveMessagesByIDs(sqliteDb, chatID, map[int]struct{}{next.ID: {}}); len(stored) > 0 {
+				source = stored[0]
+			}
+		}
+		chain = append(chain, source)
+		next = source.ReplyTo
+	}
+
+	for left, right := 0, len(chain)-1; left < right; left, right = left+1, right-1 {
+		chain[left], chain[right] = chain[right], chain[left]
+	}
+	return chain
+}
+
+func buildImageReplyPrompt(question string, chain []telebot.Message, stableContext string) string {
+	var prompt strings.Builder
+	prompt.WriteString("Current image request (authoritative):\n")
+	prompt.WriteString(strings.TrimSpace(question))
+	prompt.WriteString("\n\nThe image request is an explicit Telegram reply. The direct replied-to message is the authoritative meaning of words such as ‘this’, ‘that’, or ‘the previous message’. Preserve its people, events, actions, objects, and setting in the generated scene. Do not substitute the request author for a person in the source unless the source or request actually depicts them. First-person narration inside a source message refers to that source message's author. Before generating, use getUserFacts for each specifically depicted chat participant, including a source author depicted through first-person narration.\n")
+	if len(chain) > 0 {
+		prompt.WriteString("Reply thread (oldest ancestor first; the final entry is the direct replied-to source):\n")
+		for i := range chain {
+			message := &chain[i]
+			name := "participant"
+			if message.Sender != nil {
+				name = userDisplayName(message.Sender)
+				if name == "" {
+					name = "participant"
+				}
+			}
+			label := "ancestor"
+			if i == len(chain)-1 {
+				label = "DIRECT SOURCE"
+			}
+			prompt.WriteString(fmt.Sprintf("[%s message %d by %s]: %s\n", label, message.ID, name, messagePromptText(message)))
+		}
+	}
+	return appendImageStableContext(prompt.String(), stableContext)
 }
 
 func buildNoAssPrefill(messages []telebot.Message, questionText string, systemPrompt string, personFacts string, botID int, currentMessage *telebot.Message, members []string) string {
@@ -1961,7 +2021,16 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 		userMessage = question
 	} else if isImageGenerationRequest {
 		imageQuestion := imageQuestionWithAuthorReference(question, message)
-		if shouldUseImageSceneContext(question) && message.Chat != nil {
+		if message.ReplyTo != nil && message.Chat != nil {
+			replyChain := retrieveImageReplyChain(message.Chat.ID, message)
+			userMessage = buildImageReplyPrompt(imageQuestion, replyChain, imageMemory)
+			sourceID := message.ReplyTo.ID
+			sourceAuthor := "unknown"
+			if len(replyChain) > 0 && replyChain[len(replyChain)-1].Sender != nil {
+				sourceAuthor = userDisplayName(replyChain[len(replyChain)-1].Sender)
+			}
+			log.Printf("[reply] Attached image reply context: source_id=%d source_author=%q chain_depth=%d prompt_len=%d", sourceID, sourceAuthor, len(replyChain), len(userMessage))
+		} else if shouldUseImageSceneContext(question) && message.Chat != nil {
 			imageHistory := retrieveHistoryForChat(message.Chat.ID, registry.Config.ChatGptHistoryDepth)
 			relevantSceneMessages := imageSceneRelevantMessages(imageHistory, botID, message)
 			userMessage = buildImageScenePrompt(relevantSceneMessages, imageQuestion, botID, message, members, imageMemory)

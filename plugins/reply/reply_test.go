@@ -2216,6 +2216,28 @@ func TestImageAuthorReferenceIdentifiesSenderForToolLookup(t *testing.T) {
 	}
 }
 
+func TestImageReplyPromptUsesRepliedSourceInsteadOfRequestAuthor(t *testing.T) {
+	request := &telebot.Message{Sender: &telebot.User{ID: 8, Username: "focusshifter"}, Text: "Губи, нарисуй это крипово, как в Секретных материалах"}
+	question := imageQuestionWithAuthorReference(request.Text, request)
+	if strings.Contains(question, "Request author:") || strings.Contains(question, "focusshifter") {
+		t.Fatalf("request author must not be injected without a first-person reference: %q", question)
+	}
+
+	chain := []telebot.Message{
+		{ID: 40, Sender: &telebot.User{ID: 6, Username: "older"}, Text: "older context"},
+		{ID: 41, Sender: &telebot.User{ID: 7, Username: "sm00th"}, Text: "Мы ехали по шоссе, я увидел собак и остановил машину."},
+	}
+	prompt := buildImageReplyPrompt(question, chain, "")
+	for _, required := range []string{"DIRECT SOURCE message 41 by sm00th", "я увидел собак", "First-person narration inside a source message refers to that source message's author", "Do not substitute the request author"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("image reply context missing %q: %s", required, prompt)
+		}
+	}
+	if strings.Contains(prompt, "message 41 by focusshifter") {
+		t.Fatalf("request author incorrectly replaced source author: %s", prompt)
+	}
+}
+
 func TestPlainTextNicknameResolvesChatParticipant(t *testing.T) {
 	mockDB := testutils.SetupTestDB(t)
 	defer mockDB.Close()

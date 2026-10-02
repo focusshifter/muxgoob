@@ -127,7 +127,7 @@ func buildSpotifyReviewPrompt(typ, artist, title, year, grounding string) string
 	} else {
 		prompt += "\nWrite a review of the requested track only. Return album_rating=null; track reviews have no album score."
 	}
-	prompt += "\n\nLength: 220–250 Russian words for review_text, in 3 compact paragraphs. Keep one central thesis, the strongest musical examples, one or two good jokes and a decisive conclusion. Cut repeated explanations and metaphors making the same point; preserve the critic's personality. The separately appended numeric rating is outside this word budget."
+	prompt += "\n\nLength: 110–125 Russian words for review_text, in 2 compact paragraphs. Keep one central thesis, one or two sharp musical examples, one good joke if it fits and a decisive conclusion. Cut repeated explanations and metaphors making the same point; preserve the critic's personality. The separately appended numeric rating is outside this word budget."
 	return prompt
 }
 

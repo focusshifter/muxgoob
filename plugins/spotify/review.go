@@ -22,7 +22,7 @@ import (
 
 // generateAndPublishReview builds a review using LLMs and publishes it
 // Returns the Telegraph page URL or an empty string on failure
-func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year string) string {
+func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year string, album *SpotifyAlbum) string {
 	if registry.Config.SpotifyReviewMicroblogAuth == "" {
 		return ""
 	}
@@ -38,7 +38,7 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 	defer stopTyping()
 
 	// Try to get grounded context
-	grounding := fetchPerplexityGrounding(artist, title, year)
+	grounding := spotifyReviewGrounding(fetchPerplexityGrounding(typ, artist, title, year), album)
 
 	// Prompt for final review.
 	prompt := buildSpotifyReviewPrompt(typ, artist, title, year, grounding)
@@ -72,7 +72,33 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 	return pageURL
 }
 
-func fetchPerplexityGrounding(artist, title, year string) string {
+func buildSpotifyGroundingQuery(typ, artist, title, year string) string {
+	return fmt.Sprintf("Write concise research notes for a music column about the %s %s - %s (%s). Include only affirmative facts verified in public sources: release date and label, verified song titles and collaborators, artist statements, and specific descriptions of particular songs or production. Prefer artist/label pages and articles about the individual songs. Omit categories without verified facts; return no claims about the availability of reviews, sources, audio or information, and no speculative criticism or ratings.", typ, artist, title, year)
+}
+
+// Spotify's album response includes the first page of track names. Keep those
+// names separate from web research so new releases have reliable specifics.
+func spotifyReviewGrounding(research string, album *SpotifyAlbum) string {
+	if album == nil || len(album.Tracks.Items) == 0 {
+		return research
+	}
+	names := make([]string, 0, len(album.Tracks.Items))
+	for _, track := range album.Tracks.Items {
+		if name := strings.TrimSpace(track.Name); name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return research
+	}
+	label := "Track titles from Spotify"
+	if album.Tracks.Next != "" {
+		label += " (first page)"
+	}
+	return label + ": " + strings.Join(names, "; ") + "\n\n" + strings.TrimSpace(research)
+}
+
+func fetchPerplexityGrounding(typ, artist, title, year string) string {
 	if registry.Config.OpenrouterApiKey == "" {
 		return ""
 	}
@@ -82,7 +108,7 @@ func fetchPerplexityGrounding(artist, title, year string) string {
 	config.BaseURL = "https://openrouter.ai/api/v1"
 	client := openai.NewClientWithConfig(config)
 
-	query := fmt.Sprintf("Give me a short consensus summary of reviews for %s - %s (%s). Include what critics and listeners most often praise, what they most often criticize, and any notable split in opinion. Keep it concise and factual.", artist, title, year)
+	query := buildSpotifyGroundingQuery(typ, artist, title, year)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -108,7 +134,7 @@ func buildSpotifyReviewPrompt(typ, artist, title, year, grounding string) string
 	base := registry.Config.SpotifyReviewPrompt
 	if strings.TrimSpace(base) == "" {
 		// Default prompt for fallback if not configured
-		base = "Write a witty review in RUSSIAN about the {type} \"{title}\" ({year}) by {artist}. Semi-follow the overall consensus from the facts below: if reception is mixed, sound mixed; if it is positive or negative, lean that way without becoming bland. Do not be automatically harsh. Be sharp, observant, and occasionally funny, but avoid repetitive insults and generic takedowns. Mention both what works and what does not, focusing on concrete musical qualities such as songwriting, pacing, arrangements, melodies, atmosphere, or structure. Do not quote or cite the facts verbatim. No Markdown, use plain text ONLY, without '*', '«', '»' or '—'.\n\n{grounding}"
+		base = "Ты Губи — азартный, придирчивый музыкальный критик с характером. Напиши по-русски авторскую колонку о {type} \"{title}\" ({year}) исполнителя {artist}. Веди читателя за своей мыслью, находи точные образы; радуйся удачам без стеснения, не утешай слабую музыку из вежливости. Шути заливисто, в том числе про пердеж, если это смешно и попадает в мысль. Сведения ниже используй как материал, а не как чужой вердикт. Обычный текст без Markdown.\n\nСведения о релизе:\n{grounding}"
 	}
 
 	repl := func(s, k, v string) string { return strings.ReplaceAll(s, k, v) }
@@ -545,12 +571,14 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 	}
 
 	var artist, title, year string
+	var albumMetadata *SpotifyAlbum
 
 	if itemType == "album" {
 		album, err := p.FetchAlbum(spotifyID)
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch album from Spotify: %v", err)
 		}
+		albumMetadata = album
 
 		if len(album.Artists) > 0 {
 			artist = album.Artists[0].Name
@@ -575,7 +603,7 @@ func RegenerateReview(chatID int64, spotifyID string) (string, error) {
 	}
 
 	// Try to get grounded context
-	grounding := fetchPerplexityGrounding(artist, title, year)
+	grounding := spotifyReviewGrounding(fetchPerplexityGrounding(itemType, artist, title, year), albumMetadata)
 
 	// Generate new review
 	prompt := buildSpotifyReviewPrompt(itemType, artist, title, year, grounding)

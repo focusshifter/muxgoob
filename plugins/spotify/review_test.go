@@ -19,9 +19,8 @@ func TestBuildSpotifyReviewPrompt_DefaultFallback(t *testing.T) {
 	prompt := buildSpotifyReviewPrompt("album", "World's End Girlfriend", "Helix of Frequency", "2025", "mixed reception")
 
 	checks := []string{
-		"Semi-follow the overall consensus",
-		"Do not be automatically harsh",
-		"Mention both what works and what does not",
+		"азартный, придирчивый музыкальный критик",
+		"авторскую колонку",
 		"mixed reception",
 	}
 
@@ -29,6 +28,36 @@ func TestBuildSpotifyReviewPrompt_DefaultFallback(t *testing.T) {
 		if !strings.Contains(prompt, check) {
 			t.Fatalf("expected prompt to contain %q, got %q", check, prompt)
 		}
+	}
+}
+
+func TestBuildSpotifyGroundingQuery_ResearchesFactsNotConsensus(t *testing.T) {
+	query := buildSpotifyGroundingQuery("album", "Kontravoid", "Sound of the Void", "2026")
+	for _, part := range []string{"album Kontravoid - Sound of the Void (2026)", "specific descriptions of particular songs", "Omit categories without verified facts"} {
+		if !strings.Contains(query, part) {
+			t.Fatalf("query lacks %q: %s", part, query)
+		}
+	}
+	if strings.Contains(strings.ToLower(query), "consensus") || strings.Contains(query, "most often praise") {
+		t.Fatalf("query requests nonexistent review consensus: %s", query)
+	}
+}
+
+func TestSpotifyReviewGrounding_AddsSpotifyTrackNames(t *testing.T) {
+	var album SpotifyAlbum
+	if err := json.Unmarshal([]byte(`{"tracks":{"items":[{"name":"Without"},{"name":"Mortal"}],"next":"https://api.spotify.com/v1/next"}}`), &album); err != nil {
+		t.Fatal(err)
+	}
+	got := spotifyReviewGrounding("Artoffact Records", &album)
+	want := "Track titles from Spotify (first page): Without; Mortal\n\nArtoffact Records"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := spotifyReviewGrounding("", &album); !strings.Contains(got, "Without; Mortal") {
+		t.Fatalf("track names lost when research fails: %q", got)
+	}
+	if got := spotifyReviewGrounding("research", nil); got != "research" {
+		t.Fatalf("track reviews must not gain album tracks: %q", got)
 	}
 }
 

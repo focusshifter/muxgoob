@@ -43,7 +43,13 @@ type SpotifyPlugin struct {
 type SpotifyAlbum struct {
 	Name        string `json:"name"`
 	ReleaseDate string `json:"release_date"`
-	Images      []struct {
+	Tracks      struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+		Next string `json:"next"`
+	} `json:"tracks"`
+	Images []struct {
 		URL    string `json:"url"`
 		Height int    `json:"height"`
 		Width  int    `json:"width"`
@@ -215,7 +221,7 @@ func (p *SpotifyPlugin) processAlbum(message *telebot.Message, albumID string) {
 	caption := fmt.Sprintf("[Spotify](%s) | [DDG](%s)", albumURL, ddgURL)
 	// Optionally generate and publish a funny review
 	if p.isReviewEnabled(&message.Chat.ID) {
-		if reviewURL := generateAndPublishReview(message.Chat.ID, "album", albumID, artistName, album.Name, year); reviewURL != "" {
+		if reviewURL := generateAndPublishReview(message.Chat.ID, "album", albumID, artistName, album.Name, year, album); reviewURL != "" {
 			caption = fmt.Sprintf("%s | [Рецензия от Губи](%s)", caption, reviewURL)
 		}
 	}

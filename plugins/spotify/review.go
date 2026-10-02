@@ -73,7 +73,10 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 }
 
 func buildSpotifyGroundingQuery(typ, artist, title, year string) string {
-	return fmt.Sprintf("Write concise research notes for a music column about the %s %s - %s (%s). Include only affirmative facts verified in public sources: release date and label, verified song titles and collaborators, artist statements, and specific descriptions of particular songs or production. Prefer artist/label pages and articles about the individual songs. Omit categories without verified facts; return no claims about the availability of reviews, sources, audio or information, and no speculative criticism or ratings.", typ, artist, title, year)
+	if typ == "track" {
+		return fmt.Sprintf("Research independent published music criticism of the track %s - %s (%s). Return concise bullets ONLY for actual published evaluations: publication name, the track being judged, the critic's praise or criticism, and concrete musical reasons. Exclude artist/label promotion, announcements, store listings and generic facts. Omit unsupported categories instead of discussing missing reviews or insufficient evidence.", artist, title, year)
+	}
+	return fmt.Sprintf("Research independent published music criticism of the album %s - %s (%s). Return concise bullets ONLY for actual published evaluations: publication name, the album or specific song being judged, the critic's praise or criticism, and concrete musical reasons. Prioritize full-album reviews; if none, find independent critical takes on singles from this album and label them as single reviews. Do not present singles reviews as album-wide consensus. Exclude artist/label promotion, announcements, store listings and generic album facts. Omit unsupported categories instead of discussing missing reviews or insufficient evidence.", artist, title, year)
 }
 
 // Spotify's album response includes the first page of track names. Keep those

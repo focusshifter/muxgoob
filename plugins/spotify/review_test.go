@@ -31,15 +31,19 @@ func TestBuildSpotifyReviewPrompt_DefaultFallback(t *testing.T) {
 	}
 }
 
-func TestBuildSpotifyGroundingQuery_ResearchesFactsNotConsensus(t *testing.T) {
+func TestBuildSpotifyGroundingQuery_UsesPublishedCriticism(t *testing.T) {
 	query := buildSpotifyGroundingQuery("album", "Kontravoid", "Sound of the Void", "2026")
-	for _, part := range []string{"album Kontravoid - Sound of the Void (2026)", "specific descriptions of particular songs", "Omit categories without verified facts"} {
+	for _, part := range []string{"album Kontravoid - Sound of the Void (2026)", "independent published music criticism", "critic's praise or criticism", "single reviews", "publication name"} {
 		if !strings.Contains(query, part) {
 			t.Fatalf("query lacks %q: %s", part, query)
 		}
 	}
-	if strings.Contains(strings.ToLower(query), "consensus") || strings.Contains(query, "most often praise") {
-		t.Fatalf("query requests nonexistent review consensus: %s", query)
+	if strings.Contains(query, "only affirmative facts") || !strings.Contains(query, "Exclude artist/label promotion") {
+		t.Fatalf("query replaced critics with a fact sheet or promotional copy: %s", query)
+	}
+	trackQuery := buildSpotifyGroundingQuery("track", "Kontravoid", "Without", "2026")
+	if !strings.Contains(trackQuery, "track Kontravoid - Without (2026)") || strings.Contains(trackQuery, "singles from this album") {
+		t.Fatalf("track query not focused on the track: %s", trackQuery)
 	}
 }
 

@@ -20,7 +20,7 @@ func TestBuildSpotifyReviewPrompt_DefaultFallback(t *testing.T) {
 
 	checks := []string{
 		"азартный, придирчивый музыкальный критик",
-		"авторскую колонку",
+		"авторскую рецензию",
 		"mixed reception",
 	}
 
@@ -162,8 +162,24 @@ func TestBuildSpotifyReviewCompletionRequest_AlbumUsesStructuredSchema(t *testin
 		t.Fatalf("expected review_text property in schema: %v", schema)
 	}
 	albumRating := properties["album_rating"].(map[string]any)
-	if albumRating["minimum"] != float64(1) || albumRating["maximum"] != float64(10) {
-		t.Fatalf("expected album_rating range 1..10, got %v", albumRating)
+	if albumRating["type"] != "number" || albumRating["minimum"] != float64(1) || albumRating["maximum"] != float64(10) || albumRating["multipleOf"] != 0.5 {
+		t.Fatalf("expected mandatory half-step album_rating 1..10, got %v", albumRating)
+	}
+}
+
+func TestSpotifyReviewSchema_TrackRequiresNullRating(t *testing.T) {
+	req := buildSpotifyReviewCompletionRequest("test-model", "prompt", "track")
+	data, err := req.ResponseFormat.JSONSchema.Schema.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	rating := schema["properties"].(map[string]any)["album_rating"].(map[string]any)
+	if rating["type"] != "null" {
+		t.Fatalf("track schema permits numeric rating: %v", rating)
 	}
 }
 

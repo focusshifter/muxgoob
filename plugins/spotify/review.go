@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -29,53 +30,23 @@ func generateAndPublishReview(chatID int64, typ, spotifyID, artist, title, year 
 		return ""
 	}
 
-	// Check if we already have a review for this item using Spotify ID
-	if existingURL := getExistingReview(typ, spotifyID); existingURL != "" {
-		log.Printf("[spotify] Reusing existing review for %s ID %s: %s", typ, spotifyID, existingURL)
-		return existingURL
-	}
-
-	// Keep typing while we do our stuff
-	stopTyping := withTyping(chatID)
-	defer stopTyping()
-
-	// Try to get grounded context
-	research := fetchPerplexityGrounding(typ, artist, title, year, album)
-	if len(research.Sources) == 0 {
-		log.Printf("[spotify] No usable criticism for %s - %s; not publishing", artist, title)
-		return ""
-	}
-	grounding := spotifyReviewGrounding(research.render(), album)
-
-	// Prompt for final review.
-	prompt := buildSpotifyReviewPrompt(typ, artist, title, year, grounding)
-	if prompt == "" {
-		return ""
-	}
-
-	// Call for the actual review text
-	review, rating := callChatModelForReview(&chatID, prompt, typ)
-	if strings.TrimSpace(review) == "" {
-		return ""
-	}
-
-	if err := saveReviewText(typ, spotifyID, review, rating); err != nil {
-		log.Printf("[spotify] Failed to save review text: %v", err)
-	}
-
-	// Publish
-	pageURL, err := publishToTelegraph(artist, title, year, canonicalSpotifyURL(typ, spotifyID), review)
+	pageURL, err := runReviewPublication(typ, spotifyID, false, reviewPublicationOps{
+		lookup: lookupReviewURL,
+		generate: func() (reviewPublication, error) {
+			stopTyping := withTyping(chatID)
+			defer stopTyping()
+			text, rating, model, err := generateSpotifyReview(context.Background(), &chatID, typ, artist, title, year, album)
+			return reviewPublication{text, rating, model}, err
+		},
+		publish: func(_ string, text string) (string, error) {
+			return publishToTelegraph(artist, title, year, canonicalSpotifyURL(typ, spotifyID), text)
+		},
+		save: savePublishedReview,
+	})
 	if err != nil {
-		log.Printf("[spotify] Telegraph publish failed: %v", err)
+		log.Printf("[spotify] Review publication failed: %v", err)
 		return ""
 	}
-
-	// Save the review URL to database for future reuse
-	if err := saveReviewURL(typ, spotifyID, pageURL); err != nil {
-		log.Printf("[spotify] Failed to save review to database: %v", err)
-		// Don't fail the operation, just log the error
-	}
-
 	return pageURL
 }
 
@@ -220,14 +191,23 @@ func formatAlbumRating(rating float64) string {
 }
 
 func callChatModelForReview(chatID *int64, prompt, typ string) (string, sql.NullFloat64) {
+	review, rating, _, err := callChatModelForReviewContext(context.Background(), chatID, prompt, typ)
+	if err != nil {
+		log.Printf("[spotify] Chat review failed")
+	}
+	return review, rating
+}
+
+func callChatModelForReviewContext(parent context.Context, chatID *int64, prompt, typ string) (string, sql.NullFloat64, string, error) {
 	var client chattools.ChatCompletionCreator
 	model := resolveSpotifyReviewModel(chatID)
+	configuredModel := model
 
 	provider := registry.GetAiProvider(chatID)
 	switch provider {
 	case "openrouter":
 		if registry.Config.OpenrouterApiKey == "" {
-			return "", sql.NullFloat64{}
+			return "", sql.NullFloat64{}, "", fmt.Errorf("review provider not configured")
 		}
 		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"
@@ -255,7 +235,7 @@ func callChatModelForReview(chatID *int64, prompt, typ string) (string, sql.Null
 		}
 	default:
 		if registry.Config.OpenaiApiKey == "" {
-			return "", sql.NullFloat64{}
+			return "", sql.NullFloat64{}, "", fmt.Errorf("review provider not configured")
 		}
 		config := openai.DefaultConfig(registry.Config.OpenaiApiKey)
 		if model == "" {
@@ -264,30 +244,40 @@ func callChatModelForReview(chatID *int64, prompt, typ string) (string, sql.Null
 		client = openai.NewClientWithConfig(config)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 300*time.Second)
 	defer cancel()
 
+	// Preserve a configured full token verbatim. For legacy bare GPT names,
+	// use the provider-qualified routed request ID, not resp.Model (Codex shortens it).
+	generatedBy := spotifyReviewGeneratedModelID(configuredModel, model)
 	resp, err := client.CreateChatCompletion(ctx, buildSpotifyReviewCompletionRequest(model, prompt, typ))
 	if err != nil || len(resp.Choices) == 0 {
 		if err != nil {
-			log.Printf("[spotify] Chat review error: %v", err)
+			log.Printf("[spotify] Chat review provider error")
 		}
-		return "", sql.NullFloat64{}
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", sql.NullFloat64{}, "", ctx.Err()
+			}
+			return "", sql.NullFloat64{}, "", fmt.Errorf("review provider request failed")
+		}
+		return "", sql.NullFloat64{}, "", fmt.Errorf("empty review response")
+	}
+	if ctx.Err() != nil {
+		return "", sql.NullFloat64{}, "", ctx.Err()
 	}
 	review, rating, err := parseSpotifyReviewCompletion(resp.Choices[0].Message.Content, typ)
 	if err != nil {
-		log.Printf("[spotify] Failed to parse structured review response: %v", err)
-		return "", sql.NullFloat64{}
+		return "", sql.NullFloat64{}, "", fmt.Errorf("invalid structured review response: %w", err)
 	}
-	return review, rating
+	return review, rating, generatedBy, nil
 }
 
 func resolveSpotifyReviewModel(chatID *int64) string {
-	model := GetReviewModel(chatID)
-	if model != "" {
-		return model
-	}
+	return GetReviewSettings(chatID).Models[0]
+}
 
+func resolveSpotifyDefaultReviewModel(chatID *int64) string {
 	provider := registry.GetAiProvider(chatID)
 	if provider == "openrouter" || provider == "openai-codex" {
 		return strings.TrimSpace(registry.GetAiModel(chatID))
@@ -474,6 +464,10 @@ func getExistingReview(typ, itemKey string) string {
 
 // saveReviewText stores review text locally before publishing.
 func saveReviewText(typ, itemKey, reviewText string, rating sql.NullFloat64) error {
+	return saveGeneratedReviewText(typ, itemKey, reviewText, rating, "")
+}
+
+func saveGeneratedReviewText(typ, itemKey, reviewText string, rating sql.NullFloat64, generatedBy string) error {
 	if strings.TrimSpace(reviewText) == "" {
 		return nil
 	}
@@ -490,9 +484,14 @@ func saveReviewText(typ, itemKey, reviewText string, rating sql.NullFloat64) err
 		return err
 	}
 
+	// Store the exact requested full ID, never the judge or a shortened Codex response alias.
+	model := sql.NullString{String: generatedBy, Valid: generatedBy != ""}
 	_, err = database.DB.Exec(
-		"INSERT OR REPLACE INTO spotify_reviews (type, item_key, review_url, review_text, album_rating) VALUES (?, ?, ?, ?, ?)",
-		typ, itemKey, strings.TrimSpace(existingURL), reviewText, rating,
+		`INSERT INTO spotify_reviews (type, item_key, review_url, review_text, album_rating, generated_by_model)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(type, item_key) DO UPDATE SET review_text=excluded.review_text,
+		 album_rating=excluded.album_rating, generated_by_model=excluded.generated_by_model`,
+		typ, itemKey, strings.TrimSpace(existingURL), reviewText, rating, model,
 	)
 	return err
 }
@@ -525,101 +524,69 @@ func saveReviewURL(typ, itemKey, reviewURL string) error {
 
 // RegenerateReview regenerates a review for an existing Spotify item
 func RegenerateReview(chatID int64, spotifyID string) (string, error) {
-	// Check if we have an existing review
-	var reviewURL string
-	var itemType string
-
-	// Try to find the item as an album first
-	err := database.DB.QueryRow(
-		"SELECT review_url FROM spotify_reviews WHERE item_key = ? AND type = 'album'",
-		spotifyID,
-	).Scan(&reviewURL)
-
-	if err == sql.ErrNoRows {
-		// Try as a track
-		err = database.DB.QueryRow(
-			"SELECT review_url FROM spotify_reviews WHERE item_key = ? AND type = 'track'",
-			spotifyID,
-		).Scan(&reviewURL)
-		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("no existing review found for Spotify ID: %s", spotifyID)
-		}
-		itemType = "track"
-	} else if err != nil {
-		return "", fmt.Errorf("database error: %v", err)
-	} else {
-		itemType = "album"
+	page, err := regenerateReviewForType(chatID, "album", spotifyID)
+	if errors.Is(err, errNoExistingReview) {
+		page, err = regenerateReviewForType(chatID, "track", spotifyID)
 	}
-
-	// Keep typing while we do our stuff
-	stopTyping := withTyping(chatID)
-	defer stopTyping()
-
-	// Fetch metadata from Spotify
-	p := &SpotifyPlugin{}
-	if err := p.EnsureAccessToken(); err != nil {
-		return "", fmt.Errorf("failed to get Spotify access token: %v", err)
+	if errors.Is(err, errNoExistingReview) {
+		return "", fmt.Errorf("no existing review found for Spotify ID: %s", spotifyID)
 	}
+	return page, err
+}
 
+func regenerateReviewForType(chatID int64, itemType, spotifyID string) (string, error) {
 	var artist, title, year string
-	var albumMetadata *SpotifyAlbum
+	return runReviewPublication(itemType, spotifyID, true, reviewPublicationOps{
+		lookup: lookupReviewURL,
+		generate: func() (reviewPublication, error) {
+			stopTyping := withTyping(chatID)
+			defer stopTyping()
+			// Fetch metadata from Spotify
+			p := &SpotifyPlugin{}
+			if err := p.EnsureAccessToken(); err != nil {
+				return reviewPublication{}, fmt.Errorf("failed to get Spotify access token: %v", err)
+			}
 
-	if itemType == "album" {
-		album, err := p.FetchAlbum(spotifyID)
-		if err != nil {
-			return "", fmt.Errorf("failed to fetch album from Spotify: %v", err)
-		}
-		albumMetadata = album
+			var albumMetadata *SpotifyAlbum
 
-		if len(album.Artists) > 0 {
-			artist = album.Artists[0].Name
-		}
-		title = album.Name
-		if len(album.ReleaseDate) >= 4 {
-			year = album.ReleaseDate[:4]
-		}
-	} else {
-		track, err := p.FetchTrack(spotifyID)
-		if err != nil {
-			return "", fmt.Errorf("failed to fetch track from Spotify: %v", err)
-		}
+			if itemType == "album" {
+				album, err := p.FetchAlbum(spotifyID)
+				if err != nil {
+					return reviewPublication{}, fmt.Errorf("failed to fetch album from Spotify: %v", err)
+				}
+				albumMetadata = album
 
-		if len(track.Artists) > 0 {
-			artist = track.Artists[0].Name
-		}
-		title = track.Name
-		if len(track.Album.ReleaseDate) >= 4 {
-			year = track.Album.ReleaseDate[:4]
-		}
-	}
+				if len(album.Artists) > 0 {
+					artist = album.Artists[0].Name
+				}
+				title = album.Name
+				if len(album.ReleaseDate) >= 4 {
+					year = album.ReleaseDate[:4]
+				}
+			} else {
+				track, err := p.FetchTrack(spotifyID)
+				if err != nil {
+					return reviewPublication{}, fmt.Errorf("failed to fetch track from Spotify: %v", err)
+				}
 
-	// Try to get grounded context
-	research := fetchPerplexityGrounding(itemType, artist, title, year, albumMetadata)
-	if len(research.Sources) == 0 {
-		return "", fmt.Errorf("no usable criticism; existing review left untouched")
-	}
-	grounding := spotifyReviewGrounding(research.render(), albumMetadata)
+				if len(track.Artists) > 0 {
+					artist = track.Artists[0].Name
+				}
+				title = track.Name
+				if len(track.Album.ReleaseDate) >= 4 {
+					year = track.Album.ReleaseDate[:4]
+				}
+			}
 
-	// Generate new review
-	prompt := buildSpotifyReviewPrompt(itemType, artist, title, year, grounding)
-	if prompt == "" {
-		return "", fmt.Errorf("failed to build review prompt")
-	}
-
-	review, rating := callChatModelForReview(&chatID, prompt, itemType)
-	if strings.TrimSpace(review) == "" {
-		return "", fmt.Errorf("failed to generate review")
-	}
-
-	if err := saveReviewText(itemType, spotifyID, review, rating); err != nil {
-		log.Printf("[spotify] Failed to save review text: %v", err)
-	}
-
-	// Edit the existing Telegraph article
-	if err := editTelegraph(reviewURL, artist, title, year, canonicalSpotifyURL(itemType, spotifyID), review); err != nil {
-		return "", fmt.Errorf("failed to edit Telegraph article: %v", err)
-	}
-
-	log.Printf("[spotify] Successfully regenerated review for %s ID %s: %s", itemType, spotifyID, reviewURL)
-	return reviewURL, nil
+			text, rating, model, err := generateSpotifyReview(context.Background(), &chatID, itemType, artist, title, year, albumMetadata)
+			return reviewPublication{text, rating, model}, err
+		},
+		publish: func(page, text string) (string, error) {
+			if err := editTelegraph(page, artist, title, year, canonicalSpotifyURL(itemType, spotifyID), text); err != nil {
+				return "", fmt.Errorf("failed to edit Telegraph article: %w", err)
+			}
+			return page, nil
+		},
+		save: savePublishedReview,
+	})
 }

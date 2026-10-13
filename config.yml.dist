@@ -72,3 +72,14 @@ spotify_review_prompt: |
 
     {grounding}
 spotify_review_microblog_auth:
+# Opt in ONLY by configuring candidates; empty/missing keeps the legacy single-model route.
+# Example candidates: [anthropic/claude-opus-5.5, openai/gpt-6.1-sol]
+# Uses the existing OpenRouter key; GPT uses Codex when ai_provider is openai-codex.
+spotify_review_candidate_models: []
+# Default when ensemble is enabled: openai/gpt-6.1-sol.
+spotify_review_judge_model:
+# Per-candidate and judge deadline; 0/missing means 300 seconds.
+spotify_review_timeout_seconds: 300
+# Optional durable JSONL audit directory. Always logs structured audit before publication.
+# When configured, an append failure blocks publication. Protect logs: they contain review drafts.
+spotify_review_audit_dir:

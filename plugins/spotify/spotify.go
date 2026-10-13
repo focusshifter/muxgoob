@@ -595,7 +595,11 @@ func DisableReviewsGlobally() error {
 
 // SetReviewModel sets a dedicated model for Spotify review generation.
 func SetReviewModel(chatID *int64, model string) error {
-	return registry.SetPluginSetting(chatID, SpotifyPluginName, SpotifyReviewModelKey, strings.TrimSpace(model))
+	// Preserve the legacy API's empty-string reset; commands validate via SetReviewModels.
+	if model == "" {
+		return writeReviewModelSettings(chatID, nil)
+	}
+	return SetReviewModels(chatID, []string{model})
 }
 
 // GetReviewModel returns the dedicated Spotify review model, or empty if not set.

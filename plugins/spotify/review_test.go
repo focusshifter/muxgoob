@@ -353,6 +353,39 @@ func sqlRating(value float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: value, Valid: true}
 }
 
+func TestSaveReviewText_GeneratedModelInsertUpdate(t *testing.T) {
+	db := testutils.SetupTestDB(t)
+	old := database.DB
+	database.DB = db
+	t.Cleanup(func() { database.DB = old; db.Close() })
+	createSpotifyReviewsTable(t, db)
+	if err := saveGeneratedReviewText("album", "item", "first", sqlRating(8), testOpus); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveReviewURL("album", "item", "original-page"); err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{testOpus, testGPT, "openai/gpt-5.6-sol"} {
+		if err := saveGeneratedReviewText("album", "item", "explicit regeneration", sqlRating(3.75), model); err != nil {
+			t.Fatal(err)
+		}
+		var stored, url string
+		if err := db.QueryRow(`SELECT generated_by_model,review_url FROM spotify_reviews WHERE item_key='item'`).Scan(&stored, &url); err != nil {
+			t.Fatal(err)
+		}
+		if stored != model || url != "original-page" {
+			t.Fatalf("stored=%q url=%q", stored, url)
+		}
+	}
+	if err := saveReviewText("track", "historical-compatible", "text", sql.NullFloat64{}); err != nil {
+		t.Fatal(err)
+	}
+	var unknown sql.NullString
+	if err := db.QueryRow(`SELECT generated_by_model FROM spotify_reviews WHERE item_key='historical-compatible'`).Scan(&unknown); err != nil || unknown.Valid {
+		t.Fatalf("guessed model=%+v err=%v", unknown, err)
+	}
+}
+
 func createSpotifyReviewsTable(t *testing.T, db *sql.DB) {
 	t.Helper()
 	_, err := db.Exec(`
@@ -363,6 +396,7 @@ func createSpotifyReviewsTable(t *testing.T, db *sql.DB) {
 			review_url TEXT NOT NULL,
 			review_text TEXT,
 			album_rating REAL,
+			generated_by_model TEXT,
 			created_at INTEGER DEFAULT (strftime('%s', 'now')),
 			UNIQUE(type, item_key)
 		);

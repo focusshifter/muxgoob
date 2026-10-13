@@ -285,10 +285,14 @@ func researchSpotifyCriticism(ctx context.Context, search researchSearch, typ, a
 }
 
 func fetchPerplexityGrounding(typ, artist, title, year string, album *SpotifyAlbum) spotifyResearch {
+	return fetchPerplexityGroundingContext(context.Background(), typ, artist, title, year, album)
+}
+
+func fetchPerplexityGroundingContext(parent context.Context, typ, artist, title, year string, album *SpotifyAlbum) spotifyResearch {
 	if registry.Config.OpenrouterApiKey == "" {
 		return spotifyResearch{}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 55*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 55*time.Second)
 	defer cancel()
 	// Decode the small provider envelope directly: the vendored SDK discards
 	// citations/search_results and has no chat-message annotations field.

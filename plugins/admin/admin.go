@@ -527,8 +527,14 @@ func (p *AdminPlugin) handleNamedModelCommand(message *telebot.Message, parts []
 			bot.Send(message.Chat, "Invalid chat_id")
 			return true
 		}
-		if err := registry.ClearPluginSettingOverride(chatID, spec.plugin, spec.key); err != nil {
-			bot.Send(message.Chat, fmt.Sprintf("Error clearing %s model override: %v", strings.ToLower(spec.label), err))
+		var clearErr error
+		if target == "spotify" {
+			clearErr = spotify.ClearReviewModelOverride(chatID)
+		} else {
+			clearErr = registry.ClearPluginSettingOverride(chatID, spec.plugin, spec.key)
+		}
+		if clearErr != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error clearing %s model override: %v", strings.ToLower(spec.label), clearErr))
 			return true
 		}
 		if target == "selfprompt" {
@@ -768,10 +774,10 @@ func normalizeImageSizeSetting(value string) (string, error) {
 // handleSpotifyCommands processes commands related to Spotify plugin settings
 func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 	bot := registry.Bot
-	parts := strings.Split(message.Text, " ")
+	parts := strings.Fields(message.Text)
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify model <model_name> [chat_id]\n!spotify regenerate <spotify_id_or_url>")
+		bot.Send(message.Chat, "Usage:\n!spotify enable [chat_id]\n!spotify disable [chat_id]\n!spotify status [chat_id]\n!spotify desc enable [chat_id]\n!spotify desc disable [chat_id]\n!spotify model <model1> [<model2>] [<model3>] [chat_id]\n!spotify judge <model> [chat_id]\n!spotify regenerate <spotify_id_or_url>")
 		return
 	}
 
@@ -830,11 +836,12 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 			status = "enabled"
 		}
 
+		settings := spotify.GetReviewSettings(chatID)
+		scope := "globally"
 		if chatID != nil {
-			bot.Send(message.Chat, fmt.Sprintf("Spotify plugin is %s for chat %d", status, *chatID))
-		} else {
-			bot.Send(message.Chat, fmt.Sprintf("Spotify plugin is %s globally", status))
+			scope = fmt.Sprintf("for chat %d", *chatID)
 		}
+		bot.Send(message.Chat, fmt.Sprintf("Spotify plugin is %s %s\nReview mode: %s\nAuthors: %s\nJudge: %s (used only in ensemble mode)", status, scope, settings.Mode, strings.Join(settings.Models, ", "), settings.JudgeModel))
 
 		// Also check if Spotify credentials are configured
 		if registry.Config.SpotifyConfig.ClientID == "" || registry.Config.SpotifyConfig.ClientSecret == "" {
@@ -890,38 +897,30 @@ func (p *AdminPlugin) handleSpotifyCommands(message *telebot.Message) {
 		default:
 			bot.Send(message.Chat, "Unknown desc command. Use: enable or disable")
 		}
-	case "model":
-		if len(parts) < 3 {
-			bot.Send(message.Chat, "Usage: !spotify model <model_name> [chat_id]")
+	case "model", "judge":
+		models, modelChatID, err := parseSpotifyModelArguments(parts[2:])
+		if err != nil || (parts[1] == "judge" && len(models) != 1) {
+			bot.Send(message.Chat, "Usage: !spotify model <model1> [<model2>] [<model3>] [chat_id] | !spotify judge <model> [chat_id]")
 			return
 		}
-
-		model := strings.TrimSpace(parts[2])
-		if model == "" {
-			bot.Send(message.Chat, "Please specify a model name")
-			return
-		}
-
-		var modelChatID *int64
-		if len(parts) >= 4 {
-			id, err := strconv.ParseInt(parts[3], 10, 64)
-			if err != nil {
-				bot.Send(message.Chat, "Invalid chat_id")
-				return
-			}
-			modelChatID = &id
-		}
-
-		err := spotify.SetReviewModel(modelChatID, model)
-		if err != nil {
-			bot.Send(message.Chat, fmt.Sprintf("Error setting Spotify review model: %v", err))
-			return
-		}
-
-		if modelChatID != nil {
-			bot.Send(message.Chat, fmt.Sprintf("Spotify review model for chat %d set to: %s", *modelChatID, model))
+		if parts[1] == "judge" {
+			err = spotify.SetReviewJudge(modelChatID, models[0])
 		} else {
-			bot.Send(message.Chat, fmt.Sprintf("Global Spotify review model set to: %s", model))
+			err = spotify.SetReviewModels(modelChatID, models)
+		}
+		if err != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Error setting Spotify review %s: %v", parts[1], err))
+			return
+		}
+		model := strings.Join(models, ", ")
+		label := "model"
+		if parts[1] == "judge" {
+			label = "judge"
+		}
+		if modelChatID != nil {
+			bot.Send(message.Chat, fmt.Sprintf("Spotify review %s for chat %d set to: %s", label, *modelChatID, model))
+		} else {
+			bot.Send(message.Chat, fmt.Sprintf("Global Spotify review %s set to: %s", label, model))
 		}
 	case "regenerate":
 		if len(parts) < 3 {

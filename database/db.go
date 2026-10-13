@@ -64,6 +64,15 @@ func RetryWithBackoff(fn func() error) error {
 	return fmt.Errorf("max retries exceeded")
 }
 
+// Adding a nullable column never guesses authorship for historical reviews.
+func ensureSpotifyReviewGeneratedModel(db *sql.DB) error {
+	_, err := db.Exec(`ALTER TABLE spotify_reviews ADD COLUMN generated_by_model TEXT`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return err
+	}
+	return nil
+}
+
 func Initialize() {
 	var err error
 	// Increased busy_timeout to 10 seconds and added other performance settings
@@ -225,6 +234,7 @@ func Initialize() {
 			review_url TEXT NOT NULL,  -- telegraph URL of the review (may be empty if not published yet)
 			review_text TEXT,  -- stored review text
 			album_rating REAL,  -- numeric album rating returned by the structured review response
+			generated_by_model TEXT,  -- full requested provider/model ID; historical rows remain NULL
 			created_at INTEGER DEFAULT (strftime('%s', 'now')),
 			UNIQUE(type, item_key)
 		);
@@ -283,6 +293,10 @@ func Initialize() {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			log.Printf("[database] Failed to add album_rating column: %v", err)
 		}
+	}
+
+	if err := ensureSpotifyReviewGeneratedModel(DB); err != nil {
+		log.Fatal("[database] Failed to add review generation model:", err)
 	}
 
 	if err := ensureBirthdayNotificationChatScope(); err != nil {

@@ -235,7 +235,7 @@ func TestRequestSpotifyResearchRejectsIncompleteAndOversized(t *testing.T) {
 }
 func TestSinglesEvidenceProducesRatedAlbumReview(t *testing.T) {
 	prompt := buildSpotifyReviewPrompt("album", "Kontravoid", "Sound of the Void", "2026", criticismFixture("Without", "single").Content)
-	for _, want := range []string{"Give the album a numeric rating", "review of the ALBUM", "album-wide thesis", "never infer sound", "not as two separate mini-reviews", "Do not claim first-hand listening"} {
+	for _, want := range []string{"Give the album a numeric rating", "Review the requested album", "partial coverage", "never infer sound", "Do not turn a single-specific criticism", "Do not claim first-hand listening"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("missing %q", want)
 		}

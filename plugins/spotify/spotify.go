@@ -86,6 +86,13 @@ func (p *SpotifyPlugin) Start(_ interface{}) {
 }
 
 func (p *SpotifyPlugin) Process(message *telebot.Message) {
+	// The admin plugin owns review regeneration. Do not also treat its URL as
+	// a newly shared release and send a duplicate album/track preview.
+	parts := strings.Fields(message.Text)
+	if len(parts) >= 2 && parts[0] == "!spotify" && parts[1] == "regenerate" {
+		return
+	}
+
 	// Check if Spotify configuration exists
 	if registry.Config.SpotifyConfig.ClientID == "" || registry.Config.SpotifyConfig.ClientSecret == "" {
 		return

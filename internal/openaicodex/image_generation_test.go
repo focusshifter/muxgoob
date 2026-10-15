@@ -62,8 +62,8 @@ func TestClientGenerateImageViaCodexResponses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateImage error: %v", err)
 	}
-	if got.Model != defaultImageResponsesModel {
-		t.Fatalf("expected responses model %q, got %q", defaultImageResponsesModel, got.Model)
+	if got.Model != "gpt-6.1-sol" {
+		t.Fatalf("expected responses model gpt-6.1-sol, got %q", got.Model)
 	}
 	if len(got.Tools) != 1 || got.Tools[0].Type != "image_generation" || got.Tools[0].Model != "gpt-image-2" {
 		t.Fatalf("unexpected image tool payload: %#v", got.Tools)

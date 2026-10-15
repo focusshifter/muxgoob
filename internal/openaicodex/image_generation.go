@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultImageResponsesModel    = "gpt-5.5"
+	defaultImageResponsesModel    = "gpt-6.1-sol"
 	defaultImageModel             = "gpt-image-2"
 	defaultImageInstructions      = "You are an image generation assistant."
 	defaultImageGenerationTimeout = 10 * time.Minute

@@ -2,8 +2,11 @@ package dupelink
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -24,6 +27,10 @@ func init() {
 func (p *DupeLinkPlugin) Start(interface{}) {}
 
 func (p *DupeLinkPlugin) Process(message *telebot.Message) {
+	if handleBlacklistCommand(message) {
+		return
+	}
+
 	messageURLs := getURLs(message)
 	var validURLs []string
 
@@ -53,11 +60,14 @@ func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 		// Normalize YouTube URLs to extract video ID
 		currentURL := normalizeURL(parsedURL)
 
-		for _, ignoredHostname := range registry.Config.DupeIgnoredDomains {
-			if parsedURL.Hostname() == ignoredHostname {
-				log.Printf("[dupelink] Skipping %s because %s is blacklisted", currentURL, ignoredHostname)
-				return
-			}
+		ignored, err := isDomainIgnored(message.Chat.ID, parsedURL.Hostname())
+		if err != nil {
+			log.Printf("[dupelink] Failed to read ignored domains for chat %d; skipping duplicate check: %v", message.Chat.ID, err)
+			continue
+		}
+		if ignored {
+			log.Printf("[dupelink] Skipping %s because its domain is ignored in chat %d", currentURL, message.Chat.ID)
+			continue
 		}
 
 		if newURL(currentURL, validURLs) {
@@ -65,6 +75,222 @@ func (p *DupeLinkPlugin) Process(message *telebot.Message) {
 			reactToURL(currentURL, message)
 		}
 	}
+}
+
+func handleBlacklistCommand(message *telebot.Message) bool {
+	if message == nil {
+		return false
+	}
+	fields := strings.Fields(message.Text)
+	if len(fields) < 2 || strings.ToLower(fields[0]) != "!dupelink" || strings.ToLower(fields[1]) != "blacklist" {
+		return false
+	}
+	if message.Chat == nil || message.Sender == nil || registry.Config.OwnerUsername == "" || message.Sender.Username == "" || !strings.EqualFold(message.Sender.Username, registry.Config.OwnerUsername) {
+		return true
+	}
+
+	usage := "Usage: !dupelink blacklist add <domain> | remove <domain> | list"
+	if len(fields) < 3 {
+		registry.Bot.Send(message.Chat, usage)
+		return true
+	}
+
+	switch strings.ToLower(fields[2]) {
+	case "add":
+		if len(fields) != 4 {
+			registry.Bot.Send(message.Chat, usage)
+			return true
+		}
+		domain, err := canonicalDomain(fields[3])
+		if err != nil {
+			registry.Bot.Send(message.Chat, "Invalid domain: "+err.Error())
+			return true
+		}
+		result, err := database.DB.Exec(`
+			INSERT OR IGNORE INTO dupe_ignored_domains (chat_id, domain, created_at)
+			VALUES (?, ?, ?)`, message.Chat.ID, domain, time.Now().Unix())
+		if err != nil {
+			log.Printf("[dupelink] Failed to add ignored domain: %v", err)
+			registry.Bot.Send(message.Chat, "Failed to update duplicate-link blacklist.")
+			return true
+		}
+		changed, _ := result.RowsAffected()
+		if changed == 0 {
+			registry.Bot.Send(message.Chat, fmt.Sprintf("%s is already blacklisted for duplicate warnings in this chat.", domain))
+			return true
+		}
+		registry.Bot.Send(message.Chat, fmt.Sprintf("Duplicate warnings disabled for %s in this chat.", domain))
+	case "remove", "delete", "rm":
+		if len(fields) != 4 {
+			registry.Bot.Send(message.Chat, usage)
+			return true
+		}
+		domain, err := canonicalDomain(fields[3])
+		if err != nil {
+			registry.Bot.Send(message.Chat, "Invalid domain: "+err.Error())
+			return true
+		}
+		result, err := database.DB.Exec(`DELETE FROM dupe_ignored_domains WHERE chat_id = ? AND domain = ?`, message.Chat.ID, domain)
+		if err != nil {
+			log.Printf("[dupelink] Failed to remove ignored domain: %v", err)
+			registry.Bot.Send(message.Chat, "Failed to update duplicate-link blacklist.")
+			return true
+		}
+		if configuredDomainMatches(domain) {
+			registry.Bot.Send(message.Chat, fmt.Sprintf("Removed the chat-specific entry for %s, but duplicate warnings remain disabled by the global configuration.", domain))
+			return true
+		}
+		changed, _ := result.RowsAffected()
+		if changed == 0 {
+			registry.Bot.Send(message.Chat, fmt.Sprintf("%s was not blacklisted for this chat.", domain))
+			return true
+		}
+		registry.Bot.Send(message.Chat, fmt.Sprintf("Duplicate warnings re-enabled for %s in this chat.", domain))
+	case "list":
+		if len(fields) != 3 {
+			registry.Bot.Send(message.Chat, usage)
+			return true
+		}
+		localDomains, err := ignoredDomains(message.Chat.ID)
+		if err != nil {
+			log.Printf("[dupelink] Failed to list ignored domains: %v", err)
+			registry.Bot.Send(message.Chat, "Failed to read duplicate-link blacklist.")
+			return true
+		}
+		globalDomains := configuredDomains()
+		if len(localDomains) == 0 && len(globalDomains) == 0 {
+			registry.Bot.Send(message.Chat, "No domains are blacklisted for duplicate warnings in this chat.")
+			return true
+		}
+		registry.Bot.Send(message.Chat, formatBlacklist(localDomains, globalDomains))
+	default:
+		registry.Bot.Send(message.Chat, usage)
+	}
+	return true
+}
+
+func canonicalDomain(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("domain is empty")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	host = strings.TrimPrefix(host, "www.")
+	if err := validateDomain(host); err != nil {
+		return "", err
+	}
+	return host, nil
+}
+
+func validateDomain(host string) error {
+	if host == "" {
+		return fmt.Errorf("missing hostname")
+	}
+	if net.ParseIP(host) != nil {
+		return nil
+	}
+	if len(host) > 253 || !strings.Contains(host, ".") {
+		return fmt.Errorf("expected a fully qualified domain")
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("invalid domain")
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+				return fmt.Errorf("invalid domain")
+			}
+		}
+	}
+	return nil
+}
+
+func ignoredDomains(chatID int64) ([]string, error) {
+	rows, err := database.DB.Query(`SELECT domain FROM dupe_ignored_domains WHERE chat_id = ? ORDER BY domain`, chatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var domains []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err != nil {
+			return nil, err
+		}
+		domains = append(domains, domain)
+	}
+	return domains, rows.Err()
+}
+
+func configuredDomains() []string {
+	seen := make(map[string]struct{})
+	var domains []string
+	for _, raw := range registry.Config.DupeIgnoredDomains {
+		domain, err := canonicalDomain(raw)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[domain]; ok {
+			continue
+		}
+		seen[domain] = struct{}{}
+		domains = append(domains, domain)
+	}
+	sort.Strings(domains)
+	return domains
+}
+
+func configuredDomainMatches(hostname string) bool {
+	for _, domain := range configuredDomains() {
+		if domainMatches(hostname, domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func formatBlacklist(localDomains, globalDomains []string) string {
+	var sections []string
+	if len(localDomains) > 0 {
+		sections = append(sections, "This chat:\n- "+strings.Join(localDomains, "\n- "))
+	}
+	if len(globalDomains) > 0 {
+		sections = append(sections, "Inherited from global config:\n- "+strings.Join(globalDomains, "\n- "))
+	}
+	text := "Duplicate-warning blacklist:\n" + strings.Join(sections, "\n\n")
+	if len(text) > 3900 {
+		return text[:3850] + "\n…list truncated"
+	}
+	return text
+}
+
+func isDomainIgnored(chatID int64, hostname string) (bool, error) {
+	hostname = strings.TrimSuffix(strings.ToLower(hostname), ".")
+	if configuredDomainMatches(hostname) {
+		return true, nil
+	}
+
+	domains, err := ignoredDomains(chatID)
+	if err != nil {
+		return false, err
+	}
+	for _, domain := range domains {
+		if domainMatches(hostname, domain) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func domainMatches(hostname, domain string) bool {
+	return hostname == domain || strings.HasSuffix(hostname, "."+domain)
 }
 
 func getURLs(message *telebot.Message) []string {

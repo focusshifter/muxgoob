@@ -205,6 +205,13 @@ func Initialize() {
 			FOREIGN KEY (sender_id) REFERENCES users(id)
 		);
 
+		CREATE TABLE IF NOT EXISTS dupe_ignored_domains (
+			chat_id INTEGER NOT NULL,
+			domain TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (chat_id, domain)
+		);
+
 		-- Twitch streams tables
 		CREATE TABLE IF NOT EXISTS helix_streams (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

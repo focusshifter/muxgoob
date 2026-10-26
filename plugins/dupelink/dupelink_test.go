@@ -83,6 +83,18 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 		t.Fatalf("Failed to create dupe_links table: %v", err)
 	}
 
+	_, err = mockDB.Exec(`
+		CREATE TABLE IF NOT EXISTS dupe_ignored_domains (
+			chat_id INTEGER NOT NULL,
+			domain TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (chat_id, domain)
+		);
+	`)
+	if err != nil {
+		t.Fatalf("Failed to create dupe_ignored_domains table: %v", err)
+	}
+
 	// Insert test data
 	_, err = mockDB.Exec(`
 		INSERT INTO users (id, username, first_name, last_name)
@@ -285,6 +297,44 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 			},
 		},
 		{
+			name: "Message with per-chat ignored domain",
+			message: &telebot.Message{
+				Text: "Daily https://rngdle.com",
+				Entities: []telebot.MessageEntity{{
+					Type:   "url",
+					Offset: 6,
+					Length: 18,
+				}},
+				Sender: &telebot.User{
+					ID:        789,
+					Username:  "another_user",
+					FirstName: "Another",
+					LastName:  "User",
+				},
+				Chat: &telebot.Chat{ID: 456},
+			},
+			expectedCalls: false,
+			setup: func() {
+				_, err := mockDB.Exec(`INSERT OR IGNORE INTO dupe_ignored_domains (chat_id, domain, created_at) VALUES (456, 'rngdle.com', ?)`, time.Now().Unix())
+				if err != nil {
+					t.Fatalf("insert ignored domain: %v", err)
+				}
+				mockBot.SendCalled = false
+			},
+			verify: func(t *testing.T) {
+				if mockBot.SendCalled {
+					t.Error("Expected Send not to be called")
+				}
+				var count int
+				if err := mockDB.QueryRow("SELECT COUNT(*) FROM dupe_links WHERE chat_id = 456 AND url = 'rngdle.com'").Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				if count != 0 {
+					t.Fatalf("ignored domain was saved %d times", count)
+				}
+			},
+		},
+		{
 			name: "YouTube URL normalization - youtu.be duplicate",
 			message: &telebot.Message{
 				Text: "Check out https://youtu.be/hbO1z13WP8o?si=WEuRHV_zJEOTT867",
@@ -431,6 +481,156 @@ func TestDupeLinkPlugin_Process(t *testing.T) {
 			plugin.Process(tc.message)
 			tc.verify(t)
 		})
+	}
+}
+
+func TestDupeLinkBlacklistCommandsAreOwnerOnlyAndPerChat(t *testing.T) {
+	originalConfigs := registry.Config
+	defer func() { registry.Config = originalConfigs }()
+	registry.Config.OwnerUsername = "owner"
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	if _, err := mockDB.Exec(`
+		CREATE TABLE dupe_ignored_domains (
+			chat_id INTEGER NOT NULL,
+			domain TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (chat_id, domain)
+		)`); err != nil {
+		t.Fatal(err)
+	}
+
+	bot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(bot)
+	p := &DupeLinkPlugin{}
+
+	p.Process(&telebot.Message{
+		Text:   "!dupelink blacklist add https://WWW.RNGdle.com/daily",
+		Sender: &telebot.User{Username: "owner"},
+		Chat:   &telebot.Chat{ID: -100456},
+	})
+	var domain string
+	if err := mockDB.QueryRow(`SELECT domain FROM dupe_ignored_domains WHERE chat_id = -100456`).Scan(&domain); err != nil {
+		t.Fatal(err)
+	}
+	if domain != "rngdle.com" {
+		t.Fatalf("stored domain = %q", domain)
+	}
+
+	bot.SendCalled = false
+	p.Process(&telebot.Message{
+		Text:   "!dupelink blacklist add example.com",
+		Sender: &telebot.User{Username: "not-owner"},
+		Chat:   &telebot.Chat{ID: -100456},
+	})
+	if bot.SendCalled {
+		t.Fatal("non-owner command should be ignored")
+	}
+	var count int
+	if err := mockDB.QueryRow(`SELECT COUNT(*) FROM dupe_ignored_domains WHERE chat_id = -100456 AND domain = 'example.com'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatal("non-owner changed blacklist")
+	}
+
+	if ignored, err := isDomainIgnored(-100456, "play.rngdle.com"); err != nil || !ignored {
+		t.Fatalf("same-chat subdomain ignored=%v err=%v", ignored, err)
+	}
+	if ignored, err := isDomainIgnored(-100999, "rngdle.com"); err != nil || ignored {
+		t.Fatalf("other-chat ignored=%v err=%v", ignored, err)
+	}
+
+	p.Process(&telebot.Message{
+		Text:   "!dupelink blacklist remove rngdle.com",
+		Sender: &telebot.User{Username: "owner"},
+		Chat:   &telebot.Chat{ID: -100456},
+	})
+	if ignored, err := isDomainIgnored(-100456, "rngdle.com"); err != nil || ignored {
+		t.Fatalf("removed domain ignored=%v err=%v", ignored, err)
+	}
+
+	registry.Config.DupeIgnoredDomains = []string{"global.example.com"}
+	bot.SendCalled = false
+	p.Process(&telebot.Message{
+		Text:   "!dupelink blacklist remove global.example.com",
+		Sender: &telebot.User{Username: "owner"},
+		Chat:   &telebot.Chat{ID: -100456},
+	})
+	response, _ := bot.SendWhat.(string)
+	if !bot.SendCalled || !strings.Contains(response, "remain disabled by the global configuration") {
+		t.Fatalf("global remove response = %q", response)
+	}
+
+	bot.SendCalled = false
+	p.Process(&telebot.Message{
+		Text:   "!dupelink blacklist list",
+		Sender: &telebot.User{Username: "owner"},
+		Chat:   &telebot.Chat{ID: -100456},
+	})
+	response, _ = bot.SendWhat.(string)
+	if !bot.SendCalled || !strings.Contains(response, "Inherited from global config") || !strings.Contains(response, "global.example.com") {
+		t.Fatalf("list response = %q", response)
+	}
+}
+
+func TestDupeLinkBlacklistRejectsEmptyOwnerAndMalformedDomains(t *testing.T) {
+	originalConfigs := registry.Config
+	defer func() { registry.Config = originalConfigs }()
+	registry.Config.OwnerUsername = ""
+
+	mockDB := testutils.SetupTestDB(t)
+	defer mockDB.Close()
+	database.DB = mockDB
+	if _, err := mockDB.Exec(`CREATE TABLE dupe_ignored_domains (chat_id INTEGER NOT NULL, domain TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (chat_id, domain))`); err != nil {
+		t.Fatal(err)
+	}
+	bot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(bot)
+	(&DupeLinkPlugin{}).Process(&telebot.Message{
+		Text:   "!dupelink blacklist add example.com",
+		Sender: &telebot.User{},
+		Chat:   &telebot.Chat{ID: 123},
+	})
+	if bot.SendCalled {
+		t.Fatal("empty owner configuration must not authorize an empty username")
+	}
+	var count int
+	if err := mockDB.QueryRow(`SELECT COUNT(*) FROM dupe_ignored_domains`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("unauthorized rows=%d err=%v", count, err)
+	}
+
+	for _, raw := range []string{"-", ".com", "example..com", "*.example.com", "www.", "com"} {
+		if domain, err := canonicalDomain(raw); err == nil {
+			t.Errorf("canonicalDomain(%q) = %q, want error", raw, domain)
+		}
+	}
+}
+
+func TestDupeLinkBlacklistReadFailureFailsClosed(t *testing.T) {
+	originalConfigs := registry.Config
+	defer func() { registry.Config = originalConfigs }()
+	registry.Config.DupeIgnoredDomains = nil
+
+	mockDB := testutils.SetupTestDB(t)
+	database.DB = mockDB
+	if err := mockDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bot := &testutils.MockBotWrapper{}
+	registry.SetTestBot(bot)
+
+	(&DupeLinkPlugin{}).Process(&telebot.Message{
+		Text:     "https://example.com/page",
+		Entities: []telebot.MessageEntity{{Type: "url", Offset: 0, Length: 24}},
+		Sender:   &telebot.User{ID: 1, Username: "poster"},
+		Chat:     &telebot.Chat{ID: 456},
+		Unixtime: time.Now().Unix(),
+	})
+	if bot.SendCalled {
+		t.Fatal("database read failure must not emit a duplicate warning")
 	}
 }
 

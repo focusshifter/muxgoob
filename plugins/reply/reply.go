@@ -74,6 +74,12 @@ func (c *RealChatGptClient) Ask(message *telebot.Message) string {
 	return askChatGpt(message)
 }
 
+// !reply can target a historical message in another chat, not the incoming
+// command. Keep that explicit text-dispatch path out of reaction-only replies.
+func (c *RealChatGptClient) AskDispatched(message *telebot.Message) string {
+	return askChatGptWithMode(message, false, nil, false)
+}
+
 func (c *RealChatGptClient) AskSuperuser(message *telebot.Message) SuperuserResult {
 	return askSuperuserChatGpt(message)
 }
@@ -276,8 +282,13 @@ func (p *ReplyPlugin) Process(message *telebot.Message) {
 			}
 
 			// Generate a reply using the chat client
-			replyText := p.chatClient.Ask(targetMessage)
-			if replyText == "" {
+			var replyText string
+			if client, ok := p.chatClient.(interface{ AskDispatched(*telebot.Message) string }); ok {
+				replyText = client.AskDispatched(targetMessage)
+			} else {
+				replyText = p.chatClient.Ask(targetMessage)
+			}
+			if replyText == "" || isActionOnlyReply(replyText) {
 				log.Printf("[reply] No reply generated for chat %d", chatID)
 				return
 			}
@@ -571,7 +582,7 @@ func botImageReplyInstruction(message *telebot.Message) string {
 	if !isReplyToBotImage(message) {
 		return ""
 	}
-	return "The current message is a reply to an image you generated. Decide from conversational intent whether an answer is warranted. If it is merely a reaction, acknowledgement, laughter, praise, or other non-requesting comment, return exactly " + actionOnlyReplyToken + " with no other text. If it contains a question, request, or needs engagement, answer normally."
+	return "The current message is a reply to an image you generated. Decide from conversational intent whether an answer is warranted. If it is merely a reaction, acknowledgement, laughter, praise, or other non-requesting comment, you may use reactToMessage when available, or return exactly " + actionOnlyReplyToken + " with no other text to stay silent. If a reaction tool fails, do not claim success; continue normally. If the message contains a question, request, or needs engagement, answer normally."
 }
 
 func currentDateTimeContext(now time.Time, location *time.Location) string {
@@ -658,7 +669,7 @@ func allowedImageRequestReactions(available []string, constrained bool) []string
 }
 
 func reactToImageRequest(message *telebot.Message) {
-	if message == nil || message.Chat == nil || registry.Bot == nil || len(imageRequestReactions) == 0 {
+	if message == nil || message.Chat == nil || message.ID <= 0 || registry.Bot == nil || len(imageRequestReactions) == 0 {
 		return
 	}
 	available, constrained, err := registry.Bot.AvailableReactionEmojis(message.Chat.ID)
@@ -1822,15 +1833,15 @@ func runImagePromptComposer(ctx context.Context, client chattools.ChatCompletion
 // askChatGpt is a variable function that can be replaced in tests
 var askSuperuserChatGpt = func(message *telebot.Message) SuperuserResult {
 	tracker := &memoryMutationTracker{}
-	text := askChatGptWithMode(message, true, tracker)
+	text := askChatGptWithMode(message, true, tracker, false)
 	return SuperuserResult{Text: text, VerifiedMutations: append([]string(nil), tracker.names...)}
 }
 
 var askChatGpt = func(message *telebot.Message) string {
-	return askChatGptWithMode(message, false, nil)
+	return askChatGptWithMode(message, false, nil, true)
 }
 
-func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTracker *memoryMutationTracker) string {
+func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTracker *memoryMutationTracker, allowReaction bool) string {
 	// Safety check for test environment
 	if message == nil {
 		log.Printf("[reply] Message is nil in askChatGpt")
@@ -1934,6 +1945,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 
 	var pollTool *chattools.SendPollTool
 	var imageTool *chattools.GenerateImageTool
+	var reactionTool *chattools.ReactToMessageTool
 	var tools []chattools.Tool
 	var toolSystemParts []string
 	if memoryAdmin {
@@ -1967,6 +1979,9 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 			"Avoid markdown. If formatting is needed, use Telegram markdown only.",
 			"If the user asks you to create or post a poll/opros, use sendPoll instead of writing plain-text checkbox options.",
 			"After sendPoll succeeds, do not send any follow-up confirmation text.",
+		}
+		if allowReaction {
+			tools, toolSystemParts, reactionTool = appendReactionReplyTool(message, tools, toolSystemParts)
 		}
 	}
 	if directive := superAdminDirective(message); directive != "" {
@@ -2109,7 +2124,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 		}
 	}
 
-	if imagePromptMode == "fallback" && !imageTool.WasSent() {
+	if imagePromptMode == "fallback" && !imageTool.WasSent() && (reactionTool == nil || !reactionTool.WasSent()) {
 		if !composerConfigured {
 			log.Printf("[reply] Image prompt composer fallback is enabled but OpenRouter provider/model is not configured")
 		} else {
@@ -2123,7 +2138,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 		}
 	}
 
-	if (pollTool != nil && pollTool.WasSent()) || (imageTool != nil && imageTool.WasSent()) {
+	if (pollTool != nil && pollTool.WasSent()) || (imageTool != nil && imageTool.WasSent()) || (reactionTool != nil && reactionTool.WasSent()) {
 		return actionOnlyReplyToken
 	}
 

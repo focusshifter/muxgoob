@@ -29,13 +29,15 @@ type ImageGenerator interface {
 }
 
 type GenerateImageTool struct {
-	chatID    int64
-	sent      bool
-	generator ImageGenerator
-	send      func(chatID int64, imagePath string, caption string) error
-	notify    func(chatID int64, action telebot.ChatAction) error
-	outputDir string
-	onStart   func()
+	chatID              int64
+	sent                bool
+	generator           ImageGenerator
+	send                func(chatID int64, imagePath string, caption string) error
+	notify              func(chatID int64, action telebot.ChatAction) error
+	outputDir           string
+	onStart             func()
+	generationCompleted bool
+	generatedPath       string
 }
 
 type generateImageArgs struct {
@@ -87,7 +89,7 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 		Type: openai.ToolTypeFunction,
 		Function: &openai.FunctionDefinition{
 			Name:        "generateImage",
-			Description: "Generate an image with the administrator-configured image provider and model, then send it directly to the current Telegram chat. Use this when the user asks to draw, generate, create, or render a picture/image/photo/sticker/мем/картинку. Build the prompt from the active image request, except when the user explicitly asks for chat history, events, or participants: then use only the relevant factual chat context supplied with the request. Never blend prior image requests, captions, or unrelated chat context. After using this tool successfully, do not send follow-up text.",
+			Description: "Generate an image with the administrator-configured image provider and model, then send it directly to the current Telegram chat. Use this when the user asks to draw, generate, create, or render a picture/image/photo/sticker/мем/картинку. Build the prompt from the active image request, except when the user explicitly asks for chat history, events, or participants: then use only the relevant factual chat context supplied with the request. Never blend prior image requests, captions, or unrelated chat context. After using this tool successfully, do not send follow-up text. Generation, file preparation, and Telegram delivery are separate stages. On delivery failure the existing generated file is retained. Do not regenerate solely because Telegram rejects an image or delivery fails; report the delivery problem, not a generator failure.",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -115,6 +117,9 @@ func (t *GenerateImageTool) Definition() openai.Tool {
 }
 
 func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, error) {
+	if t.generationCompleted {
+		return "", fmt.Errorf("image was already generated for this request (retained path: %q); do not regenerate after a delivery or file preparation failure", t.generatedPath)
+	}
 	parsedArgs := generateImageArgs{}
 	if err := json.Unmarshal([]byte(args), &parsedArgs); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -159,22 +164,19 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	result, err := generateImageWithRetry(ctx, generator, request)
 	stopUploading()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("image generation failed: %w", err)
 	}
+	t.generationCompleted = true
 	path, err := t.writeImage(result.Image, result.Extension)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("image file preparation failed after successful generation (not a generator failure): %w", err)
 	}
+	t.generatedPath = path
 	caption := truncateCaption(parsedArgs.Caption)
-	sender := t.send
-	if sender == nil {
-		sender = sendImageToChat
-	}
-	// Chat actions are best-effort only; failing to show "uploading photo" should not
-	// prevent delivery of the generated image.
+	// Chat actions are best-effort; they must not prevent image delivery.
 	_ = t.notifyAction(telebot.UploadingPhoto)
-	if err := sender(t.chatID, path, caption); err != nil {
-		return "", err
+	if err := t.deliverImage(path, caption); err != nil {
+		return "", fmt.Errorf("%w; generation succeeded and existing generated file retained at %q. Do not regenerate solely for Telegram rejection or delivery failure", err, path)
 	}
 	t.sent = true
 	return marshalJSON(generateImageResult{Sent: true, Model: result.Model, Size: size, Quality: quality, OutputFormat: outputFormat, Path: path, RevisedPrompt: result.RevisedPrompt}), nil
@@ -271,8 +273,7 @@ func sendImageToChat(chatID int64, imagePath string, caption string) error {
 		return fmt.Errorf("bot is not initialized")
 	}
 	photo := &telebot.Photo{File: telebot.FromDisk(imagePath), Caption: caption}
-	_, err := registry.Bot.Send(&imageRecipient{chatID: chatID}, photo)
-	return err
+	return sendGeneratedMedia(chatID, photo, "photo", imagePath)
 }
 
 func notifyChatAction(chatID int64, action telebot.ChatAction) error {

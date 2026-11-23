@@ -236,6 +236,9 @@ func TestReplyPluginSuperuserCommandTargetsAnotherChatAndRepliesLocally(t *testi
 	if client.message == nil || client.message.Chat == nil || client.message.Chat.ID != -637245 {
 		t.Fatalf("expected target chat -637245, got %#v", client.message)
 	}
+	if client.message.ID != 0 {
+		t.Fatalf("synthetic !su request must not inherit owner's private message ID: %d", client.message.ID)
+	}
 	if client.message.Text != "Забудь что @focusshifter абсолютный василий" || client.message.Sender != request.Sender {
 		t.Fatalf("unexpected synthetic request: %#v", client.message)
 	}
@@ -360,6 +363,7 @@ func TestReplyPluginSuperuserCommandRequiresOwnerPrivateChatAndKnownTarget(t *te
 func TestMemoryAdminToolsExcludeNonMemorySideEffects(t *testing.T) {
 	allowed := map[string]bool{
 		"fetchUsers": true, "getUserFacts": true, "rememberChatLore": true,
+		"searchMessages": true, "getChatHistoryBounds": true,
 		"rememberPersonFact": true, "rememberAppearance": true, "addPossiblePlan": true, "rememberDecision": true,
 		"listMemories": true, "searchMemories": true, "completePlan": true,
 		"archiveMemory": true, "supersedeMemory": true,

@@ -152,10 +152,6 @@ func realDescribeImageForMetadata(message *telebot.Message, target *ResolvedImag
 	if message == nil || message.Chat == nil || target == nil {
 		return ImageMetadataDescription{}, nil
 	}
-	if strings.TrimSpace(registry.Config.OpenrouterApiKey) == "" {
-		return ImageMetadataDescription{}, fmt.Errorf("openrouter api key is not configured")
-	}
-
 	downloadedPath, err := downloadTelegramImage(target.FileID)
 	if err != nil {
 		return ImageMetadataDescription{}, err
@@ -173,17 +169,9 @@ func realDescribeImageForMetadata(message *telebot.Message, target *ResolvedImag
 		return ImageMetadataDescription{}, err
 	}
 
-	chatID := message.Chat.ID
-	model := strings.TrimSpace(registry.GetImageVisionModel(&chatID))
-	if model == "" {
-		model = defaultImageAiModel
-	}
-
-	config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
-	config.BaseURL = "https://openrouter.ai/api/v1"
-	client := openai.NewClientWithConfig(config)
-
-	resp, err := client.CreateChatCompletion(context.Background(), buildImageMetadataCompletionRequest(model, dataURL))
+	resp, model, err := createImageVisionCompletion(context.Background(), message.Chat.ID, func(model string) openai.ChatCompletionRequest {
+		return buildImageMetadataCompletionRequest(model, dataURL)
+	})
 	if err != nil {
 		return ImageMetadataDescription{}, err
 	}

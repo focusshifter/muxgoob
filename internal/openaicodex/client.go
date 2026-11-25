@@ -129,9 +129,13 @@ type codexRequest struct {
 	MaxOutputTokens  int      `json:"max_output_tokens,omitempty"`
 }
 
+// codexTextPart also represents image input; image bytes stay in image_url,
+// never in text. Both remote URLs and data URLs are passed through unchanged.
 type codexTextPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type codexMessageInput struct {
@@ -368,6 +372,11 @@ func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexReques
 	inputs := make([]any, 0, len(request.Messages))
 	systemParts := make([]string, 0, 2)
 	for _, message := range request.Messages {
+		for _, part := range message.MultiContent {
+			if part.Type == openai.ChatMessagePartTypeImageURL && message.Role != openai.ChatMessageRoleUser && message.Role != openai.ChatMessageRoleAssistant {
+				return codexRequest{}, fmt.Errorf("codex image input is unsupported for role %q", message.Role)
+			}
+		}
 		content := strings.TrimSpace(extractMessageText(message))
 		switch message.Role {
 		case openai.ChatMessageRoleSystem:
@@ -375,14 +384,12 @@ func (c *Client) buildRequest(request openai.ChatCompletionRequest) (codexReques
 				systemParts = append(systemParts, content)
 			}
 		case openai.ChatMessageRoleUser, openai.ChatMessageRoleAssistant:
-			if content != "" {
-				inputs = append(inputs, codexMessageInput{
-					Role: message.Role,
-					Content: []codexTextPart{{
-						Type: "input_text",
-						Text: content,
-					}},
-				})
+			parts, err := codexMessageParts(message)
+			if err != nil {
+				return codexRequest{}, err
+			}
+			if len(parts) > 0 {
+				inputs = append(inputs, codexMessageInput{Role: message.Role, Content: parts})
 			}
 			for _, toolCall := range message.ToolCalls {
 				inputs = append(inputs, codexFunctionCallInput{
@@ -544,6 +551,51 @@ func normalizeSchemaForCodex(schema any) any {
 	default:
 		return schema
 	}
+}
+
+func codexMessageParts(message openai.ChatCompletionMessage) ([]codexTextPart, error) {
+	hasImage := false
+	for _, part := range message.MultiContent {
+		if part.Type == openai.ChatMessagePartTypeImageURL {
+			hasImage = true
+		}
+	}
+	// Keep legacy text-only joining and Content precedence unchanged.
+	if !hasImage {
+		if text := strings.TrimSpace(extractMessageText(message)); text != "" {
+			return []codexTextPart{{Type: "input_text", Text: text}}, nil
+		}
+		return nil, nil
+	}
+	parts := make([]codexTextPart, 0, len(message.MultiContent)+1)
+	if text := strings.TrimSpace(message.Content); text != "" {
+		parts = append(parts, codexTextPart{Type: "input_text", Text: text})
+	}
+	for _, part := range message.MultiContent {
+		switch part.Type {
+		case openai.ChatMessagePartTypeText:
+			if text := strings.TrimSpace(part.Text); text != "" {
+				parts = append(parts, codexTextPart{Type: "input_text", Text: text})
+			}
+		case openai.ChatMessagePartTypeImageURL:
+			if part.ImageURL == nil || strings.TrimSpace(part.ImageURL.URL) == "" {
+				return nil, fmt.Errorf("codex image input requires an image URL")
+			}
+			detail := string(part.ImageURL.Detail)
+			if detail == "" {
+				detail = "auto"
+			}
+			switch detail {
+			case "auto", "low", "high":
+			default:
+				return nil, fmt.Errorf("unsupported codex image detail")
+			}
+			parts = append(parts, codexTextPart{Type: "input_image", ImageURL: part.ImageURL.URL, Detail: detail})
+		default:
+			return nil, fmt.Errorf("unsupported codex message part type %q", part.Type)
+		}
+	}
+	return parts, nil
 }
 
 func extractMessageText(message openai.ChatCompletionMessage) string {

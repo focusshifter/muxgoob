@@ -70,25 +70,10 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 	if message == nil || message.Chat == nil {
 		return "", fmt.Errorf("message chat is missing")
 	}
-	if strings.TrimSpace(registry.Config.OpenrouterApiKey) == "" {
-		return "", fmt.Errorf("openrouter api key is not configured")
-	}
-
-	chatID := message.Chat.ID
-	chatIDPtr := &chatID
-	model := strings.TrimSpace(registry.GetImageVisionModel(chatIDPtr))
-	if model == "" {
-		model = defaultImageAiModel
-	}
-
 	dataURL, err := buildVisionDataURL(imagePath)
 	if err != nil {
 		return "", err
 	}
-
-	config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
-	config.BaseURL = "https://openrouter.ai/api/v1"
-	client := openai.NewClientWithConfig(config)
 
 	question := strings.TrimSpace(message.Text)
 	if question == "" {
@@ -98,7 +83,9 @@ var analyzeImageWithVision = func(message *telebot.Message, imagePath string) (s
 		question = "Что на этой картинке?"
 	}
 
-	resp, err := client.CreateChatCompletion(context.Background(), buildImageVisionCompletionRequest(model, dataURL, question))
+	resp, _, err := createImageVisionCompletion(context.Background(), message.Chat.ID, func(model string) openai.ChatCompletionRequest {
+		return buildImageVisionCompletionRequest(model, dataURL, question)
+	})
 	if err != nil {
 		return "", err
 	}

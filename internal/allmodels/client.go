@@ -47,6 +47,9 @@ func WithHTTPClient(client *http.Client) Option {
 }
 
 func (c *Client) CreateChatCompletion(ctx context.Context, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	// One budget includes both attempts, not a fresh timeout per upstream.
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	var out openai.ChatCompletionResponse
 	if strings.TrimSpace(c.apiKey) == "" {
 		return out, errors.New("allmodels: missing API key")
@@ -80,20 +83,26 @@ func (c *Client) CreateChatCompletion(ctx context.Context, req openai.ChatComple
 		return out, err
 	}
 	if err = json.Unmarshal(data, &out); err != nil {
-		return out, errors.New("allmodels: decode provider response")
+		return openai.ChatCompletionResponse{}, errors.New("allmodels: decode provider response")
 	}
 	if err = c.checkEmptyCompletion(data, out); err != nil {
-		return openai.ChatCompletionResponse{}, err
+		provider := c.emptyRetryProvider(data)
+		if provider == "" {
+			return openai.ChatCompletionResponse{}, err
+		}
+		if ctx.Err() != nil {
+			return openai.ChatCompletionResponse{}, fmt.Errorf("%w: %w", err, ctx.Err())
+		}
+		return c.retryEmptyCompletion(ctx, body, provider)
 	}
 	return out, nil
 }
 
 // exchange is bounded and intentionally excludes upstream bodies, URLs and
 // transport errors, which may echo secrets, private prompts or image data.
-// No retries: one completion POST, including hosted search, per call.
+// Each exchange makes exactly one POST. CreateChatCompletion owns the shared
+// deadline and the sole, narrowly gated empty-completion retry.
 func (c *Client) exchange(ctx context.Context, body any) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return nil, errors.New("allmodels: encode request")

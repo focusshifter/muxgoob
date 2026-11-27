@@ -2147,12 +2147,12 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 	if err != nil {
 		log.Printf("ChatCompletion error: %v", err)
 		if errors.Is(err, allmodels.ErrEmptyCompletion) {
-			// Do not convert an unusable provider reply into another billed
-			// request or an unrelated image-composer fallback.
+			// The adapter already applied its bounded upstream retry policy.
+			// Do not trigger another request or an unrelated image composer.
 			if (pollTool != nil && pollTool.WasSent()) || (imageTool != nil && imageTool.WasSent()) || (reactionTool != nil && reactionTool.WasSent()) {
 				return actionOnlyReplyToken
 			}
-			return "Сервис модели вернул пустой ответ. Ответ не сформирован; автоматический повтор не выполнялся."
+			return "Сервис модели не вернул готовый ответ. Запрос завершён с ошибкой."
 		}
 		if imagePromptMode != "fallback" || !composerConfigured {
 			return ""

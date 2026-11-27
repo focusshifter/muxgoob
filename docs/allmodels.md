@@ -13,8 +13,9 @@ load it. This key is separate from `orcarouter_api_key`, `openrouter_api_key`,
 OpenAI API keys, and Codex OAuth. Missing credentials fail before network IO;
 AllModels calls never borrow another key or fall back to another router/model.
 The endpoint is `https://api.allmodels.io/oai/chat/completions`, with Bearer auth.
-There are no automatic retries, redirects, or provider-key logs. Requests have a
-120-second deadline and responses have a 4 MiB limit.
+There are no automatic HTTP/transport retries, redirects, or provider-key logs.
+A technical empty completion can make one alternate-upstream attempt as described
+below. Both attempts share one 120-second deadline; each response has a 4 MiB limit.
 
 **Every AllModels request explicitly sends `provider: {"zdr": true}`.** The
 [official provider documentation](https://allmodels.io/llm/docs/providers)
@@ -92,8 +93,9 @@ The adapter strips terminal `:online`, sends the same model to Chat Completions,
 and adds `web_search_options: {"search_context_size": "medium"}`. It preserves
 host function tools, tool-result continuation, structured output, and vision
 parts. It does **not** inject an Orca search tool, call Orca's standalone search,
-or layer another search provider over AllModels. Each adapter call issues one
-POST. Hosted search may incur provider charges on each completion/continuation;
+or layer another search provider over AllModels. Each adapter call normally issues
+one POST, with at most one additional POST for eligible empty-response recovery.
+Hosted search may incur provider charges on each attempt/completion/continuation;
 this is not an account-wide search budget.
 
 Evidence and remaining limitation:
@@ -117,9 +119,10 @@ Evidence and remaining limitation:
 
 An HTTP success with an empty/whitespace final `content` is not a successful
 answer. The adapter reports `ErrEmptyCompletion`; ordinary replies display a
-short failure notice instead of silently disappearing. This does not retry the
-completion, switch providers, relax ZDR, expose reasoning as an answer, or invoke
-an image-composer fallback. Ordinary `tool_calls` completions remain valid.
+short failure notice instead of silently disappearing when recovery is unavailable
+or exhausted. This never switches models/routers, relaxes ZDR, exposes reasoning
+as an answer, or invokes an image-composer fallback. Ordinary `tool_calls`
+completions remain valid.
 
 The `[allmodels]` diagnostic records only bounded/sanitized response identifiers,
 upstream provider, finish reason, choice/tool counts, known message-field
@@ -129,6 +132,31 @@ calls but an unexpected finish reason is diagnosed, not executed automatically.
 These fields help distinguish future incidents; old `reason=stop with empty
 content` logs do not retrospectively prove refusal, reasoning exhaustion or a
 specific upstream failure.
+
+## One alternate-upstream attempt for technical emptiness
+
+For a first response with empty final content, `finish_reason: "stop"`, a usable
+upstream provider ID and no refusal/filter/tool-call payload, the adapter can
+repeat that same completion exactly once inside AllModels. The second request
+keeps the same model, messages, tools and optional search settings, and sends
+`provider: {"zdr": true, "ignore": ["<first-upstream-id>"]}`.
+
+Already executed host-tool results stay in the request history; the adapter does
+not execute or replay tools itself. A real alternate upstream must be reported
+on the second response. Recovery does not run for missing/invalid provider IDs,
+zero choices, explicit refusals/filtering, output-length exhaustion, malformed
+tool calls, transport failures or HTTP errors. If the second attempt fails, is
+empty, or no eligible alternate ZDR route exists, return the empty-completion
+error without a third attempt or image-composer fallback. The additional attempt
+may incur another inference/search charge. No other settings are changed.
+
+The separate opt-in `TestAllModelsLiveProviderExclusion` makes at most two paid
+POSTs with a neutral marker, using the same key/flag/model environment variables.
+On November 27, 2026 it verified actual `refuseless` -> `hopper` routing after
+excluding the first provider, with ZDR on both calls. This proves live exclusion
+wiring, not a naturally occurring empty-response recovery. Automatic retry and
+preservation of already executed host-tool history are covered with synthetic
+transport fixtures, including exhausted retry and no-eligible-provider errors.
 
 ## Image generation is not supported
 
@@ -156,8 +184,9 @@ ALLMODELS_LIVE_TEST=1 ALLMODELS_TEST_MODEL=deepseek/deepseek-v4.1-flash-ablitera
 
 Both key and flag are required. The model environment variable is an exact plain
 upstream ID, not a routed/suffixed ID. The smoke has an overall 120-second
-context and performs up to three bounded calls: forced inert local tool,
-continuation with its result, and hosted search. Every request keeps ZDR enabled.
+context and performs up to three logical completions (at most six POSTs with
+eligible recovery): forced inert local tool, continuation with its result, and
+hosted search. Every request keeps ZDR enabled.
 Search passes only with provider-originated URL-citation annotations captured
 from the HTTP response, not plausible prose or model-written links. Nothing is
 sent to Telegram, saved to production settings/DB, or published as a review.

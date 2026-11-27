@@ -15,7 +15,8 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-// Opt-in only: three bounded paid calls, no DB, Telegram, or review publishing.
+// Opt-in only: three logical completions (at most six paid POSTs), one 120s
+// budget, no DB, Telegram, or review publishing.
 // Inspect provider annotations on the wire; a model-written link is not proof.
 func TestAllModelsLiveSmoke(t *testing.T) {
 	if os.Getenv("ALLMODELS_LIVE_TEST") != "1" {

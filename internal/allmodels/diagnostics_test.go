@@ -66,7 +66,7 @@ func TestEmptyCompletionDiagnostics(t *testing.T) {
 		{"text", "stop", `{"content":"PRIVATE_VALID_COMPLETION"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			body := `{"id":"chatcmpl-fixture","provider":"fixture/provider","choices":[{"finish_reason":"` + tc.reason + `","message":` + tc.message + `}]}`
+			body := `{"id":"chatcmpl-fixture","choices":[{"finish_reason":"` + tc.reason + `","message":` + tc.message + `}]}`
 			out, err, logs := diagnosticFixture(t, body, "fixture-key")
 			if tc.empty {
 				if !errors.Is(err, ErrEmptyCompletion) {

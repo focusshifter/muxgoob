@@ -16,7 +16,7 @@ import (
 func TestAllModelsEmptyReplyIsVisibleWithoutRetryOrComposer(t *testing.T) {
 	for _, mode := range []string{"off", "fallback"} {
 		for _, body := range []string{
-			`{"id":"fixture-empty","provider":"fixture","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"","reasoning_content":"PRIVATE_REASONING"}}]}`,
+			`{"id":"fixture-empty","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"","reasoning_content":"PRIVATE_REASONING"}}]}`,
 			`{"choices":[]}`, `{"choices":null}`, `{}`,
 		} {
 			t.Run(mode+body, func(t *testing.T) { testAllModelsEmptyReply(t, mode, body, false) })
@@ -97,7 +97,7 @@ func testAllModelsEmptyReply(t *testing.T, mode, fixture string, genericError bo
 	}
 	msg := &telebot.Message{ID: 20, Text: question, Chat: &telebot.Chat{ID: *id}, Sender: &telebot.User{ID: 42, FirstName: "Fixture"}}
 	got := askChatGptWithMode(msg, false, nil, false)
-	want := "Сервис модели вернул пустой ответ. Ответ не сформирован; автоматический повтор не выполнялся."
+	want := "Сервис модели не вернул готовый ответ. Запрос завершён с ошибкой."
 	count := 1
 	if genericError {
 		want = "fixture composer control"

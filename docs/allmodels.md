@@ -80,7 +80,7 @@ model normalization. Native slash IDs and nonterminal model variants remain
 opaque. An empty prefixed ID is an error. The wrapper removes only a terminal
 `:online`; all other plain model IDs are sent unchanged.
 
-## Hosted web search: optional and not yet live-certified
+## Hosted web search: optional
 
 Proposed optional command, only when search is requested:
 
@@ -144,5 +144,10 @@ continuation with its result, and hosted search. Every request keeps ZDR enabled
 Search passes only with provider-originated URL-citation annotations captured
 from the HTTP response, not plausible prose or model-written links. Nothing is
 sent to Telegram, saved to production settings/DB, or published as a review.
-Until this test passes on the real account, live model availability, host tools,
-vision/schema support, and hosted search remain unverified.
+Until this test passes on a real account, live availability, host tools and
+hosted search remain unverified. On November 27, 2026, the exact
+`deepseek/deepseek-v4.1-flash-abliterated` model passed this unpublished smoke:
+host-tool invocation and result continuation succeeded, and hosted search
+returned two provider URL-citation annotations. All requests retained the ZDR
+filter. This does not certify other models/accounts, live vision, structured
+schema enforcement or an independent audit of provider retention.

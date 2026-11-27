@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/focusshifter/muxgoob/database"
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	chattools "github.com/focusshifter/muxgoob/internal/tools"
 	"github.com/focusshifter/muxgoob/registry"
@@ -203,8 +204,21 @@ func callChatModelForReviewContext(parent context.Context, chatID *int64, prompt
 	model := resolveSpotifyReviewModel(chatID)
 	configuredModel := model
 
-	provider := registry.GetAiProvider(chatID)
+	provider, model, routeErr := aiprovider.Resolve(registry.GetAiProvider(chatID), model)
+	if routeErr != nil {
+		return "", sql.NullFloat64{}, "", routeErr
+	}
 	switch provider {
+	case "allmodels":
+		if strings.TrimSpace(registry.Config.AllmodelsApiKey) == "" {
+			return "", sql.NullFloat64{}, "", fmt.Errorf("allmodels api key is not configured")
+		}
+		client = aiprovider.Router(provider)
+	case "orcarouter":
+		if strings.TrimSpace(registry.Config.OrcarouterApiKey) == "" {
+			return "", sql.NullFloat64{}, "", fmt.Errorf("orcarouter api key is not configured")
+		}
+		client = aiprovider.Router(provider)
 	case "openrouter":
 		if registry.Config.OpenrouterApiKey == "" {
 			return "", sql.NullFloat64{}, "", fmt.Errorf("review provider not configured")
@@ -279,7 +293,7 @@ func resolveSpotifyReviewModel(chatID *int64) string {
 
 func resolveSpotifyDefaultReviewModel(chatID *int64) string {
 	provider := registry.GetAiProvider(chatID)
-	if provider == "openrouter" || provider == "openai-codex" {
+	if aiprovider.IsRouter(provider) || provider == "openai-codex" {
 		return strings.TrimSpace(registry.GetAiModel(chatID))
 	}
 	return "gpt-4o-mini"

@@ -206,7 +206,11 @@ func SetPluginSetting(chatID *int64, pluginName string, key string, value string
 
 // GetAiProvider returns the AI provider from database or falls back to config.yml
 func GetAiProvider(chatID *int64) string {
-	return GetPluginSetting(chatID, ConfigPluginName, AiProviderKey, Config.AiProvider)
+	defaultProvider := strings.TrimSpace(Config.AiProvider)
+	if defaultProvider == "" {
+		defaultProvider = "openai-codex"
+	}
+	return GetPluginSetting(chatID, ConfigPluginName, AiProviderKey, defaultProvider)
 }
 
 // GetAiModel returns the AI model from database or falls back to config.yml

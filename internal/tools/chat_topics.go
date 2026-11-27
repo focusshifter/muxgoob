@@ -10,6 +10,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	chatmemory "github.com/focusshifter/muxgoob/internal/memory"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
@@ -353,8 +354,19 @@ func aiTopicMatcher(ctx context.Context, chatID int64, bullets []string, topic s
 
 func buildLightweightClient(chatID int64) (ChatCompletionCreator, string) {
 	chatIDPtr := &chatID
-	aiProvider := registry.GetAiProvider(chatIDPtr)
+	aiProvider, routedModel, routeErr := aiprovider.Resolve(registry.GetAiProvider(chatIDPtr), strings.TrimSpace(registry.GetAiModel(chatIDPtr)))
+	if routeErr != nil {
+		return aiprovider.ErrorClient(routeErr), ""
+	}
+	if aiProvider == aiprovider.AllModels {
+		return aiprovider.Router(aiProvider), routedModel
+	}
+	if aiprovider.IsRouter(aiProvider) && (aiProvider != registry.GetAiProvider(chatIDPtr) || strings.HasPrefix(registry.GetAiModel(chatIDPtr), "orcarouter:") || strings.HasPrefix(registry.GetAiModel(chatIDPtr), "openrouter:")) {
+		return aiprovider.Router(aiProvider), routedModel
+	}
 	switch aiProvider {
+	case "orcarouter":
+		return aiprovider.Router(aiProvider), "openai/gpt-4o-mini"
 	case "openrouter":
 		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 		config.BaseURL = "https://openrouter.ai/api/v1"

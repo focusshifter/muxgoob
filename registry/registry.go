@@ -88,6 +88,8 @@ type Configuration struct {
 	ChatGptUserPrompt            string                 `yaml:"chat_gpt_user_prompt"`
 	ChatGptHistoryDepth          int                    `yaml:"chat_gpt_history_depth"`
 	OpenrouterApiKey             string                 `yaml:"openrouter_api_key"`
+	OrcarouterApiKey             string                 `yaml:"orcarouter_api_key"`
+	AllmodelsApiKey              string                 `yaml:"allmodels_api_key"`
 	OwnerUsername                string                 `yaml:"owner_username"`
 	AiProvider                   string                 `yaml:"ai_provider"`
 	AiModel                      string                 `yaml:"ai_model"`

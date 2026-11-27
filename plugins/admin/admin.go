@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	"github.com/tucnak/telebot"
 
 	"github.com/focusshifter/muxgoob/database"
@@ -101,7 +102,7 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	parts := strings.Split(message.Text, " ")
 
 	if len(parts) < 2 {
-		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter] [chat_id]\n!ai provider image-prompt openrouter [chat_id]\n!ai model reply <model_name> [chat_id] (aliases: chat, main)\n!ai model image|vision|image-prompt|selfprompt|spotify <model_name> [chat_id]\n!ai model <target> global <chat_id> (or reset)\n!ai model <model_name> [chat_id] (legacy reply alias)\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai images enable|disable|status <chat_id>\n!ai get [chat_id]")
+		bot.Send(message.Chat, "Usage:\n!ai chat <chat_id> (effective settings plus global/chat origins)\n!ai provider [openrouter|orcarouter|allmodels|openai|openai-codex] [chat_id]\n!ai provider image [openai-codex|openrouter|orcarouter] [chat_id]\n!ai provider image-prompt [openai-codex|openrouter|orcarouter|allmodels] [chat_id]\n!ai model reply <model_name> [chat_id] (aliases: chat, main)\n!ai model image|vision|image-prompt|selfprompt|spotify <model_name> [chat_id]\n!ai model <target> global <chat_id> (or reset)\n!ai model <model_name> [chat_id] (legacy reply alias)\n!ai image size <WIDTHxHEIGHT|auto> [chat_id]\n!ai image-prompt mode [off|direct|fallback] [chat_id]\n!ai images enable|disable|status <chat_id>\n!ai get [chat_id]\nWith openai-codex: OpenAI GPT uses Codex; non-OpenAI IDs use OrcaRouter. Optional allmodels:<model> / orcarouter:<model> / openrouter:<model> overrides only that model; native orcarouter/auto remains intact. AllModels uses its own allmodels_api_key, requires ZDR upstreams, and supports text/tools/vision, not image generation.")
 		return
 	}
 
@@ -126,12 +127,12 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 	case "provider":
 		if len(parts) >= 3 && parts[2] == "image-prompt" {
 			if len(parts) < 4 {
-				bot.Send(message.Chat, "Usage: !ai provider image-prompt openrouter [chat_id]")
+				bot.Send(message.Chat, "Usage: !ai provider image-prompt [openai-codex|openrouter|orcarouter|allmodels] [chat_id]")
 				return
 			}
 			provider := parts[3]
-			if provider != "openrouter" {
-				bot.Send(message.Chat, "Invalid image prompt provider. Use 'openrouter'")
+			if !(aiprovider.IsImageProvider(provider) || provider == aiprovider.AllModels) {
+				bot.Send(message.Chat, "Invalid image prompt provider. Use 'openai-codex', 'openrouter', 'orcarouter', or 'allmodels'")
 				return
 			}
 			var chatID *int64
@@ -153,12 +154,12 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 		}
 		if len(parts) >= 3 && parts[2] == "image" {
 			if len(parts) < 4 {
-				bot.Send(message.Chat, "Usage: !ai provider image [openai-codex|openrouter] [chat_id]")
+				bot.Send(message.Chat, "Usage: !ai provider image [openai-codex|openrouter|orcarouter] [chat_id]")
 				return
 			}
 			provider := parts[3]
-			if provider != "openai-codex" && provider != "openrouter" {
-				bot.Send(message.Chat, "Invalid image provider. Use 'openai-codex' or 'openrouter'")
+			if !aiprovider.IsImageProvider(provider) {
+				bot.Send(message.Chat, "Invalid image provider. Use 'openai-codex', 'openrouter', or 'orcarouter'")
 				return
 			}
 			var chatID *int64
@@ -187,13 +188,13 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			}
 		}
 		if len(parts) < 3 {
-			bot.Send(message.Chat, "Please specify a provider (openrouter, openai, or openai-codex)")
+			bot.Send(message.Chat, "Please specify a provider (openrouter, orcarouter, allmodels, openai, or openai-codex)")
 			return
 		}
 
 		provider := parts[2]
-		if provider != "openrouter" && provider != "openai" && provider != "openai-codex" {
-			bot.Send(message.Chat, "Invalid provider. Use 'openrouter', 'openai', or 'openai-codex'")
+		if !aiprovider.IsChatProvider(provider) {
+			bot.Send(message.Chat, "Invalid provider. Use 'openrouter', 'orcarouter', 'allmodels', 'openai', or 'openai-codex'")
 			return
 		}
 
@@ -475,6 +476,26 @@ func (p *AdminPlugin) handleAiCommands(message *telebot.Message) {
 			response = fmt.Sprintf("AI settings for chat %d:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nVision model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: %s\nSelfprompt model: %s", *chatID, provider, model, imageProvider, imageModel, visionModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, imageGenerationStatus, selfpromptModel)
 		} else {
 			response = fmt.Sprintf("Global AI settings:\nProvider: %s\nModel: %s\nImage provider: %s\nImage model: %s\nVision model: %s\nImage size: %s\nImage prompt composer: %s / %s (%s)\nImage generation: disabled by default, enable per chat with !ai images enable <chat_id>\nSelfprompt model: %s", provider, model, imageProvider, imageModel, visionModel, imageSize, imagePromptProvider, imagePromptModel, imagePromptMode, selfpromptModel)
+		}
+		effectiveProvider, effectiveModel, routeErr := aiprovider.Resolve(provider, model)
+		if routeErr != nil {
+			response += "\nReply route error: " + routeErr.Error()
+		} else {
+			response += fmt.Sprintf("\nReply route: %s / %s", effectiveProvider, effectiveModel)
+		}
+		if effectiveProvider == aiprovider.AllModels {
+			if strings.TrimSpace(registry.Config.AllmodelsApiKey) == "" {
+				response += "\nAllModels auth: missing allmodels_api_key"
+			} else {
+				response += "\nAllModels auth: key configured (not live-verified); provider ZDR required"
+			}
+		}
+		if effectiveProvider == aiprovider.OrcaRouter {
+			if strings.TrimSpace(registry.Config.OrcarouterApiKey) == "" {
+				response += "\nOrcaRouter auth: missing orcarouter_api_key"
+			} else {
+				response += "\nOrcaRouter auth: key configured (not live-verified)"
+			}
 		}
 		if provider == "openai-codex" {
 			response += "\nCodex auth: " + openaicodex.NewClient().AuthStatus()

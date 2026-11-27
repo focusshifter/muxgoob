@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
 	openai "github.com/sashabaranov/go-openai"
@@ -26,7 +27,7 @@ const defaultSpotifyReviewJudge = "openai/gpt-6.1-sol"
 func spotifyReviewGeneratedModelID(configured, routed string) string {
 	// Full configured IDs are provenance tokens, not display aliases. Only legacy
 	// bare GPT names need the existing normalizer's known provider-qualified ID.
-	if strings.Contains(configured, "/") {
+	if strings.Contains(configured, "/") || strings.HasPrefix(configured, "orcarouter:") || strings.HasPrefix(configured, "openrouter:") || strings.HasPrefix(configured, "allmodels:") {
 		return configured
 	}
 	return openaicodex.NormalizeConfiguredModel(routed).OpenRouterModel
@@ -409,14 +410,22 @@ func parseSpotifyReviewJudgeDecision(raw string, offered map[string]int) (spotif
 	return d, nil
 }
 
-// Explicit ensemble models follow the existing Codex/OpenRouter routes. Do not
-// enable :online searching: every writer and judge receives the same research.
+// OrcaRouter receives opaque model IDs. Other ensemble models retain the existing
+// Codex/OpenRouter routes and :online stripping; all receive the same research.
 func completeSpotifyReviewModel(ctx context.Context, chatID *int64, configured string, req openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
-	info := openaicodex.NormalizeConfiguredModel(configured)
+	provider, model, err := aiprovider.Resolve(registry.GetAiProvider(chatID), configured)
+	if err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
+	if provider == aiprovider.OrcaRouter || provider == aiprovider.AllModels {
+		req.Model = model
+		return aiprovider.Router(provider).CreateChatCompletion(ctx, req)
+	}
+	info := openaicodex.NormalizeConfiguredModel(model)
 	routerConfig := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 	routerConfig.BaseURL = "https://openrouter.ai/api/v1"
 	router := openai.NewClientWithConfig(routerConfig)
-	if registry.GetAiProvider(chatID) == "openai-codex" && info.UseCodex {
+	if provider == "openai-codex" && info.UseCodex {
 		req.Model = strings.TrimSuffix(info.RawModel, ":online")
 		return openaicodex.NewClient(openaicodex.WithFallbackClient(router)).CreateChatCompletion(ctx, req)
 	}

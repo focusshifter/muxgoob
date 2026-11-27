@@ -399,7 +399,7 @@ func TestSpotifyEnsembleProductionRouterAndLegacyModelProvenance(t *testing.T) {
 				t.Fatal(err)
 			}
 			createSpotifyReviewsTable(t, db)
-			registry.Config = registry.Configuration{AiProvider: tc.provider, AiModel: tc.configured, OpenrouterApiKey: "test-key", OpenaiApiKey: "test-key"}
+			registry.Config = registry.Configuration{AiProvider: tc.provider, AiModel: tc.configured, OrcarouterApiKey: "orca-key", OpenrouterApiKey: "test-key", OpenaiApiKey: "test-key"}
 			http.DefaultTransport = spotifyTestTransport(func(req *http.Request) (*http.Response, error) {
 				var payload struct {
 					Model string `json:"model"`
@@ -414,7 +414,14 @@ func TestSpotifyEnsembleProductionRouterAndLegacyModelProvenance(t *testing.T) {
 				if payload.Model != expected {
 					t.Fatalf("routed model=%q want=%q", payload.Model, expected)
 				}
-				if tc.provider != "openai" && req.URL.Host != "openrouter.ai" {
+				wantHost := "openrouter.ai"
+				if tc.provider == "openai-codex" {
+					wantHost = "api.orcarouter.ai"
+					if req.Header.Get("Authorization") != "Bearer orca-key" {
+						t.Fatal("wrong Orca credentials")
+					}
+				}
+				if tc.provider != "openai" && req.URL.Host != wantHost {
 					t.Fatalf("wrong route=%s", req.URL.Host)
 				}
 				resp := ensembleResponse(ensembleBody("body", 170), 7.25)

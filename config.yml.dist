@@ -22,22 +22,44 @@ twitch_streams:
     twitch_usernames:
       - username1
       - username2
-ai_provider: openrouter
-ai_model: deepseek/deepseek-chat
-# Image provider: openai-codex (Codex OAuth) or openrouter (OpenRouter Image API).
+# Default dispatch: OpenAI GPT -> Codex OAuth; non-OpenAI models -> OrcaRouter.
+# Explicit openrouter:<model> overrides only that workload; ai_provider: openrouter
+# preserves intentional OpenRouter-only chats. Native slash IDs are opaque.
+ai_provider: openai-codex
+ai_model: openai/gpt-5.4
+# Image provider: openai-codex (Codex OAuth), openrouter, or orcarouter.
 image_ai_provider: openai-codex
 image_ai_model: gpt-image-2
 # Vision/chat-completions model for recognizing incoming images; separate from the image generator.
 image_vision_model: google/gemini-3.1-flash-lite-preview
 # Optional pixel size (for example 2048x2048); leave empty for a model-aware default.
 image_ai_size:
-# Optional OpenRouter text model for composing direct image prompts before generation.
+# Optional Codex/OpenRouter/OrcaRouter/AllModels text/tool model for composing image prompts before generation.
 # Modes: off (default), direct (always use the composer), fallback (retry only when no image was sent).
-image_prompt_provider: openrouter
+image_prompt_provider: openai-codex
 image_prompt_model:
 image_prompt_mode: off
 openai_api_key: no_key
 openrouter_api_key: no_key
+# OrcaRouter key for non-OpenAI models under the default Codex dispatcher.
+# Adding a key does not write provider/model settings. Explicit orcarouter:<model>
+# or ai_provider: orcarouter also selects Orca, even for OpenAI models.
+# Uses https://api.orcarouter.ai/v1 with its OWN Bearer key; no credential fallback.
+# Model IDs pass through unchanged, including orcarouter/auto and orcarouter/free.
+# Also supported for vision, selfprompt, image-prompt composition, Spotify writers/judge,
+# and dedicated image generation via the image provider or per-model routing prefix.
+# Spotify Sonar published-research/citations intentionally still require OpenRouter:
+# research.go relies on OpenRouter's citation envelope; it is NOT silently rerouted.
+orcarouter_api_key:
+# Optional explicit-only AllModels text/tools/vision route; never selected by default.
+# Use ai_provider: allmodels OR a single-model prefix allmodels:<opaque/model>.
+# Example private reply ID: allmodels:deepseek/deepseek-v4.1-flash-abliterated
+# Own Bearer key, https://api.allmodels.io/oai; no credential/provider fallback.
+# Every AllModels request requires provider.zdr=true, including capacity failovers.
+# No AllModels image generation. Prompt composition remains a text/tool workload.
+# Optional terminal :online uses AllModels hosted search only; see docs/allmodels.md
+# for the live verification gate and limits. No settings change merely by adding a key.
+allmodels_api_key:
 chat_gpt_use_history: true
 chat_gpt_history_depth: 20
 chat_gpt_system_prompt:
@@ -74,7 +96,9 @@ spotify_review_prompt: |
 spotify_review_microblog_auth:
 # Opt in ONLY by configuring candidates; empty/missing keeps the legacy single-model route.
 # Example candidates: [anthropic/claude-opus-5.5, openai/gpt-6.1-sol]
-# Uses the existing OpenRouter key; GPT uses Codex when ai_provider is openai-codex.
+# With ai_provider: openai-codex, GPT writers/judge use Codex, non-OpenAI IDs use
+# OrcaRouter. Explicit openrouter:<model> retains OpenRouter for that author/judge.
+# Published Sonar research always uses OpenRouter independently.
 spotify_review_candidate_models: []
 # Default when ensemble is enabled: openai/gpt-6.1-sol.
 spotify_review_judge_model:

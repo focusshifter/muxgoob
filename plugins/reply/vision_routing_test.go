@@ -28,9 +28,15 @@ func TestVisionPathsHonorChatRouting(t *testing.T) {
 			auth                                                    bool
 			wantErr                                                 bool
 		}{
+			{"chat-orca", "openrouter", "orcarouter", "orcarouter/free", "orca-key", "api.orcarouter.ai", "orcarouter/free", false, false},
+			{"orca-key-required", "orcarouter", "", "google/vision", "", "", "", false, true},
 			{"chat-codex", "openrouter", "openai-codex", "openai/gpt-6-luna", "", "chatgpt.com", "gpt-6-luna", true, false},
 			{"chat-router", "openai-codex", "openrouter", "openai/gpt-6-luna", "test-key", "openrouter.ai", "openai/gpt-6-luna", true, false},
 			{"inherited-codex", "openai-codex", "", "openai/gpt-6-luna", "test-key", "chatgpt.com", "gpt-6-luna", true, false},
+			{"plain-orca-default", "openai-codex", "", "google/gemini-4-neon:online", "orca-key", "api.orcarouter.ai", "google/gemini-4-neon", true, false},
+			{"prefixed-orca", "openai-codex", "", "orcarouter:orcarouter/auto", "orca-key", "api.orcarouter.ai", "orcarouter/auto", true, false},
+			{"empty-orca", "openai-codex", "", "orcarouter:", "orca-key", "", "", true, true},
+			{"explicit-router", "openai-codex", "", "openrouter:google/vision", "test-key", "openrouter.ai", "google/vision", true, false},
 			{"non-openai", "openai-codex", "", "openrouter/google/gemini-4-neon", "test-key", "openrouter.ai", "google/gemini-4-neon", true, false},
 			{"fallback", "openai-codex", "", "gpt-6-luna", "test-key", "openrouter.ai", "openai/gpt-6-luna", false, false},
 			{"router-key-required", "openrouter", "", "openai/gpt-6-luna", "", "", "", true, true},
@@ -52,6 +58,7 @@ func TestVisionPathsHonorChatRouting(t *testing.T) {
 				registry.Config.AiProvider = tc.global
 				registry.Config.AiModel = "google/gemini-4-neon"
 				registry.Config.OpenrouterApiKey = tc.key
+				registry.Config.OrcarouterApiKey = tc.key
 				registry.Config.ImageVisionModel = "google/wrong-global-model"
 				chatID := int64(123)
 				if tc.override != "" {
@@ -88,6 +95,9 @@ func TestVisionPathsHonorChatRouting(t *testing.T) {
 				calls := 0
 				http.DefaultTransport = visionRoundTripper(func(r *http.Request) (*http.Response, error) {
 					calls++
+					if tc.wantHost == "api.orcarouter.ai" && (r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer orca-key") {
+						t.Fatalf("wrong Orca path/auth: %s", r.URL)
+					}
 					if r.URL.Host != tc.wantHost {
 						t.Errorf("host=%s want=%s", r.URL.Host, tc.wantHost)
 					}
@@ -97,6 +107,32 @@ func TestVisionPathsHonorChatRouting(t *testing.T) {
 					}
 					if body["model"] != tc.wantModel {
 						t.Errorf("model=%v want=%s", body["model"], tc.wantModel)
+					}
+					if tc.wantHost == "api.orcarouter.ai" && strings.HasSuffix(tc.model, ":online") {
+						var req struct {
+							Tools []struct {
+								Type     string `json:"type"`
+								Function struct {
+									Name string `json:"name"`
+								} `json:"function"`
+							} `json:"tools"`
+						}
+						encoded, err := json.Marshal(body)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := json.Unmarshal(encoded, &req); err != nil {
+							t.Fatal(err)
+						}
+						searchTools := 0
+						for _, tool := range req.Tools {
+							if tool.Type == "function" && tool.Function.Name == "googleSearch" {
+								searchTools++
+							}
+						}
+						if searchTools != 1 {
+							t.Fatalf("native googleSearch tools=%d want=1", searchTools)
+						}
 					}
 					raw, _ := json.Marshal(body)
 					if !strings.Contains(string(raw), "data:image/jpeg;base64,") {

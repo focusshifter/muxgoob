@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
@@ -1019,21 +1020,28 @@ func buildOpenAIClient(chatID *int64) (chattools.ChatCompletionCreator, string) 
 func buildOpenAIClientForModel(chatID *int64, requestedModel string) (chattools.ChatCompletionCreator, string) {
 	model := strings.TrimSpace(requestedModel)
 
-	aiProvider := registry.GetAiProvider(chatID)
+	if model == "" {
+		model = selfpromptplugin.GetModel(chatID)
+	}
+	if provider := registry.GetAiProvider(chatID); model == "" && (aiprovider.IsRouter(provider) || provider == "openai-codex") {
+		model = strings.TrimSpace(registry.GetAiModel(chatID))
+	}
+	if modelOverride != "" {
+		model = modelOverride
+	}
+	aiProvider, model, routeErr := aiprovider.Resolve(registry.GetAiProvider(chatID), model)
+	if routeErr != nil {
+		return aiprovider.ErrorClient(routeErr), ""
+	}
 	switch aiProvider {
-	case "openrouter":
-		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
-		config.BaseURL = "https://openrouter.ai/api/v1"
+	case "openrouter", "orcarouter", "allmodels":
 		if model == "" {
 			model = selfpromptplugin.GetModel(chatID)
 		}
 		if model == "" {
 			model = registry.GetAiModel(chatID)
 		}
-		if modelOverride != "" {
-			model = modelOverride
-		}
-		return openai.NewClientWithConfig(config), model
+		return aiprovider.Router(aiProvider), model
 	case "openai-codex":
 		if model == "" {
 			model = selfpromptplugin.GetModel(chatID)

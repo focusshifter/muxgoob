@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/registry"
 	openai "github.com/sashabaranov/go-openai"
@@ -18,7 +19,29 @@ func imageVisionClient(chatID int64) (openaicodex.ChatCompletionCreator, string,
 	if model == "" {
 		model = defaultImageAiModel
 	}
-	provider := registry.GetAiProvider(&chatID)
+	provider, model, err := aiprovider.Resolve(registry.GetAiProvider(&chatID), model)
+	if err != nil {
+		return nil, "", err
+	}
+	if provider == aiprovider.AllModels {
+		if strings.TrimSpace(registry.Config.AllmodelsApiKey) == "" {
+			return nil, "", fmt.Errorf("allmodels api key is not configured")
+		}
+		return aiprovider.Router(provider), model, nil
+	}
+	if aiprovider.IsRouter(provider) {
+		if provider == "openrouter" {
+			if strings.TrimSpace(registry.Config.OpenrouterApiKey) == "" {
+				return nil, "", fmt.Errorf("openrouter api key is not configured")
+			}
+			return aiprovider.Router(provider), model, nil
+		}
+		log.Printf("[reply/vision] chat=%d effective_provider=%s model=%s", chatID, provider, model)
+		if strings.TrimSpace(registry.Config.OrcarouterApiKey) == "" {
+			return nil, "", fmt.Errorf("orcarouter api key is not configured")
+		}
+		return aiprovider.Router(provider), model, nil
+	}
 	config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
 	config.BaseURL = "https://openrouter.ai/api/v1"
 	router := openai.NewClientWithConfig(config)

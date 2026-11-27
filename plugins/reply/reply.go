@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
@@ -1795,16 +1796,27 @@ func superAdminDirective(message *telebot.Message) string {
 }
 
 func imagePromptComposer(chatID *int64) (chattools.ChatCompletionCreator, string, bool) {
-	if registry.GetImagePromptProvider(chatID) != "openrouter" {
+	provider, model, err := aiprovider.Resolve(registry.GetImagePromptProvider(chatID), strings.TrimSpace(registry.GetImagePromptModel(chatID)))
+	if err != nil {
+		return aiprovider.ErrorClient(err), "", true
+	}
+	if provider == "openai-codex" {
+		if model == "" {
+			return nil, "", false
+		}
+		options := []openaicodex.Option{}
+		if strings.TrimSpace(registry.Config.OpenrouterApiKey) != "" {
+			options = append(options, openaicodex.WithFallbackClient(aiprovider.Router("openrouter")))
+		}
+		return openaicodex.NewClient(options...), model, true
+	}
+	if !aiprovider.IsRouter(provider) {
 		return nil, "", false
 	}
-	model := strings.TrimSpace(registry.GetImagePromptModel(chatID))
-	if model == "" || strings.TrimSpace(registry.Config.OpenrouterApiKey) == "" {
+	if model == "" || (provider == "openrouter" && strings.TrimSpace(registry.Config.OpenrouterApiKey) == "") {
 		return nil, "", false
 	}
-	config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
-	config.BaseURL = "https://openrouter.ai/api/v1"
-	return openai.NewClientWithConfig(config), model, true
+	return aiprovider.Router(provider), model, true
 }
 
 func imagePromptComposerSystemMessage(superAdminDirective string) string {
@@ -1884,15 +1896,17 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 	}
 
 	// Get AI provider from database with fallback to config.yml
-	aiProvider := registry.GetAiProvider(chatID)
+	aiProvider, routedModel, routeErr := aiprovider.Resolve(registry.GetAiProvider(chatID), strings.TrimSpace(registry.GetAiModel(chatID)))
+	if routeErr != nil {
+		log.Printf("[reply] invalid model route: %v", routeErr)
+		return ""
+	}
 	effectiveProvider := aiProvider
 
 	switch aiProvider {
-	case "openrouter":
-		config := openai.DefaultConfig(registry.Config.OpenrouterApiKey)
-		config.BaseURL = "https://openrouter.ai/api/v1"
-		model = registry.GetAiModel(chatID)
-		client = openai.NewClientWithConfig(config)
+	case "openrouter", "orcarouter", "allmodels":
+		model = routedModel
+		client = aiprovider.Router(aiProvider)
 	case "openai-codex":
 		configuredModel := strings.TrimSpace(registry.GetAiModel(chatID))
 		if configuredModel == "" {
@@ -2086,7 +2100,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 		imagePromptMode = registry.GetImagePromptMode(chatID)
 	}
 	if imagePromptMode == "direct" && !composerConfigured {
-		log.Printf("[reply] Image prompt composer is in direct mode but OpenRouter provider/model is not configured")
+		log.Printf("[reply] Image prompt composer is in direct mode but router provider/model is not configured")
 		return ""
 	}
 
@@ -2097,7 +2111,7 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 
 	var resp string
 	if imagePromptMode == "direct" {
-		log.Print(formatChatGPTRequestLog("openrouter-image-prompt", composerModel, message.Chat.ID, len(question), 1))
+		log.Print(formatChatGPTRequestLog(registry.GetImagePromptProvider(chatID)+"-image-prompt", composerModel, message.Chat.ID, len(question), 1))
 		resp, err = runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, superAdminDirective(message), message.Chat.ID, imageTool)
 	} else {
 		log.Print(formatChatGPTRequestLog(effectiveProvider, model, message.Chat.ID, len(question), len(toolRegistry.Definitions())))
@@ -2137,9 +2151,9 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 
 	if imagePromptMode == "fallback" && !imageTool.WasSent() && (reactionTool == nil || !reactionTool.WasSent()) {
 		if !composerConfigured {
-			log.Printf("[reply] Image prompt composer fallback is enabled but OpenRouter provider/model is not configured")
+			log.Printf("[reply] Image prompt composer fallback is enabled but router provider/model is not configured")
 		} else {
-			log.Print(formatChatGPTRequestLog("openrouter-image-prompt-fallback", composerModel, message.Chat.ID, len(question), 1))
+			log.Print(formatChatGPTRequestLog(registry.GetImagePromptProvider(chatID)+"-image-prompt-fallback", composerModel, message.Chat.ID, len(question), 1))
 			fallbackResp, fallbackErr := runImagePromptComposer(context.Background(), composerClient, composerModel, userMessage, superAdminDirective(message), message.Chat.ID, imageTool)
 			if fallbackErr != nil {
 				log.Printf("[reply] Image prompt composer fallback error: %v", fallbackErr)

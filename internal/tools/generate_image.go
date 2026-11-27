@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/focusshifter/muxgoob/internal/aiprovider"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/focusshifter/muxgoob/internal/openaicodex"
 	"github.com/focusshifter/muxgoob/internal/openrouterimage"
+	"github.com/focusshifter/muxgoob/internal/orcarouterimage"
 	"github.com/focusshifter/muxgoob/registry"
 )
 
@@ -63,11 +66,30 @@ func NewGenerateImageTool(chatID int64) *GenerateImageTool {
 }
 
 func imageGeneratorForChat(chatID int64) ImageGenerator {
-	provider := strings.ToLower(strings.TrimSpace(registry.GetImageAiProvider(&chatID)))
+	provider, _, err := aiprovider.Resolve(strings.ToLower(strings.TrimSpace(registry.GetImageAiProvider(&chatID))), imageModelForChat(chatID))
+	if err != nil {
+		return invalidImageGenerator{err}
+	}
+	if provider == aiprovider.AllModels {
+		return invalidImageGenerator{fmt.Errorf("allmodels image generation is not supported")}
+	}
 	if provider == "openrouter" {
 		return openrouterimage.NewClient(registry.Config.OpenrouterApiKey)
 	}
+	if provider == "orcarouter" {
+		return orcarouterimage.NewClient(registry.Config.OrcarouterApiKey)
+	}
 	return openaicodex.NewClient()
+}
+
+type invalidImageGenerator struct{ err error }
+
+func (g invalidImageGenerator) GenerateImage(context.Context, openaicodex.ImageGenerationRequest) (openaicodex.ImageGenerationResponse, error) {
+	return openaicodex.ImageGenerationResponse{}, g.err
+}
+func imageGenerationCompleted(err error) bool {
+	var state interface{ ImageGenerationCompleted() bool }
+	return errors.As(err, &state) && state.ImageGenerationCompleted()
 }
 
 func imageModelForChat(chatID int64) string {
@@ -128,7 +150,11 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	if prompt == "" {
 		return "", fmt.Errorf("prompt is required")
 	}
-	model := imageModelForChat(t.chatID)
+	provider, model, routeErr := aiprovider.Resolve(registry.GetImageAiProvider(&t.chatID), imageModelForChat(t.chatID))
+	if routeErr != nil {
+		return "", routeErr
+	}
+	log.Printf("[tools] generateImage effective_provider=%s model=%s", provider, model)
 	size := imageSizeForModel(model, registry.GetImageAiSize(&t.chatID))
 	if size == "" {
 		size = defaultGeneratedImageSize
@@ -164,6 +190,10 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args string) (string, e
 	result, err := generateImageWithRetry(ctx, generator, request)
 	stopUploading()
 	if err != nil {
+		if imageGenerationCompleted(err) {
+			t.generationCompleted = true
+			return "", fmt.Errorf("image retrieval failed after successful generation: %w", err)
+		}
 		return "", fmt.Errorf("image generation failed: %w", err)
 	}
 	t.generationCompleted = true
@@ -188,7 +218,7 @@ func (t *GenerateImageTool) WasSent() bool {
 
 func generateImageWithRetry(ctx context.Context, generator ImageGenerator, request openaicodex.ImageGenerationRequest) (openaicodex.ImageGenerationResponse, error) {
 	result, err := generator.GenerateImage(ctx, request)
-	if err == nil || !isTransientImageGenerationError(err) || ctx.Err() != nil {
+	if err == nil || imageGenerationCompleted(err) || !isTransientImageGenerationError(err) || ctx.Err() != nil {
 		return result, err
 	}
 

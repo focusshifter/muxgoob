@@ -53,7 +53,7 @@ func ParseChatPrompt(text string) *ChatPrompt {
 			continue
 		}
 
-		if strings.HasSuffix(line, ":") {
+		if strings.HasSuffix(line, ":") && !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
 			section = nil
 			if !foundHeading {
 				continue

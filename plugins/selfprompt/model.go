@@ -7,17 +7,22 @@ import (
 )
 
 const (
-	PluginName            = "selfprompt"
-	ModelKey              = "model"
-	legacyCompressionKey  = "compression_model"
-	defaultCompactChars   = 2200
-	defaultCompactBullets = 12
+	PluginName           = "selfprompt"
+	ModelKey             = "model"
+	legacyCompressionKey = "compression_model"
+	// A conservative byte-volume safeguard, not a storage or model/API limit.
+	defaultCompactChars = 16 * 1024
+	// Retain the legacy accessor without a zero sentinel that would trigger OR callers.
+	defaultCompactBullets = int(^uint(0) >> 1)
 )
 
+// DefaultCompactChars returns the consolidation safeguard in bytes (not runes).
 func DefaultCompactChars() int {
 	return defaultCompactChars
 }
 
+// DefaultCompactBullets is deprecated: bullet count no longer triggers consolidation.
+// The maximum int keeps legacy >= comparisons effectively disabled.
 func DefaultCompactBullets() int {
 	return defaultCompactBullets
 }

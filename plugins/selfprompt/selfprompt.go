@@ -780,8 +780,8 @@ func (p *SelfPromptPlugin) updatePersonFacts(chatID int64, messages []telebot.Me
 			newFacts = p.generateUserFacts(chatID, user, userHistory, currentFacts)
 		}
 
-		newFacts = facts.EnforcePersonFactsBudgets(newFacts)
-		if newFacts == "" || newFacts == facts.EnforcePersonFactsBudgets(currentFacts) {
+		newFacts = facts.NormalizeStoredPersonFacts(newFacts)
+		if newFacts == "" || newFacts == facts.NormalizeStoredPersonFacts(currentFacts) {
 			continue
 		}
 
@@ -852,13 +852,14 @@ func buildOpenAIClientForModel(chatID *int64, requestedModel string) (chattools.
 	}
 }
 
+// ShouldConsolidateMemory reports genuinely large byte volume. This is a heuristic
+// safeguard for automatic consolidation, never a hard storage or model/API limit.
+func ShouldConsolidateMemory(text string) bool {
+	return len(strings.TrimSpace(text)) >= defaultCompactChars
+}
+
 func shouldConsolidateFacts(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return false
-	}
-	bulletCount := strings.Count(trimmed, "\n- ")
-	return len(trimmed) >= defaultCompactChars || bulletCount >= defaultCompactBullets
+	return ShouldConsolidateMemory(text)
 }
 
 func bootstrapFactsRequired(currentFacts string) bool {
@@ -879,12 +880,14 @@ Rules:
 3. Prefer compact grouped bullets over many one-title bullets when that summary is faithful.
 4. Remove redundant repetition.
 5. Do not start bullets with the person's name, username, or phrases like '%s has' or '%s is'.
-6. Output exactly these English headings in this order:
+6. Output these English headings in this order (Appearance is optional if absent):
 Identity:
+Appearance:
 Interests:
 7. Under each heading, use only '- ' bullets.
-8. Keep only concise factual bullets that help future replies.
+8. Preserve every distinct durable fact and detail, including the most recently added facts; do not discard facts to meet a bullet count.
 9. Do not add commentary or text outside the dossier.
+10. Preserve every Appearance bullet unchanged; these are pinned identity anchors.
 
 Current profile:
 %s
@@ -912,6 +915,12 @@ Current profile:
 
 		evaluation := facts.EvaluatePersonFacts(currentFacts, resp.Choices[0].Message.Content)
 		if evaluation.Accepted {
+			candidate := facts.ParseDossier(evaluation.Value)
+			candidate.Appearance = append([]string(nil), facts.ParseDossier(currentFacts).Appearance...)
+			evaluation = facts.EvaluatePersonFacts(currentFacts, facts.RenderDossier(facts.NormalizeDossier(candidate)))
+			if !evaluation.Accepted {
+				return currentFacts
+			}
 			if len(strings.TrimSpace(evaluation.Value)) >= len(strings.TrimSpace(currentFacts)) {
 				return currentFacts
 			}
@@ -928,7 +937,7 @@ Current profile:
 
 func consolidateChatPrompt(chatID int64, currentPrompt string) string {
 	client, model := buildOpenAIClientForModel(&chatID, "")
-	systemMsg := `You consolidate chat reply guidance by removing repetition and keeping only the highest-value durable instructions.`
+	systemMsg := `You consolidate chat reply guidance by removing repetition while preserving all durable meaning.`
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		userMsg := fmt.Sprintf(`
@@ -942,10 +951,7 @@ Reply style:
 Stable context:
 Avoid:
 4. Under each heading, use only '- ' bullets.
-5. Budget:
-- Reply style: max 5 bullets
-- Stable context: max 6 bullets
-- Avoid: max 4 bullets
+5. Preserve every distinct durable instruction; do not discard details to meet a bullet count.
 6. Prefer canonical wording over repeated paraphrases.
 7. Do not include raw delta syntax, arrows, or notes like 'new guidance'.
 8. Do not let one recent exchange dominate the prompt.
@@ -963,12 +969,14 @@ Current prompt:
 		if err != nil || len(resp.Choices) == 0 {
 			return currentPrompt
 		}
-		candidate := facts.EnforceChatPromptBudgets(facts.ParseChatPrompt(resp.Choices[0].Message.Content))
-		value := facts.RenderChatPrompt(candidate)
-		if strings.TrimSpace(value) == "" {
-			return currentPrompt
+		evaluation := facts.EvaluateChatPromptConsolidation(currentPrompt, resp.Choices[0].Message.Content)
+		if evaluation.Accepted {
+			return evaluation.Value
 		}
-		return value
+		if evaluation.Retryable && attempt == 1 {
+			continue
+		}
+		return currentPrompt
 	}
 	return currentPrompt
 }
@@ -1052,13 +1060,18 @@ Chat history:
 		current := facts.ParseChatPrompt(currentPrompt)
 		delta = facts.SanitizeChatDelta(delta)
 		delta = facts.FilterChatDelta(current, delta)
-		merged := facts.ApplyChatDelta(current, delta)
-		merged = facts.EnforceChatPromptBudgets(merged)
-		newPrompt := facts.RenderChatPrompt(merged)
-		if strings.TrimSpace(newPrompt) == "" {
+		if delta == nil || len(delta.ReplyStyle)+len(delta.StableContext)+len(delta.Avoid) == 0 {
 			return currentPrompt
 		}
-		newPrompt = consolidateChatPrompt(chatID, newPrompt)
+		merged := facts.ApplyChatDelta(current, delta)
+		merged = facts.NormalizeChatPrompt(merged)
+		newPrompt := facts.RenderChatPrompt(merged)
+		if strings.TrimSpace(newPrompt) == "" || newPrompt == facts.RenderChatPrompt(facts.NormalizeChatPrompt(current)) {
+			return currentPrompt
+		}
+		if ShouldConsolidateMemory(newPrompt) {
+			newPrompt = consolidateChatPrompt(chatID, newPrompt)
+		}
 
 		log.Printf("[selfprompt] Generated new prompt: %s", newPrompt)
 		return newPrompt
@@ -1141,14 +1154,14 @@ Recent messages from %s:
 			if delta == nil || len(delta.Identity)+len(delta.Interests) == 0 {
 				return currentFacts
 			}
-			merged := facts.EnforceDossierBudgets(facts.ApplyDelta(current, delta))
+			merged := facts.NormalizeDossier(facts.ApplyDelta(current, delta))
 			candidate := facts.RenderDossier(merged)
 			if shouldConsolidateFacts(candidate) {
 				consolidator := consolidatePersonFacts
 				if consolidatePersonFactsFunc != nil {
 					consolidator = consolidatePersonFactsFunc
 				}
-				candidate = facts.EnforcePersonFactsBudgets(consolidator(chatID, user.Name, candidate))
+				candidate = facts.NormalizeStoredPersonFacts(consolidator(chatID, user.Name, candidate))
 			}
 			evaluation := facts.EvaluatePersonFacts(currentFacts, candidate)
 			if evaluation.Accepted {

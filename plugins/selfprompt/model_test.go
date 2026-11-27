@@ -76,7 +76,7 @@ func TestShouldConsolidateFacts(t *testing.T) {
 		t.Fatal("did not expect short profile to consolidate")
 	}
 	big := "Identity:\n- a\n\nInterests:\n- one\n- two\n- three\n- four\n- five\n- six\n- seven\n- eight\n- nine\n- ten\n- eleven\n- twelve"
-	if !shouldConsolidateFacts(big) {
-		t.Fatal("expected large profile to need consolidation")
+	if shouldConsolidateFacts(big) {
+		t.Fatal("bullet count alone must not trigger consolidation")
 	}
 }

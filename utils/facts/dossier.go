@@ -44,7 +44,7 @@ func ParseDossier(text string) *Dossier {
 			continue
 		}
 
-		if strings.HasSuffix(line, ":") {
+		if strings.HasSuffix(line, ":") && !strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "* ") {
 			section = nil
 			continue
 		}

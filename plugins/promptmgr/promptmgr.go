@@ -721,7 +721,7 @@ func GetPersonFactsFromDB(db *sql.DB, chatID int64, userID int64) (string, error
 	if err != nil {
 		return "", fmt.Errorf("error retrieving person facts: %v", err)
 	}
-	return factsutil.EnforcePersonFactsBudgets(facts), nil
+	return factsutil.NormalizeStoredPersonFacts(facts), nil
 }
 
 func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error) {
@@ -775,7 +775,7 @@ func GetPersonFactsMulti(chatID int64, userIDs []int64) (map[int64]string, error
 		if err := rows.Scan(&userID, &facts); err != nil {
 			return nil, fmt.Errorf("error scanning person facts: %v", err)
 		}
-		results[userID] = factsutil.EnforcePersonFactsBudgets(facts)
+		results[userID] = factsutil.NormalizeStoredPersonFacts(facts)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -813,7 +813,7 @@ func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 		if err := rows.Scan(&userID, &facts); err != nil {
 			return nil, fmt.Errorf("error scanning person facts: %v", err)
 		}
-		results[userID] = factsutil.EnforcePersonFactsBudgets(facts)
+		results[userID] = factsutil.NormalizeStoredPersonFacts(facts)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -824,7 +824,7 @@ func GetAllPersonFacts(chatID int64) (map[int64]string, error) {
 }
 
 func SavePersonFacts(chatID int64, userID int64, facts string) error {
-	trimmedFacts := factsutil.EnforcePersonFactsBudgets(facts)
+	trimmedFacts := factsutil.NormalizeStoredPersonFacts(facts)
 	if trimmedFacts == "" {
 		return nil
 	}
@@ -896,13 +896,13 @@ func getStructuredPersonFacts(db *sql.DB, chatID int64, userIDs []int64) (map[in
 	}
 	results := make(map[int64]string, len(grouped))
 	for userID, dossier := range grouped {
-		results[userID] = factsutil.RenderDossier(factsutil.EnforceDossierBudgets(dossier))
+		results[userID] = factsutil.RenderDossier(factsutil.NormalizeDossier(dossier))
 	}
 	return results, nil
 }
 
 func personFactBodies(raw string) []string {
-	trimmed := factsutil.EnforcePersonFactsBudgets(raw)
+	trimmed := factsutil.NormalizeStoredPersonFacts(raw)
 	dossier := factsutil.ParseDossier(trimmed)
 	bodies := append([]string(nil), dossier.Identity...)
 	bodies = append(bodies, dossier.Interests...)
@@ -918,7 +918,7 @@ func SavePersonFactsTx(ctx context.Context, tx *sql.Tx, chatID int64, userID int
 	if tx == nil {
 		return fmt.Errorf("transaction is required")
 	}
-	trimmedFacts := factsutil.EnforcePersonFactsBudgets(rawFacts)
+	trimmedFacts := factsutil.NormalizeStoredPersonFacts(rawFacts)
 	if trimmedFacts == "" {
 		return nil
 	}

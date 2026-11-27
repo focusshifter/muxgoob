@@ -287,7 +287,7 @@ func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {
 				dossier.Identity = append(dossier.Identity, entry.Body)
 			}
 		}
-		return factsutil.RenderDossier(factsutil.EnforceDossierBudgets(dossier)), nil
+		return factsutil.RenderDossier(factsutil.NormalizeDossier(dossier)), nil
 	}
 	var facts string
 	err := db.QueryRow(`
@@ -301,5 +301,5 @@ func fetchLatestPersonFacts(db *sql.DB, chatID, userID int64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("retrieving person facts: %w", err)
 	}
-	return factsutil.EnforcePersonFactsBudgets(facts), nil
+	return factsutil.NormalizeStoredPersonFacts(facts), nil
 }

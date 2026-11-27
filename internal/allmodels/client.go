@@ -68,6 +68,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, req openai.ChatComple
 	if err != nil {
 		return out, errors.New("allmodels: encode chat request")
 	}
+	if !unambiguousJSON(encoded) {
+		return out, errors.New("allmodels: ambiguous chat request")
+	}
 	var body map[string]any
 	if err = json.Unmarshal(encoded, &body); err != nil {
 		return out, errors.New("allmodels: encode chat request")
@@ -83,7 +86,10 @@ func (c *Client) CreateChatCompletion(ctx context.Context, req openai.ChatComple
 		return out, err
 	}
 	if err = json.Unmarshal(data, &out); err != nil {
-		return openai.ChatCompletionResponse{}, errors.New("allmodels: decode provider response")
+		return openai.ChatCompletionResponse{}, fmt.Errorf("%w: decode provider response", ErrEmptyCompletion)
+	}
+	if err = c.normalizeStopToolCalls(body, data, &out); err != nil {
+		return openai.ChatCompletionResponse{}, err
 	}
 	if err = c.checkEmptyCompletion(data, out); err != nil {
 		provider := c.emptyRetryProvider(data)

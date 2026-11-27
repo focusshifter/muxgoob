@@ -127,8 +127,15 @@ completions remain valid.
 The `[allmodels]` diagnostic records only bounded/sanitized response identifiers,
 upstream provider, finish reason, choice/tool counts, known message-field
 presence/lengths and token counters. It never records prompts, final text,
-reasoning/refusal text, raw bodies or credentials. A terminal response with tool
-calls but an unexpected finish reason is diagnosed, not executed automatically.
+reasoning/refusal text, raw bodies or credentials. A `stop` response containing
+valid declared function calls is normalized to `tool_calls` before empty-output
+handling, both on the initial response and on the alternate-upstream attempt.
+Calls must have unique nonblank IDs, valid JSON-object arguments, declared
+function names and a compatible tool choice; refusal/filter signals, ambiguous
+payloads and other termination reasons are not upgraded. Normalization changes
+only the finish reason; it preserves the message and executes no tool itself.
+A `[allmodels]` normalization log contains only safe identifiers and counts.
+Invalid tool payloads remain errors rather than being executed or retried.
 These fields help distinguish future incidents; old `reason=stop with empty
 content` logs do not retrospectively prove refusal, reasoning exhaustion or a
 specific upstream failure.
@@ -197,3 +204,13 @@ host-tool invocation and result continuation succeeded, and hosted search
 returned two provider URL-citation annotations. All requests retained the ZDR
 filter. This does not certify other models/accounts, live vision, structured
 schema enforcement or an independent audit of provider retention.
+
+`TestAllModelsLiveStopToolCompatibility` in `plugins/reply` is a separate opt-in
+neutral tool/continuation smoke. It pins `refuseless` with ZDR, allows at most two
+paid POSTs, and records the actual wire finish reason without logging private
+text. It uses no production history/DB, Telegram sends or publishing. Synthetic
+reply tests also cover mislabelled tools on an alternate-upstream response.
+On November 27, 2026 the neutral live smoke passed tool invocation and result
+continuation with ZDR. That particular live response already reported
+`tool_calls`; repair of the observed production `stop` mismatch is established
+by the synthetic protocol and full reply-loop regressions, not that live run.

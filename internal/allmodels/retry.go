@@ -130,6 +130,9 @@ func (c *Client) retryEmptyCompletion(ctx context.Context, body map[string]any, 
 	if json.Unmarshal(data, &out) != nil {
 		return openai.ChatCompletionResponse{}, fmt.Errorf("%w: decode alternate upstream response", ErrEmptyCompletion)
 	}
+	if err = c.normalizeStopToolCalls(body, data, &out); err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
 	// Report every empty attempt, even if the router violated the exclusion.
 	if err = c.checkEmptyCompletion(data, out); err != nil {
 		return openai.ChatCompletionResponse{}, err

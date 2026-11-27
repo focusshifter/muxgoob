@@ -94,6 +94,12 @@ func (c *Client) checkEmptyCompletion(data []byte, out openai.ChatCompletionResp
 			return nil
 		}
 	}
+	return c.logUnusableCompletion(data, out)
+}
+
+// logUnusableCompletion also reports malformed tool continuations with text;
+// they must not pass checkEmptyCompletion's ordinary text acceptance shortcut.
+func (c *Client) logUnusableCompletion(data []byte, out openai.ChatCompletionResponse) error {
 	var wire struct {
 		Provider json.RawMessage `json:"provider"`
 		Choices  []struct {

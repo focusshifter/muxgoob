@@ -82,6 +82,9 @@ func (c *Client) CreateChatCompletion(ctx context.Context, req openai.ChatComple
 	if err = json.Unmarshal(data, &out); err != nil {
 		return out, errors.New("allmodels: decode provider response")
 	}
+	if err = c.checkEmptyCompletion(data, out); err != nil {
+		return openai.ChatCompletionResponse{}, err
+	}
 	return out, nil
 }
 

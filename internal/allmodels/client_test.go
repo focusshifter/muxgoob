@@ -114,7 +114,7 @@ func TestOpaqueNativeIDsAndBaseURL(t *testing.T) {
 			if body["model"] != model {
 				t.Fatal(body["model"])
 			}
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[]}`))}, nil
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"fixture"}}]}`))}, nil
 		})}))
 		if _, err := c.CreateChatCompletion(context.Background(), openai.ChatCompletionRequest{Model: model}); err != nil {
 			t.Fatal(err)

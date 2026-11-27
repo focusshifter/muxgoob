@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -18,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/focusshifter/muxgoob/internal/aiprovider"
+	"github.com/focusshifter/muxgoob/internal/allmodels"
 	"github.com/sashabaranov/go-openai"
 	"github.com/tucnak/telebot"
 
@@ -2144,6 +2146,14 @@ func askChatGptWithMode(message *telebot.Message, memoryAdmin bool, mutationTrac
 
 	if err != nil {
 		log.Printf("ChatCompletion error: %v", err)
+		if errors.Is(err, allmodels.ErrEmptyCompletion) {
+			// Do not convert an unusable provider reply into another billed
+			// request or an unrelated image-composer fallback.
+			if (pollTool != nil && pollTool.WasSent()) || (imageTool != nil && imageTool.WasSent()) || (reactionTool != nil && reactionTool.WasSent()) {
+				return actionOnlyReplyToken
+			}
+			return "Сервис модели вернул пустой ответ. Ответ не сформирован; автоматический повтор не выполнялся."
+		}
 		if imagePromptMode != "fallback" || !composerConfigured {
 			return ""
 		}

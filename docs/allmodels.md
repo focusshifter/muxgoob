@@ -113,6 +113,23 @@ Evidence and remaining limitation:
   that mock responses prove hosted search, or silently route failed search to
   Orca/offline completion. Plain chat routing does not depend on search.
 
+## Empty-response diagnostics
+
+An HTTP success with an empty/whitespace final `content` is not a successful
+answer. The adapter reports `ErrEmptyCompletion`; ordinary replies display a
+short failure notice instead of silently disappearing. This does not retry the
+completion, switch providers, relax ZDR, expose reasoning as an answer, or invoke
+an image-composer fallback. Ordinary `tool_calls` completions remain valid.
+
+The `[allmodels]` diagnostic records only bounded/sanitized response identifiers,
+upstream provider, finish reason, choice/tool counts, known message-field
+presence/lengths and token counters. It never records prompts, final text,
+reasoning/refusal text, raw bodies or credentials. A terminal response with tool
+calls but an unexpected finish reason is diagnosed, not executed automatically.
+These fields help distinguish future incidents; old `reason=stop with empty
+content` logs do not retrospectively prove refusal, reasoning exhaustion or a
+specific upstream failure.
+
 ## Image generation is not supported
 
 AllModels is allowed for chat and the **text/tool prompt composer**, not as an
